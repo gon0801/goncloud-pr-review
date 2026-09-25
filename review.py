@@ -162,6 +162,44 @@ def compose(result, manifest, *, sha, provider):
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
 
+CAUTION_MARK = "> [!CAUTION]"
+
+
+def caution_banner(reason, head, has_previous):
+    banner = f"{CAUTION_MARK}\n> **No se pudo revisar el commit {head[:7]}:** {reason}."
+    if has_previous:
+        banner += (" Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
+                   'push o con "Re-run jobs".')
+    return banner
+
+
+def strip_caution_banner(text):
+    """Drop a previously-inserted caution banner so a new one replaces it instead of stacking."""
+    lines = text.split("\n")
+    if not lines or lines[0] != CAUTION_MARK:
+        return text
+    i = 1
+    while i < len(lines) and lines[i].startswith(">"):
+        i += 1
+    while i < len(lines) and lines[i] == "":
+        i += 1
+    return "\n".join(lines[i:])
+
+
+def insert_caution_banner(sticky_body, banner):
+    """Insert the banner right after the two marker lines, keeping the sha marker unchanged."""
+    lines = sticky_body.split("\n")
+    idx = 0
+    if idx < len(lines) and lines[idx] == MARKER:
+        idx += 1
+    if idx < len(lines) and lines[idx].startswith(SHA_PREFIX):
+        idx += 1
+    prefix = lines[:idx]
+    rest = strip_caution_banner("\n".join(lines[idx:]))
+    head = "\n".join(prefix) + "\n" if prefix else ""
+    return head + banner + "\n\n" + rest
+
+
 def sh(*args, check=True, **kw):
     return subprocess.run(args, check=check, text=True, capture_output=True, **kw)
 
@@ -171,6 +209,17 @@ def env(name):
     if not value:
         sys.exit(f"ai-review: falta la variable {name}")
     return value
+
+
+def soft_fail(result_path, reason):
+    """Fail-soft path: the PR author can't fix this, so the check must stay green.
+
+    Writes {"error": reason} to result.json, prints a GitHub warning annotation
+    (visible but not red), and exits 0 so the job concludes success.
+    """
+    result_path.write_text(json.dumps({"error": reason}))
+    print(f"::warning::ai-review: {reason}")
+    sys.exit(0)
 
 
 def set_output(key, value):
@@ -278,16 +327,21 @@ def litellm_config(provider, session):
 
 
 def start_proxy(work, provider, key, session):
+    """Start the local LiteLLM proxy. Returns (proc, base_url, master_key), or None on failure."""
     port = os.environ.get("PROXY_PORT", "4000")
     config = work / "litellm.yaml"
     config.write_text(json.dumps(litellm_config(provider, session)))
     master = "sk-" + secrets.token_hex(16)
     log = open(work / "litellm.log", "w")
-    proc = subprocess.Popen(
-        [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
-        stdout=log, stderr=subprocess.STDOUT,
-        env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
-             "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
+    try:
+        proc = subprocess.Popen(
+            [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
+            stdout=log, stderr=subprocess.STDOUT,
+            env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
+                 "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
+    except FileNotFoundError:
+        print("ai-review: no se encontró el binario de litellm", file=sys.stderr)
+        return None
     base_url = f"http://127.0.0.1:{port}"
     deadline = time.time() + int(os.environ.get("PROXY_START_TIMEOUT", "120"))
     while time.time() < deadline:
@@ -299,7 +353,8 @@ def start_proxy(work, provider, key, session):
         except OSError:
             time.sleep(1)
     proc.kill()
-    sys.exit(f"ai-review: el proxy LiteLLM no arrancó\n{(work / 'litellm.log').read_text()[-3000:]}")
+    print(f"ai-review: el proxy LiteLLM no arrancó\n{(work / 'litellm.log').read_text()[-3000:]}", file=sys.stderr)
+    return None
 
 
 def cmd_install(_):
@@ -347,11 +402,19 @@ def cmd_run(args):
         "--no-session-persistence",
         "--output-format", "json",
     ]
-    key = env("API_KEY")
+    key = os.environ.get("API_KEY", "")
+    if not key:
+        soft_fail(result_path, "falta el secret AI_REVIEW_API_KEY en este repo")
+        return
+
     proxy = None
     if provider["via_proxy"]:
         session = f"{env('REPO')}#{env('PR_NUMBER')}-{os.environ.get('GITHUB_RUN_ID', 'local')}"
-        proxy, base_url, token = start_proxy(work, provider, key, session)
+        started = start_proxy(work, provider, key, session)
+        if started is None:
+            soft_fail(result_path, "el proxy LiteLLM no arrancó")
+            return
+        proxy, base_url, token = started
         auth = {"ANTHROPIC_AUTH_TOKEN": token}
     else:
         base_url, auth = provider["upstream"], {"ANTHROPIC_API_KEY": key}
@@ -385,6 +448,9 @@ def run_agent(cmd, child_env, result_path, name):
         try:
             proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True, stdin=subprocess.DEVNULL,
                                   timeout=int(os.environ.get("ATTEMPT_TIMEOUT", "600")))
+        except FileNotFoundError:
+            soft_fail(result_path, "no se encontró el binario de claude (falló la instalación)")
+            return
         except subprocess.TimeoutExpired as exc:
             print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
             continue
@@ -402,10 +468,11 @@ def run_agent(cmd, child_env, result_path, name):
             print(f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
                   file=sys.stderr)
             if result.get("api_error_status") in (400, 401, 403, 404):
-                sys.exit("ai-review: error permanente (llave, modelo o endpoint); no tiene caso reintentar")
+                soft_fail(result_path, "error permanente del proveedor (llave, modelo o endpoint inválidos)")
+                return
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", "60")))
-    sys.exit("ai-review: la revisión falló en todos los intentos (ver logs arriba); no se publicó nada")
+    soft_fail(result_path, "la revisión falló en todos los intentos (proveedor no disponible por ahora)")
 
 
 def cmd_publish(args):
@@ -414,12 +481,22 @@ def cmd_publish(args):
     name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
     manifest = json.loads((work / "manifest.json").read_text())
-    body = redact(compose(result, manifest, sha=head, provider=name),
-                  [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
+    sticky = find_sticky(repo, pr)
+
+    if "error" in result:
+        # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
+        reason = result["error"]
+        banner = caution_banner(reason, head, has_previous=bool(sticky))
+        body = insert_caution_banner(sticky["body"], banner) if sticky else f"{MARKER}\n{banner}"
+        summary_text = banner
+    else:
+        body = redact(compose(result, manifest, sha=head, provider=name),
+                      [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
+        summary_text = body.split("\n", 2)[2]
+
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
 
-    sticky = find_sticky(repo, pr)
     if sticky:
         sh("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{sticky['id']}", "--input", str(payload))
         print(f"ai-review: comentario {sticky['id']} actualizado")
@@ -430,7 +507,7 @@ def cmd_publish(args):
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as fh:
-            fh.write(body.split("\n", 2)[2] + "\n")
+            fh.write(summary_text + "\n")
 
 
 def main():
