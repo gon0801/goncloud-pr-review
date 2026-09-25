@@ -266,10 +266,11 @@ def cmd_run(args):
         "--no-session-persistence",
         "--output-format", "json",
     ]
-    child_env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY")}
+    child_env = {k: v for k, v in os.environ.items()
+                 if k not in ("GH_TOKEN", "GITHUB_TOKEN", "API_KEY", "ANTHROPIC_AUTH_TOKEN")}
     child_env.update({
         "ANTHROPIC_BASE_URL": env("BASE_URL"),
-        "ANTHROPIC_AUTH_TOKEN": env("API_KEY"),
+        "ANTHROPIC_API_KEY": env("API_KEY"),
         "ANTHROPIC_MODEL": model,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -299,7 +300,10 @@ def cmd_run(args):
             print(f"ai-review: terminado ({result.get('subtype')}, {result.get('num_turns')} turnos)")
             return
         if result:
-            print(f"ai-review: error del modelo: {json.dumps(result)[:2000]}", file=sys.stderr)
+            print(f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
+                  file=sys.stderr)
+            if result.get("api_error_status") in (400, 401, 403, 404):
+                sys.exit("ai-review: error permanente (llave, modelo o endpoint); no tiene caso reintentar")
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", "60")))
     sys.exit("ai-review: la revisión falló en todos los intentos (ver logs arriba); no se publicó nada")

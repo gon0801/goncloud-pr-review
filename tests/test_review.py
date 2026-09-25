@@ -226,6 +226,64 @@ class GitHubGlue(unittest.TestCase):
         self.assertEqual(calls[1][:4], ["api", "-X", "POST", "repos/o/r/issues/7/comments"])
 
 
+FAKE_CLAUDE = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, os
+    with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
+        fh.write(json.dumps({k: os.environ.get(k) for k in
+                 ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "GH_TOKEN", "API_KEY")}) + "\\n")
+    print(os.environ["FAKE_CLAUDE_REPLY"])
+""")
+
+
+class RunAgent(unittest.TestCase):
+    def run_agent(self, reply):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "claude").write_text(FAKE_CLAUDE)
+            (bindir / "claude").chmod(0o755)
+            work = tmp / "work"
+            work.mkdir()
+            (work / "manifest.json").write_text(json.dumps(MANIFEST))
+            env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_CLAUDE_LOG=str(tmp / "log"),
+                       FAKE_CLAUDE_REPLY=json.dumps(reply), API_KEY="sk-go-key-123", GH_TOKEN="ghs_tok",
+                       BASE_URL="https://example.invalid/anthropic", MODEL="minimax-m3",
+                       REPO="o/r", PR_NUMBER="7", RETRY_DELAY="0")
+            proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "run", "--work", str(work)],
+                                  env=env, capture_output=True, text=True)
+            calls = [json.loads(l) for l in (tmp / "log").read_text().splitlines()]
+            result = json.loads((work / "result.json").read_text()) if (work / "result.json").exists() else None
+            return proc.returncode, calls, result
+
+    def test_key_goes_in_x_api_key_and_github_token_is_withheld(self):
+        code, calls, result = self.run_agent({"result": "ok\nCOVERAGE: complete", "subtype": "success"})
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [{"ANTHROPIC_API_KEY": "sk-go-key-123", "ANTHROPIC_AUTH_TOKEN": None,
+                                  "ANTHROPIC_BASE_URL": "https://example.invalid/anthropic",
+                                  "GH_TOKEN": None, "API_KEY": None}])
+        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+
+    def test_auth_error_fails_once_without_retry(self):
+        code, calls, result = self.run_agent({"result": "Failed to authenticate. API Error: 401 Missing API key.",
+                                              "subtype": "success", "is_error": True, "api_error_status": 401})
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(result)
+
+    def test_transient_error_is_retried(self):
+        code, calls, _ = self.run_agent({"result": "overloaded", "is_error": True, "api_error_status": 529})
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 2)
+
+    def test_max_turns_is_kept_as_partial_result(self):
+        code, calls, result = self.run_agent({"result": "", "subtype": "error_max_turns", "is_error": True})
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["subtype"], "error_max_turns")
+
+
 class Workflows(unittest.TestCase):
     def test_dogfood_workflow_matches_template(self):
         template = (ROOT / "templates/ai-review.yml").read_text()
