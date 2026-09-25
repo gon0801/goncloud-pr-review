@@ -5,9 +5,11 @@ import argparse
 import fnmatch
 import json
 import os
+import secrets
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 MARKER = "<!-- ai-review:sticky -->"
@@ -27,10 +29,26 @@ PRIORITY = [
     ("docs", (".md", ".mdx", ".txt", ".rst")),
 ]
 
-PRICES = {
-    "deepseek-flash": (0.30, 0.006, 1.20),
-    "deepseek-v4-pro": (1.32, 0.044, 3.96),
+# Only DeepSeek V4.1 Flash is allowed. OpenCode Go serves it in OpenAI format only, so
+# Claude Code reaches it through a local LiteLLM proxy; DeepSeek's own API speaks Anthropic.
+PROVIDERS = {
+    "opencode-go": {
+        "label": "DeepSeek V4.1 Flash · OpenCode Go",
+        "model": "deepseek-v4.1-flash",
+        "upstream": "https://opencode.ai/zen/go/v1",
+        "via_proxy": True,
+        "prices": None,
+    },
+    "deepseek": {
+        "label": "DeepSeek V4.1 Flash · API DeepSeek",
+        "model": "deepseek-flash[1m]",
+        "upstream": "https://api.deepseek.com/anthropic",
+        "via_proxy": False,
+        "prices": (0.30, 0.006, 1.20),
+    },
 }
+CLAUDE_CODE_VERSION = "2.1.282"
+LITELLM_VERSION = "1.102.1"
 
 
 def matches(path, pattern):
@@ -87,8 +105,7 @@ def redact(text, secrets):
     return text
 
 
-def estimate_cost(model, usage):
-    prices = PRICES.get(model.split("[", 1)[0])
+def estimate_cost(prices, usage):
     if not prices or not usage:
         return None
     miss = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
@@ -97,7 +114,8 @@ def estimate_cost(model, usage):
     return (miss * prices[0] + hit * prices[1] + out * prices[2]) / 1_000_000
 
 
-def compose(result, manifest, *, sha, model):
+def compose(result, manifest, *, sha, provider):
+    provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
     review, coverage, detail = split_coverage(text)
     budget_cut = [e for e in manifest["excluded"] if e["reason"] == "budget"]
@@ -113,7 +131,7 @@ def compose(result, manifest, *, sha, model):
         warnings.append(f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff")
 
     parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
-             f"### Revisión automática · `{model}` · {sha[:7]}", ""]
+             f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
     if warnings:
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     if not manifest["reviewed"]:
@@ -131,7 +149,7 @@ def compose(result, manifest, *, sha, model):
             scope.append(f"  - … y {len(manifest['excluded']) - len(shown)} más")
     usage = (result or {}).get("usage") or {}
     if usage:
-        cost = estimate_cost(model, usage)
+        cost = estimate_cost(provider["prices"], usage)
         scope.append(
             f"- Turnos: {(result or {}).get('num_turns', '?')} · tokens entrada "
             f"{usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0):,}"
@@ -235,9 +253,71 @@ def cmd_prepare(args):
         print(f"  excluido: {e['path']} ({e['reason']})")
 
 
+def get_provider():
+    name = os.environ.get("PROVIDER") or "opencode-go"
+    if name not in PROVIDERS:
+        sys.exit(f"ai-review: proveedor '{name}' no permitido; usa uno de: {', '.join(PROVIDERS)}")
+    return name, PROVIDERS[name]
+
+
+def litellm_config(provider, session):
+    return {
+        "model_list": [{
+            "model_name": provider["model"],
+            "litellm_params": {
+                "model": f"openai/{provider['model']}",
+                "api_base": provider["upstream"],
+                "api_key": "os.environ/UPSTREAM_API_KEY",
+                "extra_headers": {"User-Agent": "goncloud-pr-review/1.0", "x-opencode-session": session},
+            },
+        }],
+        "litellm_settings": {"drop_params": True, "use_chat_completions_url_for_anthropic_messages": True},
+        "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY"},
+    }
+
+
+def start_proxy(work, provider, key, session):
+    port = os.environ.get("PROXY_PORT", "4000")
+    config = work / "litellm.yaml"
+    config.write_text(json.dumps(litellm_config(provider, session)))
+    master = "sk-" + secrets.token_hex(16)
+    log = open(work / "litellm.log", "w")
+    proc = subprocess.Popen(
+        [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
+        stdout=log, stderr=subprocess.STDOUT,
+        env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
+             "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
+    base_url = f"http://127.0.0.1:{port}"
+    deadline = time.time() + int(os.environ.get("PROXY_START_TIMEOUT", "120"))
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        try:
+            with urllib.request.urlopen(f"{base_url}/health/liveliness", timeout=2):
+                return proc, base_url, master
+        except OSError:
+            time.sleep(1)
+    proc.kill()
+    sys.exit(f"ai-review: el proxy LiteLLM no arrancó\n{(work / 'litellm.log').read_text()[-3000:]}")
+
+
+def cmd_install(_):
+    _, provider = get_provider()
+    subprocess.run(["npm", "install", "-g", "--no-fund", "--no-audit",
+                    f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"], check=True)
+    if provider["via_proxy"]:
+        venv = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "litellm-venv"
+        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+        subprocess.run([str(venv / "bin/pip"), "install", "--quiet", "--disable-pip-version-check",
+                        f"litellm[proxy]=={LITELLM_VERSION}"], check=True)
+        with open(os.environ["GITHUB_PATH"], "a") as fh:
+            fh.write(f"{venv / 'bin'}\n")
+
+
 def cmd_run(args):
     work = Path(args.work)
-    model = env("MODEL")
+    name, provider = get_provider()
+    model = provider["model"]
     manifest = json.loads((work / "manifest.json").read_text())
     result_path = work / "result.json"
     if not manifest["reviewed"]:
@@ -266,11 +346,20 @@ def cmd_run(args):
         "--no-session-persistence",
         "--output-format", "json",
     ]
+    key = env("API_KEY")
+    proxy = None
+    if provider["via_proxy"]:
+        session = f"{env('REPO')}#{env('PR_NUMBER')}-{os.environ.get('GITHUB_RUN_ID', 'local')}"
+        proxy, base_url, token = start_proxy(work, provider, key, session)
+        auth = {"ANTHROPIC_AUTH_TOKEN": token}
+    else:
+        base_url, auth = provider["upstream"], {"ANTHROPIC_API_KEY": key}
+
     child_env = {k: v for k, v in os.environ.items()
-                 if k not in ("GH_TOKEN", "GITHUB_TOKEN", "API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+                 if k not in ("GH_TOKEN", "GITHUB_TOKEN", "API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")}
+    child_env.update(auth)
     child_env.update({
-        "ANTHROPIC_BASE_URL": env("BASE_URL"),
-        "ANTHROPIC_API_KEY": env("API_KEY"),
+        "ANTHROPIC_BASE_URL": base_url,
         "ANTHROPIC_MODEL": model,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -280,11 +369,20 @@ def cmd_run(args):
         "DISABLE_AUTOUPDATER": "1",
     })
 
+    try:
+        run_agent(cmd, child_env, result_path, name)
+    finally:
+        if proxy:
+            proxy.terminate()
+            proxy.wait(timeout=10)
+
+
+def run_agent(cmd, child_env, result_path, name):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
     for attempt in range(1, attempts + 1):
-        print(f"ai-review: intento {attempt}/{attempts} con {model}", flush=True)
+        print(f"ai-review: intento {attempt}/{attempts} con {name}", flush=True)
         try:
-            proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True,
+            proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True, stdin=subprocess.DEVNULL,
                                   timeout=int(os.environ.get("ATTEMPT_TIMEOUT", "600")))
         except subprocess.TimeoutExpired as exc:
             print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
@@ -311,10 +409,11 @@ def cmd_run(args):
 
 def cmd_publish(args):
     work = Path(args.work)
-    repo, pr, head, model = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA"), env("MODEL")
+    repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
+    name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
     manifest = json.loads((work / "manifest.json").read_text())
-    body = redact(compose(result, manifest, sha=head, model=model),
+    body = redact(compose(result, manifest, sha=head, provider=name),
                   [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
@@ -335,11 +434,12 @@ def cmd_publish(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["gate", "prepare", "run", "publish"])
+    parser.add_argument("command", choices=["gate", "prepare", "install", "run", "publish"])
     parser.add_argument("--work", default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"))
     parser.add_argument("--prompt", default=str(Path(__file__).with_name("prompt.md")))
     args = parser.parse_args()
-    {"gate": cmd_gate, "prepare": cmd_prepare, "run": cmd_run, "publish": cmd_publish}[args.command](args)
+    {"gate": cmd_gate, "prepare": cmd_prepare, "install": cmd_install, "run": cmd_run,
+     "publish": cmd_publish}[args.command](args)
 
 
 if __name__ == "__main__":

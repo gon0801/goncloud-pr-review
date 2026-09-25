@@ -1,16 +1,13 @@
 name: AI PR review
-description: Repo-aware PR review with Claude Code on any Anthropic-compatible endpoint (OpenCode Go, DeepSeek). One sticky comment per PR, deduplicated by head SHA.
+description: Repo-aware PR review with Claude Code on DeepSeek V4.1 Flash (via OpenCode Go or the DeepSeek API). One sticky comment per PR, deduplicated by head SHA.
 
 inputs:
   api_key:
     description: Key for the model endpoint (pass secrets.AI_REVIEW_API_KEY)
     required: true
-  base_url:
-    description: Anthropic-compatible endpoint. DeepSeek is https://api.deepseek.com/anthropic
-    default: https://opencode.ai/zen/go
-  model:
-    description: Model id on that endpoint. DeepSeek is "deepseek-flash[1m]"
-    default: minimax-m3
+  provider:
+    description: Where DeepSeek V4.1 Flash is served from, opencode-go or deepseek. The model itself is fixed.
+    default: opencode-go
   language:
     description: Language of the review text
     default: es
@@ -23,9 +20,6 @@ inputs:
   max_diff_bytes:
     description: Diff size budget; lower-priority files beyond it are listed as not reviewed
     default: "1500000"
-  claude_code_version:
-    description: Pinned @anthropic-ai/claude-code version
-    default: "2.1.282"
   github_token:
     description: Token used to read and write the PR comment
     default: ${{ github.token }}
@@ -73,20 +67,19 @@ runs:
         git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags --quiet origin "$BASE_SHA"
         python3 "$GITHUB_ACTION_PATH/review.py" prepare
 
-    - name: Install Claude Code
+    - name: Install Claude Code (and LiteLLM for opencode-go)
       if: steps.gate.outputs.skip != 'true'
       shell: bash
       env:
-        VERSION: ${{ inputs.claude_code_version }}
-      run: npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$VERSION"
+        PROVIDER: ${{ inputs.provider }}
+      run: python3 "$GITHUB_ACTION_PATH/review.py" install
 
     - name: Review
       if: steps.gate.outputs.skip != 'true'
       shell: bash
       env:
         API_KEY: ${{ inputs.api_key }}
-        BASE_URL: ${{ inputs.base_url }}
-        MODEL: ${{ inputs.model }}
+        PROVIDER: ${{ inputs.provider }}
         LANGUAGE: ${{ inputs.language }}
         MAX_TURNS: ${{ inputs.max_turns }}
         REPO: ${{ github.repository }}
@@ -102,6 +95,6 @@ runs:
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        MODEL: ${{ inputs.model }}
+        PROVIDER: ${{ inputs.provider }}
         BOT_LOGIN: ${{ inputs.bot_login }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" publish
