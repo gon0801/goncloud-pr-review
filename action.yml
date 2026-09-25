@@ -1,0 +1,98 @@
+name: AI PR review (DeepSeek)
+description: Repo-aware PR review with Claude Code running on DeepSeek. One sticky comment per PR, deduplicated by head SHA.
+
+inputs:
+  deepseek_api_key:
+    description: DeepSeek API key (pass secrets.DEEPSEEK_API_KEY)
+    required: true
+  model:
+    description: DeepSeek model as Claude Code expects it
+    default: "deepseek-flash[1m]"
+  language:
+    description: Language of the review text
+    default: es
+  exclude:
+    description: Extra newline-separated path globs to skip, on top of the built-in lock/generated/binary filters
+    default: ""
+  max_turns:
+    description: Agent turn cap per attempt
+    default: "60"
+  max_diff_bytes:
+    description: Diff size budget; lower-priority files beyond it are listed as not reviewed
+    default: "1500000"
+  claude_code_version:
+    description: Pinned @anthropic-ai/claude-code version
+    default: "2.1.282"
+  github_token:
+    description: Token used to read and write the PR comment
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        KEY: ${{ inputs.deepseek_api_key }}
+        EVENT: ${{ github.event_name }}
+      run: |
+        if [ "$EVENT" != "pull_request" ]; then
+          echo "::error::ai-review solo corre en eventos pull_request (llegó $EVENT)"; exit 1
+        fi
+        if [ -z "$KEY" ]; then
+          echo "::error::Falta el secret DEEPSEEK_API_KEY en este repo (gh secret set DEEPSEEK_API_KEY)"; exit 1
+        fi
+
+    - name: Skip if this commit was already reviewed
+      id: gate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: python3 "$GITHUB_ACTION_PATH/review.py" gate
+
+    - name: Prepare diff and context
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        EXTRA_EXCLUDES: ${{ inputs.exclude }}
+        MAX_DIFF_BYTES: ${{ inputs.max_diff_bytes }}
+      run: |
+        git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags --quiet origin "$BASE_SHA"
+        python3 "$GITHUB_ACTION_PATH/review.py" prepare
+
+    - name: Install Claude Code
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.claude_code_version }}
+      run: npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$VERSION"
+
+    - name: Review
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        MODEL: ${{ inputs.model }}
+        LANGUAGE: ${{ inputs.language }}
+        MAX_TURNS: ${{ inputs.max_turns }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: python3 "$GITHUB_ACTION_PATH/review.py" run
+
+    - name: Publish sticky comment
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        MODEL: ${{ inputs.model }}
+      run: python3 "$GITHUB_ACTION_PATH/review.py" publish
