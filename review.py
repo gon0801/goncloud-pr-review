@@ -144,7 +144,7 @@ def compose(result, manifest, *, sha, provider):
     if manifest["excluded"]:
         shown = manifest["excluded"][:40]
         scope.append(f"- Excluidos: {len(manifest['excluded'])}")
-        scope += [f"  - `{e['path']}` ({e['reason']})" for e in shown]
+        scope += [f"  - `{e['path'][:200]}` ({e['reason']})" for e in shown]
         if len(manifest["excluded"]) > len(shown):
             scope.append(f"  - … y {len(manifest['excluded']) - len(shown)} más")
     usage = (result or {}).get("usage") or {}

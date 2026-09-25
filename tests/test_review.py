@@ -100,8 +100,9 @@ class Compose(unittest.TestCase):
 
 class Redact(unittest.TestCase):
     def test_secret_values_are_removed(self):
-        self.assertEqual(review.redact("key sk-abc12345678 and ghs_zzzzzzzz", ["sk-abc12345678", "ghs_zzzzzzzz", ""]),
-                         "key [REDACTED] and [REDACTED]")
+        key, token = "sk-" + "a1" * 16, "ghs_" + "Zz9" * 12
+        self.assertEqual((len(key), len(token)), (35, 40))
+        self.assertEqual(review.redact(f"key {key} and {token}", [key, token, ""]), "key [REDACTED] and [REDACTED]")
 
 
 def git(cwd, *args):

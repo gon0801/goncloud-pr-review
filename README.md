@@ -36,6 +36,7 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 
 - **Modelo.** Solo DeepSeek V4.1 Flash. No hay input para cambiarlo; los proveedores permitidos viven en `PROVIDERS` de `review.py` y cualquier otro valor de `provider` se rechaza.
 - **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`.
+- **Token propio.** Si pasas `github_token` de una GitHub App, pasa también `bot_login` con el login de esa App (por ejemplo `mi-app[bot]`). Solo los comentarios de ese login cuentan como la revisión fija.
 - **Pedir otra revisión del mismo commit.** En la pestaña Checks del PR, "Re-run jobs" sobre `AI review`. Un re-run se salta el gate a propósito.
 - **Revisión nueva.** Se hace sola con cada push.
 
@@ -57,7 +58,7 @@ Con la API de DeepSeek ($0.30/M de entrada, $0.006/M en caché, $1.20/M de salid
 |---|---|
 | El job falla en "Check inputs" | Falta el secret `AI_REVIEW_API_KEY` en ese repo |
 | El job falla en "Review" con 401/402 | Key inválida, sin saldo (DeepSeek) o cuota agotada (OpenCode Go) |
-| El job falla en "Review" con modelo desconocido | El proveedor renombró el modelo; actualiza el default `model` en `action.yml` |
+| El job falla en "Review" con modelo desconocido | El proveedor renombró el modelo; actualiza `model` en `PROVIDERS` de `review.py` |
 | No aparece el job | El PR es draft, viene de un fork, o `AI_REVIEW_DISABLED` está en `true` |
 | El comentario dice "Revisión incompleta" | El diff pasó el presupuesto, se acabaron los turnos, o el revisor declaró cobertura parcial; el detalle viene en el mismo comentario |
 | Falla "Publish" con 403 | El workflow del repo no tiene `pull-requests: write` |
