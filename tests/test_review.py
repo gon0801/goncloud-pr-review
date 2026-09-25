@@ -290,7 +290,8 @@ class GitHubGlue(unittest.TestCase):
 
 FAKE_CLAUDE = textwrap.dedent("""\
     #!/usr/bin/env python3
-    import json, os
+    import json, os, time
+    time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
         fh.write(json.dumps({k: os.environ.get(k) for k in
                  ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
@@ -305,6 +306,7 @@ FAKE_LITELLM = textwrap.dedent("""\
     config = args[args.index("--config") + 1]
     with open(os.path.join(os.path.dirname(config), "fake-litellm.json"), "w") as fh:
         json.dump({"env": dict(os.environ), "config": json.load(open(config)), "args": args}, fh)
+    print("INFO: POST /v1/messages HTTP/1.1 429 Too Many Requests", flush=True)
     class Ok(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
@@ -331,7 +333,7 @@ FAKE_LITELLM_CRASH = textwrap.dedent("""\
 
 
 class RunAgent(unittest.TestCase):
-    def run_agent(self, reply, provider="deepseek", api_key="sk-go-key-123", litellm_script=None):
+    def run_agent(self, reply, provider="deepseek", api_key="sk-go-key-123", litellm_script=None, **extra_env):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
@@ -346,7 +348,7 @@ class RunAgent(unittest.TestCase):
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_CLAUDE_LOG=str(tmp / "log"),
                        FAKE_CLAUDE_REPLY=json.dumps(reply), API_KEY=api_key, GH_TOKEN="ghs_tok",
                        PROVIDER=provider, PROXY_PORT=port, REPO="o/r", PR_NUMBER="7", RETRY_DELAY="0",
-                       PROXY_START_TIMEOUT="3")
+                       PROXY_START_TIMEOUT="3", **extra_env)
             env.pop("GITHUB_RUN_ID", None)
             proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "run", "--work", str(work)],
                                   env=env, capture_output=True, text=True, timeout=60)
@@ -356,6 +358,15 @@ class RunAgent(unittest.TestCase):
             fake_proxy = work / "fake-litellm.json"
             proxy = json.loads(fake_proxy.read_text()) if fake_proxy.exists() else None
             return proc, calls, result, proxy, port
+
+    def test_timeout_shows_the_proxy_log_so_the_cause_is_diagnosable(self):
+        proc, calls, result, _, _ = self.run_agent(OK_REPLY, provider="opencode-go", FAKE_CLAUDE_SLEEP="5",
+                                                   ATTEMPT_TIMEOUT="1", ATTEMPTS="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ai-review: el intento excedió el tiempo límite", proc.stderr)
+        self.assertIn("ai-review: últimas líneas del proxy LiteLLM:", proc.stderr)
+        self.assertIn("INFO: POST /v1/messages HTTP/1.1 429 Too Many Requests", proc.stderr)
+        self.assertEqual(result, {"error": "la revisión falló en todos los intentos (proveedor no disponible por ahora)"})
 
     def test_deepseek_api_gets_the_key_directly_and_github_token_is_withheld(self):
         proc, calls, result, proxy, _ = self.run_agent(OK_REPLY, provider="deepseek")

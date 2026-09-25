@@ -441,6 +441,13 @@ def cmd_run(args):
             proxy.wait(timeout=10)
 
 
+def print_proxy_log(work):
+    log = work / "litellm.log"
+    if log.exists():
+        print(f"ai-review: últimas líneas del proxy LiteLLM:\n{log.read_text(errors='replace')[-3000:]}",
+              file=sys.stderr)
+
+
 def run_agent(cmd, child_env, result_path, name):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
     for attempt in range(1, attempts + 1):
@@ -453,6 +460,7 @@ def run_agent(cmd, child_env, result_path, name):
             return
         except subprocess.TimeoutExpired as exc:
             print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
+            print_proxy_log(result_path.parent)
             continue
         sys.stderr.write(proc.stderr[-4000:])
         try:
@@ -467,6 +475,7 @@ def run_agent(cmd, child_env, result_path, name):
         if result:
             print(f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
                   file=sys.stderr)
+            print_proxy_log(result_path.parent)
             if result.get("api_error_status") in (400, 401, 403, 404):
                 soft_fail(result_path, "error permanente del proveedor (llave, modelo o endpoint inválidos)")
                 return
