@@ -19,7 +19,6 @@ jobs:
     if: >-
       !github.event.pull_request.draft
       && github.event.pull_request.head.repo.full_name == github.repository
-      && vars.AI_REVIEW_DISABLED != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -31,3 +30,4 @@ jobs:
       - uses: gon0801/goncloud-pr-review@main
         with:
           api_key: ${{ secrets.AI_REVIEW_API_KEY }}
+          disabled: ${{ vars.AI_REVIEW_DISABLED }}

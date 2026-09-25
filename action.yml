@@ -5,6 +5,9 @@ inputs:
   api_key:
     description: Key for the model endpoint (pass secrets.AI_REVIEW_API_KEY)
     required: true
+  disabled:
+    description: Set to "true" to turn the review off without failing the check (pass vars.AI_REVIEW_DISABLED)
+    default: ""
   provider:
     description: Where DeepSeek V4.1 Flash is served from, opencode-go or deepseek. The model itself is fixed.
     default: opencode-go
@@ -31,20 +34,25 @@ runs:
   using: composite
   steps:
     - name: Check inputs
+      id: check
       shell: bash
       env:
-        KEY: ${{ inputs.api_key }}
         EVENT: ${{ github.event_name }}
+        DISABLED: ${{ inputs.disabled }}
       run: |
         if [ "$EVENT" != "pull_request" ]; then
           echo "::error::ai-review solo corre en eventos pull_request (llegó $EVENT)"; exit 1
         fi
-        if [ -z "$KEY" ]; then
-          echo "::error::Falta el secret AI_REVIEW_API_KEY en este repo (gh secret set AI_REVIEW_API_KEY)"; exit 1
+        if [ "$DISABLED" = "true" ]; then
+          echo "::notice::ai-review desactivado (AI_REVIEW_DISABLED)"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Skip if this commit was already reviewed
       id: gate
+      if: steps.check.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -56,7 +64,7 @@ runs:
       run: python3 "$GITHUB_ACTION_PATH/review.py" gate
 
     - name: Prepare diff and context
-      if: steps.gate.outputs.skip != 'true'
+      if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
       shell: bash
       env:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -68,14 +76,15 @@ runs:
         python3 "$GITHUB_ACTION_PATH/review.py" prepare
 
     - name: Install Claude Code (and LiteLLM for opencode-go)
-      if: steps.gate.outputs.skip != 'true'
+      if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
+      continue-on-error: true
       shell: bash
       env:
         PROVIDER: ${{ inputs.provider }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" install
 
     - name: Review
-      if: steps.gate.outputs.skip != 'true'
+      if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
       shell: bash
       env:
         API_KEY: ${{ inputs.api_key }}
@@ -87,7 +96,7 @@ runs:
       run: python3 "$GITHUB_ACTION_PATH/review.py" run
 
     - name: Publish sticky comment
-      if: steps.gate.outputs.skip != 'true'
+      if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}

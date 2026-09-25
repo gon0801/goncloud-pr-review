@@ -221,6 +221,11 @@ class GitHubGlue(unittest.TestCase):
         calls, _, _ = self.run_cmd("gate", [])
         self.assertIn('.user.login == "github-actions[bot]"', calls[0][-1])
 
+    def test_gate_sticky_without_sha_marker_does_not_skip(self):
+        sticky = {"id": 5, "body": f"{review.MARKER}\nold review, no sha marker"}
+        _, output, _ = self.run_cmd("gate", [sticky])
+        self.assertEqual(output, "skip=false\n")
+
     def test_publish_edits_existing_sticky_instead_of_posting(self):
         calls, _, posted = self.run_cmd("publish", [self.sticky("f" * 40)])
         self.assertEqual(calls[1][:3], ["api", "-X", "PATCH"])
@@ -232,10 +237,61 @@ class GitHubGlue(unittest.TestCase):
         calls, _, _ = self.run_cmd("publish", [])
         self.assertEqual(calls[1][:4], ["api", "-X", "POST", "repos/o/r/issues/7/comments"])
 
+    def run_cmd_with_error(self, comments, reason="el proxy LiteLLM no arrancó"):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "gh").write_text(FAKE_GH)
+            (bindir / "gh").chmod(0o755)
+            (tmp / "comments.json").write_text(json.dumps(comments))
+            work = tmp / "work"
+            work.mkdir()
+            (work / "manifest.json").write_text(json.dumps(MANIFEST))
+            (work / "result.json").write_text(json.dumps({"error": reason}))
+            env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
+                       FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
+                       REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, RUN_ATTEMPT="1", API_KEY="sk-secret-key-123")
+            env.pop("GITHUB_STEP_SUMMARY", None)
+            subprocess.run([sys.executable, str(ROOT / "review.py"), "publish", "--work", str(work)],
+                           env=env, check=True, capture_output=True)
+            posted = json.loads((work / "comment.json").read_text())
+            return posted
+
+    def test_publish_with_error_and_existing_sticky_keeps_old_review_under_a_caution_banner(self):
+        old_sha = "f" * 40
+        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
+        body = posted["body"]
+        self.assertIn(f"{review.SHA_PREFIX}{old_sha} -->", body)
+        self.assertIn("> [!CAUTION]", body)
+        self.assertIn("No se pudo revisar el commit", body)
+        self.assertIn("Todo bien.", body)
+        self.assertEqual(body.count("[!CAUTION]"), 1)
+
+    def test_publish_with_error_twice_replaces_banner_instead_of_stacking(self):
+        old_sha = "f" * 40
+        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        first = self.run_cmd_with_error([{"id": 99, "body": old_body}], reason="el proxy LiteLLM no arrancó")
+        second = self.run_cmd_with_error([{"id": 99, "body": first["body"]}], reason="otra falla distinta")
+        body = second["body"]
+        self.assertEqual(body.count("[!CAUTION]"), 1)
+        self.assertIn("otra falla distinta", body)
+        self.assertNotIn("el proxy LiteLLM no arrancó", body)
+        self.assertIn("Todo bien.", body)
+
+    def test_publish_with_error_and_no_sticky_creates_marker_without_sha(self):
+        posted = self.run_cmd_with_error([])
+        body = posted["body"]
+        self.assertIn(review.MARKER, body)
+        self.assertNotIn(review.SHA_PREFIX, body)
+        self.assertIn("> [!CAUTION]", body)
+
 
 FAKE_CLAUDE = textwrap.dedent("""\
     #!/usr/bin/env python3
-    import json, os
+    import json, os, time
+    time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
         fh.write(json.dumps({k: os.environ.get(k) for k in
                  ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
@@ -250,6 +306,7 @@ FAKE_LITELLM = textwrap.dedent("""\
     config = args[args.index("--config") + 1]
     with open(os.path.join(os.path.dirname(config), "fake-litellm.json"), "w") as fh:
         json.dump({"env": dict(os.environ), "config": json.load(open(config)), "args": args}, fh)
+    print("INFO: POST /v1/messages HTTP/1.1 429 Too Many Requests", flush=True)
     class Ok(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
@@ -268,13 +325,20 @@ def free_port():
         return str(sock.getsockname()[1])
 
 
+FAKE_LITELLM_CRASH = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import sys
+    sys.exit(1)
+""")
+
+
 class RunAgent(unittest.TestCase):
-    def run_agent(self, reply, provider="deepseek"):
+    def run_agent(self, reply, provider="deepseek", api_key="sk-go-key-123", litellm_script=None, **extra_env):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
             bindir.mkdir()
-            for name, script in (("claude", FAKE_CLAUDE), ("litellm", FAKE_LITELLM)):
+            for name, script in (("claude", FAKE_CLAUDE), ("litellm", litellm_script or FAKE_LITELLM)):
                 (bindir / name).write_text(script)
                 (bindir / name).chmod(0o755)
             work = tmp / "work"
@@ -282,8 +346,9 @@ class RunAgent(unittest.TestCase):
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
             port = free_port()
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_CLAUDE_LOG=str(tmp / "log"),
-                       FAKE_CLAUDE_REPLY=json.dumps(reply), API_KEY="sk-go-key-123", GH_TOKEN="ghs_tok",
-                       PROVIDER=provider, PROXY_PORT=port, REPO="o/r", PR_NUMBER="7", RETRY_DELAY="0")
+                       FAKE_CLAUDE_REPLY=json.dumps(reply), API_KEY=api_key, GH_TOKEN="ghs_tok",
+                       PROVIDER=provider, PROXY_PORT=port, REPO="o/r", PR_NUMBER="7", RETRY_DELAY="0",
+                       PROXY_START_TIMEOUT="3", **extra_env)
             env.pop("GITHUB_RUN_ID", None)
             proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "run", "--work", str(work)],
                                   env=env, capture_output=True, text=True, timeout=60)
@@ -293,6 +358,15 @@ class RunAgent(unittest.TestCase):
             fake_proxy = work / "fake-litellm.json"
             proxy = json.loads(fake_proxy.read_text()) if fake_proxy.exists() else None
             return proc, calls, result, proxy, port
+
+    def test_timeout_shows_the_proxy_log_so_the_cause_is_diagnosable(self):
+        proc, calls, result, _, _ = self.run_agent(OK_REPLY, provider="opencode-go", FAKE_CLAUDE_SLEEP="5",
+                                                   ATTEMPT_TIMEOUT="1", ATTEMPTS="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ai-review: el intento excedió el tiempo límite", proc.stderr)
+        self.assertIn("ai-review: últimas líneas del proxy LiteLLM:", proc.stderr)
+        self.assertIn("INFO: POST /v1/messages HTTP/1.1 429 Too Many Requests", proc.stderr)
+        self.assertEqual(result, {"error": "la revisión falló en todos los intentos (proveedor no disponible por ahora)"})
 
     def test_deepseek_api_gets_the_key_directly_and_github_token_is_withheld(self):
         proc, calls, result, proxy, _ = self.run_agent(OK_REPLY, provider="deepseek")
@@ -336,20 +410,37 @@ class RunAgent(unittest.TestCase):
     def test_auth_error_fails_once_without_retry(self):
         proc, calls, result, _, _ = self.run_agent({"result": "Failed to authenticate. API Error: 401 Missing API key.",
                                                     "subtype": "success", "is_error": True, "api_error_status": 401})
-        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIsNone(result)
+        self.assertIn("::warning::", proc.stdout)
+        self.assertIn("error", result)
 
     def test_transient_error_is_retried(self):
-        proc, calls, _, _, _ = self.run_agent({"result": "overloaded", "is_error": True, "api_error_status": 529})
-        self.assertEqual(proc.returncode, 1)
+        proc, calls, result, _, _ = self.run_agent({"result": "overloaded", "is_error": True, "api_error_status": 529})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
+        self.assertIn("error", result)
 
     def test_max_turns_is_kept_as_partial_result(self):
         proc, calls, result, _, _ = self.run_agent({"result": "", "subtype": "error_max_turns", "is_error": True})
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(len(calls), 1)
         self.assertEqual(result["subtype"], "error_max_turns")
+
+    def test_empty_api_key_fails_soft_without_calling_claude(self):
+        proc, calls, result, _, _ = self.run_agent(OK_REPLY, provider="deepseek", api_key="")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn("::warning::", proc.stdout)
+        self.assertIn("AI_REVIEW_API_KEY", result["error"])
+
+    def test_proxy_start_failure_fails_soft(self):
+        proc, calls, result, _, _ = self.run_agent(OK_REPLY, provider="opencode-go",
+                                                    litellm_script=FAKE_LITELLM_CRASH)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn("::warning::", proc.stdout)
+        self.assertIn("error", result)
 
 
 class Workflows(unittest.TestCase):
