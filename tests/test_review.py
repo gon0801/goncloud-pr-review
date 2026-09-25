@@ -23,8 +23,13 @@ class Filters(unittest.TestCase):
             "pkg/sub/Cargo.lock": "*.lock",
             "web/package-lock.json": "package-lock.json",
             "data/raw/2026.csv": "data/**",
-            "app/vendor/lib.js": "vendor/**",
+            "vendor/lib.js": "vendor/**",
             ".saikit/state.json": ".saikit/**",
+            "build/out.js": "build/**",
+            "scripts/build/ci.py": None,
+            "tools/vendor/sync.go": None,
+            "web/node_modules/pkg/index.js": "**/node_modules/**",
+            "src/__snapshots__/view.txt": "**/__snapshots__/**",
             "src/data.py": None,
             "src/database/models.py": None,
             "docs/build.md": None,
@@ -83,11 +88,14 @@ class Compose(unittest.TestCase):
                               MANIFEST, sha=SHA, model="deepseek-flash[1m]")
         self.assertIn("- Turnos: 7 · tokens entrada 100,000 (+1,000,000 en caché) · salida 10,000 · costo aprox $0.048", body)
 
-    def test_oversized_review_is_truncated_under_github_limit(self):
+    def test_oversized_review_is_truncated_but_keeps_scope_section(self):
+        manifest = dict(MANIFEST, excluded=[{"path": "p/" + "x" * 240, "reason": "budget"}] * 60)
         body = review.compose({"result": "x" * 70000 + "\nCOVERAGE: complete"},
-                              MANIFEST, sha=SHA, model="deepseek-flash")
+                              manifest, sha=SHA, model="deepseek-flash")
         self.assertLess(len(body), 65536)
-        self.assertTrue(body.endswith("_(Comentario recortado por el límite de GitHub.)_"))
+        self.assertIn("_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_", body)
+        self.assertIn("  - … y 20 más", body)
+        self.assertTrue(body.endswith("</details>"))
 
 
 class Redact(unittest.TestCase):
@@ -204,7 +212,7 @@ class GitHubGlue(unittest.TestCase):
 
     def test_gate_only_trusts_bot_comments(self):
         calls, _, _ = self.run_cmd("gate", [])
-        self.assertIn('.user.type == "Bot"', calls[0][-1])
+        self.assertIn('.user.login == "github-actions[bot]"', calls[0][-1])
 
     def test_publish_edits_existing_sticky_instead_of_posting(self):
         calls, _, posted = self.run_cmd("publish", [self.sticky("f" * 40)])

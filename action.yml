@@ -26,6 +26,9 @@ inputs:
   github_token:
     description: Token used to read and write the PR comment
     default: ${{ github.token }}
+  bot_login:
+    description: Login that github_token posts as; only its comments count as the sticky review
+    default: github-actions[bot]
 
 runs:
   using: composite
@@ -52,6 +55,7 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
+        BOT_LOGIN: ${{ inputs.bot_login }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" gate
 
     - name: Prepare diff and context
@@ -95,4 +99,5 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         MODEL: ${{ inputs.model }}
+        BOT_LOGIN: ${{ inputs.bot_login }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" publish

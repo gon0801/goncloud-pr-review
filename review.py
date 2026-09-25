@@ -12,12 +12,12 @@ from pathlib import Path
 
 MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
-COMMENT_LIMIT = 60000
+COMMENT_LIMIT = 50000
 
 DEFAULT_EXCLUDES = [
     "*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
     "*.min.js", "*.min.css", "*.map", "*.snap",
-    "dist/**", "build/**", "vendor/**", "node_modules/**", "__snapshots__/**",
+    "dist/**", "build/**", "vendor/**", "**/node_modules/**", "**/__snapshots__/**",
     "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf",
     "*.woff", "*.woff2", "*.ttf", "*.zip", "*.gz", "*.tgz",
 ]
@@ -36,14 +36,12 @@ PRICES = {
 def matches(path, pattern):
     if "/" not in pattern:
         return fnmatch.fnmatch(path.rsplit("/", 1)[-1], pattern)
-    if fnmatch.fnmatch(path, pattern):
-        return True
     if pattern.startswith("**/"):
-        return matches(path, pattern[3:])
+        parts = path.split("/")
+        return any(matches("/".join(parts[i:]), pattern[3:]) for i in range(len(parts)))
     if pattern.endswith("/**"):
-        prefix = pattern[:-3]
-        return path.startswith(prefix + "/") or f"/{prefix}/" in f"/{path}"
-    return False
+        pattern = pattern[:-3] + "/*"
+    return fnmatch.fnmatch(path, pattern)
 
 
 def excluded_by(path, patterns):
@@ -120,6 +118,8 @@ def compose(result, manifest, *, sha, model):
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     if not manifest["reviewed"]:
         review = review or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
+    if len(review) > COMMENT_LIMIT:
+        review = review[:COMMENT_LIMIT] + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
     parts += [review or "_El revisor no devolvió texto._", ""]
 
     scope = [f"- Revisados: {len(manifest['reviewed'])} archivo(s)"]
@@ -140,10 +140,7 @@ def compose(result, manifest, *, sha, model):
         )
     parts += ["<details><summary>Alcance de la revisión</summary>", "", *scope, "", "</details>"]
 
-    body = "\n".join(parts)
-    if len(body) > COMMENT_LIMIT:
-        body = body[:COMMENT_LIMIT] + "\n\n_(Comentario recortado por el límite de GitHub.)_"
-    return body
+    return "\n".join(parts)
 
 
 def sh(*args, check=True, **kw):
@@ -163,8 +160,9 @@ def set_output(key, value):
 
 
 def find_sticky(repo, pr):
+    login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     out = sh("gh", "api", "--paginate", f"repos/{repo}/issues/{pr}/comments?per_page=100",
-             "--jq", f'.[] | select(.user.type == "Bot" and (.body | contains("{MARKER}"))) '
+             "--jq", f'.[] | select(.user.login == "{login}" and (.body | contains("{MARKER}"))) '
                      "| {id: .id, body: .body} | tojson").stdout
     found = [json.loads(line) for line in out.splitlines() if line.strip()]
     return found[-1] if found else None
@@ -286,7 +284,7 @@ def cmd_run(args):
         print(f"ai-review: intento {attempt}/{attempts} con {model}", flush=True)
         try:
             proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True,
-                                  timeout=int(os.environ.get("ATTEMPT_TIMEOUT", "900")))
+                                  timeout=int(os.environ.get("ATTEMPT_TIMEOUT", "600")))
         except subprocess.TimeoutExpired as exc:
             print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
             continue
