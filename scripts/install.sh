@@ -25,7 +25,7 @@ for repo in "$@"; do
   path=".github/workflows/ai-review.yml"
   existing="$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)"
   args=(-X PUT "repos/$repo/contents/$path" -f branch="$branch"
-        -f message="ci: revisión automática de PRs con DeepSeek"
+        -f message="ci: revisión automática de PRs con IA"
         -f content="$(printf '%s' "$content" | base64 | tr -d '\n')")
   [ -n "$existing" ] && args+=(-f sha="$existing")
   gh api "${args[@]}" >/dev/null
@@ -34,7 +34,7 @@ for repo in "$@"; do
     echo "$repo: el PR ya existía, rama actualizada"
   else
     gh pr create -R "$repo" --head "$branch" --base "$default" \
-      --title "ci: revisión automática de PRs con DeepSeek" \
-      --body "Agrega el workflow de revisión automática (gon0801/goncloud-pr-review). Requiere el secret \`DEEPSEEK_API_KEY\` en este repo."
+      --title "ci: revisión automática de PRs con IA" \
+      --body "Agrega el workflow de revisión automática (gon0801/goncloud-pr-review). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo."
   fi
 done

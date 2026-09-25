@@ -268,8 +268,8 @@ def cmd_run(args):
     ]
     child_env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY")}
     child_env.update({
-        "ANTHROPIC_BASE_URL": os.environ.get("BASE_URL", "https://api.deepseek.com/anthropic"),
-        "ANTHROPIC_AUTH_TOKEN": env("DEEPSEEK_API_KEY"),
+        "ANTHROPIC_BASE_URL": env("BASE_URL"),
+        "ANTHROPIC_AUTH_TOKEN": env("API_KEY"),
         "ANTHROPIC_MODEL": model,
         "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
@@ -311,7 +311,7 @@ def cmd_publish(args):
     result = json.loads((work / "result.json").read_text())
     manifest = json.loads((work / "manifest.json").read_text())
     body = redact(compose(result, manifest, sha=head, model=model),
-                  [os.environ.get("DEEPSEEK_API_KEY", ""), os.environ.get("GH_TOKEN", "")])
+                  [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
 

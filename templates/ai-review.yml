@@ -1,4 +1,4 @@
-# Revisión automática de PRs con DeepSeek (repo central: gon0801/goncloud-pr-review).
+# Revisión automática de PRs con IA (repo central: gon0801/goncloud-pr-review).
 # Desactivar sin tocar código: gh variable set AI_REVIEW_DISABLED --body true
 name: AI review
 
@@ -30,4 +30,4 @@ jobs:
           persist-credentials: false
       - uses: gon0801/goncloud-pr-review@main
         with:
-          deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          api_key: ${{ secrets.AI_REVIEW_API_KEY }}

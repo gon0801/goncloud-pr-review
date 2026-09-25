@@ -186,7 +186,7 @@ class GitHubGlue(unittest.TestCase):
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
                        FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
                        REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, MODEL="deepseek-flash",
-                       RUN_ATTEMPT=run_attempt, DEEPSEEK_API_KEY="sk-secret-key-123")
+                       RUN_ATTEMPT=run_attempt, API_KEY="sk-secret-key-123")
             env.pop("GITHUB_STEP_SUMMARY", None)
             subprocess.run([sys.executable, str(ROOT / "review.py"), command, "--work", str(work)],
                            env=env, check=True, capture_output=True)
