@@ -7,7 +7,7 @@ Revisión automática de pull requests para los repos de gon0801. Reemplaza a Co
 Cada repo lleva un workflow chico (`.github/workflows/ai-review.yml`, copia de `templates/ai-review.yml`) que llama a la action de este repo (`action.yml`). La action hace cinco pasos.
 
 1. **Gate.** Busca el comentario fijo del bot en el PR. Si ya revisó exactamente ese commit, termina sin gastar tokens.
-2. **Prepare.** Calcula el diff contra el merge-base y saca lockfiles, binarios, `dist/`, `vendor/` y lo que el repo agregue en `exclude`. Ordena lo restante con el código primero, luego config y al final docs. Si el diff pasa de `max_diff_bytes`, lo que no cabe queda listado como no revisado.
+2. **Prepare.** Calcula el diff contra el merge-base y saca lockfiles, binarios, `dist/`, `build/` y `vendor/` de la raíz, `node_modules/` a cualquier profundidad, y lo que el repo agregue en `exclude`. Ordena lo restante con el código primero, luego config y al final docs. Si el diff pasa de `max_diff_bytes`, lo que no cabe queda listado como no revisado.
 3. **Install.** Instala Claude Code con la versión fijada.
 4. **Review.** Corre `claude -p` apuntado a `https://api.deepseek.com/anthropic` con `--restricted --safe-mode --strict-mcp-config --tools Read,Grep,Glob`. No puede ejecutar código, escribir archivos, salir a la red, ni leer fuera del checkout y del directorio de trabajo. También ignora los settings, hooks, MCP y CLAUDE.md que traiga el PR. Si falla, reintenta una vez.
 5. **Publish.** Edita el comentario fijo del PR, o lo crea si no existe. El comentario lleva un marcador oculto con el SHA revisado. Antes de publicar se borra del texto cualquier aparición de la API key o del token.
@@ -16,7 +16,7 @@ El prompt de review vive en `prompt.md`. Cada repo puede agregar reglas propias 
 
 ## Cuándo se dispara
 
-Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_for_review`. Los drafts no se revisan hasta que se marcan listos. Tampoco se revisan PRs de forks, porque GitHub no les da secrets. Los cambios de labels, títulos o comentarios no disparan nada. Los PRs abiertos por bots o agentes sí se revisan.
+Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_for_review`. Los drafts no se revisan hasta que se marcan listos. Tampoco se revisan PRs de forks, porque GitHub no les da secrets. Los cambios de labels, títulos o comentarios no disparan nada. Los PRs abiertos por bots o agentes sí se revisan, con una excepción de GitHub: un PR creado o actualizado con el `GITHUB_TOKEN` de otro workflow no dispara workflows. Los agentes tienen que usar un PAT o un token de GitHub App para que su PR se revise.
 
 **Concurrencia.** El grupo es `ai-review-<número de PR>` con `cancel-in-progress`. Los PRs distintos corren en paralelo, sin tope propio más allá de los jobs simultáneos de tu plan de Actions. Si llegan varios pushes al mismo PR, se cancela la corrida vieja y se revisa el último commit.
 
