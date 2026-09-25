@@ -68,4 +68,4 @@ The final line of your answer must be exactly one of:
 COVERAGE: complete
 COVERAGE: partial | <files or parts you could not review, and why>
 
-Use `partial` whenever you did not read the whole diff or could not verify something important. Never claim `complete` if you skipped anything.
+Use `partial` whenever you did not read the whole diff, or skipped repository files you needed to judge it. Never claim `complete` if you skipped anything. Facts outside the repository that you cannot check offline (third-party APIs, services, library behavior) do not make coverage partial; if one of them carries a concrete risk, report it as a finding instead.
