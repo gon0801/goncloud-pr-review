@@ -77,6 +77,12 @@ class Compose(unittest.TestCase):
                       "1 archivo(s) quedaron fuera por tamaño del diff.", body)
         self.assertIn("  - `big.py` (budget)", body)
 
+    def test_comment_never_exceeds_github_limit(self):
+        manifest = dict(MANIFEST, excluded=[{"path": "x" * 300, "reason": "filtro " + "y" * 3000}] * 40)
+        body = review.compose({"result": "x" * 70000 + "\nCOVERAGE: complete"},
+                              manifest, sha=SHA, provider="opencode-go")
+        self.assertEqual(len(body), 65000)
+
     def test_partial_coverage_detail_is_shown(self):
         body = review.compose({"result": "v\nCOVERAGE: partial | tests/ sin leer"},
                               MANIFEST, sha=SHA, provider="opencode-go")

@@ -15,6 +15,7 @@ from pathlib import Path
 MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
 COMMENT_LIMIT = 50000
+GITHUB_COMMENT_MAX = 65000
 
 DEFAULT_EXCLUDES = [
     "*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
@@ -158,7 +159,7 @@ def compose(result, manifest, *, sha, provider):
         )
     parts += ["<details><summary>Alcance de la revisión</summary>", "", *scope, "", "</details>"]
 
-    return "\n".join(parts)
+    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
 
 def sh(*args, check=True, **kw):
