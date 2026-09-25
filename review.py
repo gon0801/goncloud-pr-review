@@ -82,7 +82,7 @@ def split_coverage(text):
 
 def redact(text, secrets):
     for secret in secrets:
-        if secret and len(secret) >= 8:
+        if secret and len(secret) > 64:
             text = text.replace(secret, "[REDACTED]")
     return text
 
@@ -97,7 +97,7 @@ def estimate_cost(model, usage):
     return (miss * prices[0] + hit * prices[1] + out * prices[2]) / 1_000_000
 
 
-def compose(result, manifest, *, sha, model):
+def compose(result, manifest, *, head_sha, model):
     text = (result or {}).get("result") or ""
     review, coverage, detail = split_coverage(text)
     budget_cut = [e for e in manifest["excluded"] if e["reason"] == "budget"]
@@ -112,8 +112,8 @@ def compose(result, manifest, *, sha, model):
     if budget_cut:
         warnings.append(f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff")
 
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
-             f"### Revisión automática · `{model}` · {sha[:7]}", ""]
+    parts = [MARKER, f"{SHA_PREFIX}{head_sha} -->",
+             f"### Revisión automática · `{model}` · {head_sha[:7]}", ""]
     if warnings:
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     if not manifest["reviewed"]:
@@ -310,7 +310,7 @@ def cmd_publish(args):
     repo, pr, head, model = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA"), env("MODEL")
     result = json.loads((work / "result.json").read_text())
     manifest = json.loads((work / "manifest.json").read_text())
-    body = redact(compose(result, manifest, sha=head, model=model),
+    body = redact(compose(result, manifest, head_sha=head, model=model),
                   [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
