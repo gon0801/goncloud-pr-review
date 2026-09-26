@@ -1810,6 +1810,13 @@ class BlockingFixes(unittest.TestCase):
         with mock.patch.object(review, "collaborator_permission", return_value="write"):
             self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), ({"F1", "F2"}, False, 101))
 
+    def test_unverified_dismiss_blocks_later_ones_instead_of_skipping_them(self):
+        comments = [{"id": 100, "user": "u1", "body": "ai-review: descartar F1"},
+                    {"id": 101, "user": "u2", "body": "ai-review: descartar F2"}]
+        with mock.patch.object(review, "collaborator_permission", side_effect=[None, "write"]):
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), (set(), False, 0),
+                             "si 101 avanzara seen, el 100 no verificado se perdería para siempre")
+
     def test_non_writer_dismiss_is_marked_seen(self):
         comments = [{"id": 100, "user": "lector", "body": "ai-review: descartar F1"}]
         with mock.patch.object(review, "collaborator_permission", return_value="read"):
