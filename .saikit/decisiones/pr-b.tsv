@@ -1,0 +1,6 @@
+cuando|etapa|decision|por_que|evidencia|resultado
+2026-09-26T07:30:00Z|understand|Implementar PR B (Plans.md B1-B7) sobre main ee06f97 (PR A ya mergeado en #9)|El usuario pidio seguir con PR B; base main directa, sin stack|main ee06f97; B1-B7 cc:TODO|ok
+2026-09-26T08:00:00Z|implement|Rama feat/pr-b-no-repetir: B1-B7 + B1-B7 a cc:done (35262e6, 06d576e); primer hijo cayo por timeout del runtime, reintento limpio|Ceremonia saikit: implement gate delegado; out/ desaparecio (no fue el hijo: sin rm ni git clean en su log)|commits pusheados, sin PR ni merge|ok
+2026-09-26T08:30:00Z|verify|Verifier PASS 116/116 + actionlint + cada B1-B7 ejercitado; base reconciliada (62 en ee06f97, el 51 del brief estaba desactualizado)|Evidencia independiente antes del review|unittest 116/116 OK en /tmp/pr-b-verify|ok
+2026-09-26T08:45:00Z|review|Reviewer 6 gaps + 1 test ciego (no APPROVE); fix bc01955 en una ronda; re-verify PASS 125/125 + 11/11; reviewer APPROVE bc01955|Regla 4: ronda unica; G7 (renombres) diferido al rastro + PR; nota residual: vigilar permiso en primer descarte real|APPROVE reviewer bc01955781232c240227ba8ddbec8f19045d635a|ok
+2026-09-26T08:58:00Z|close|PR #13 abierto (feat/pr-b-no-repetir -> main); rastro en chore/rastro-pr-b; merge lo ejecuta el operador|El candado saikit bloquea push directo a main|gh pr create #13|pendiente-merge-operador
