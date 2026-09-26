@@ -1023,23 +1023,23 @@ class DismissCommands(unittest.TestCase):
 
     def test_only_writer_plus_counts_and_bot_is_ignored(self):
         comments = [
-            {"user": "owner", "body": "ai-review: descartar F1"},
-            {"user": "owner", "body": "ai-review: descartar F2"},
-            {"user": "reader", "body": "ai-review: descartar F3"},
-            {"user": "ghost", "body": "ai-review: descartar todo"},
-            {"user": "github-actions[bot]", "body": "ai-review: descartar F4"},
+            {"id": 11, "user": "owner", "body": "ai-review: descartar F1"},
+            {"id": 12, "user": "owner", "body": "ai-review: descartar F2"},
+            {"id": 13, "user": "reader", "body": "ai-review: descartar F3"},
+            {"id": 14, "user": "ghost", "body": "ai-review: descartar todo"},
+            {"id": 15, "user": "github-actions[bot]", "body": "ai-review: descartar F4"},
         ]
         perms = {"owner": "write", "reader": "read", "ghost": None}
         with mock.patch.object(review, "collaborator_permission",
                                side_effect=lambda repo, user: perms[user]) as perm:
             self.assertEqual(review.collect_dismissals("o/r", "7", "github-actions[bot]", comments),
-                             ({"F1", "F2"}, False))
+                             ({"F1", "F2"}, False, 14))
             self.assertEqual(perm.call_count, 3, "el permiso se revisa una vez por autor")
 
     def test_maintain_and_admin_count_as_writer(self):
-        comments = [{"user": u, "body": "ai-review: descartar todo"} for u in ("m", "a")]
+        comments = [{"id": i, "user": u, "body": "ai-review: descartar todo"} for i, u in ((21, "m"), (22, "a"))]
         with mock.patch.object(review, "collaborator_permission", side_effect=["maintain", "admin"]):
-            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments), (set(), True))
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments), (set(), True, 22))
 
     def test_permission_uses_collaborators_endpoint_without_token_in_args(self):
         with mock.patch.object(review, "sh") as fake:
@@ -1131,14 +1131,15 @@ class FindingIds(unittest.TestCase):
 
     def test_new_findings_get_sequential_ids(self):
         prev = [make_finding("F1"), make_finding("F2")]
-        model = [dict(make_finding("F-new"), id=None), dict(make_finding("F-new"), id=None)]
+        model = [dict(make_finding("F-new", title="Nuevo A"), id=None),
+                 dict(make_finding("F-new", title="Nuevo B"), id=None)]
         merged, new_ids = merge(prev, model)
         self.assertEqual(new_ids, ["F3", "F4"])
         self.assertEqual(merged["next"], 5)
         self.assertTrue(all(f["state"] == "open" for f in merged["findings"][2:]))
 
     def test_unknown_model_ids_are_remapped(self):
-        merged, new_ids = merge([make_finding("F1")], [make_finding("F99")])
+        merged, new_ids = merge([make_finding("F1")], [make_finding("F99", title="Otro")])
         self.assertEqual(new_ids, ["F2"])
         self.assertEqual([f["id"] for f in merged["findings"]], ["F1", "F2"])
 
@@ -1449,7 +1450,7 @@ class GatePrev(unittest.TestCase):
 
 class IncrementalRun(unittest.TestCase):
     def manifest(self, **kw):
-        manifest = dict(MANIFEST, **kw)
+        manifest = dict(MANIFEST, diff_bytes=0, **kw)
         return manifest
 
     def test_auto_turns_capped_at_30_on_small_incremental(self):
@@ -1622,11 +1623,14 @@ class BlockingFixes(unittest.TestCase):
                           changed_files=["tests/test_review.py"])
         self.assertEqual(merged["findings"][0]["state"], "resolved")
 
-    def test_model_can_name_the_related_file_when_it_resolves(self):
-        merged, _ = merge([make_finding("F2", file="review.py")],
-                          [dict(make_finding("F2", file="review.py", state="resolved"), files=["review.py", "tests/t.py"])],
-                          changed_files=["tests/t.py"])
-        self.assertEqual(merged["findings"][0]["state"], "resolved")
+    def test_model_added_related_file_counts_from_the_next_push(self):
+        prev = [make_finding("F2", file="review.py")]
+        model = [dict(make_finding("F2", file="review.py", state="resolved"), files=["review.py", "tests/t.py"])]
+        merged, _ = merge(prev, model, changed_files=["tests/t.py"])
+        self.assertEqual((merged["findings"][0]["state"], merged["findings"][0]["files"]),
+                         ("open", ["review.py", "tests/t.py"]))
+        again, _ = merge(merged["findings"], model, changed_files=["tests/t.py"])
+        self.assertEqual(again["findings"][0]["state"], "resolved")
 
     def test_unrelated_change_does_not_resolve(self):
         prev = [dict(make_finding("F2", file="review.py"), files=["review.py", "tests/test_review.py"])]
@@ -1706,6 +1710,59 @@ class BlockingFixes(unittest.TestCase):
         body = review.compose({"result": block_of(make_finding("F1", state="resolved")) + "\nCOVERAGE: complete"},
                               MANIFEST, sha=SHA, provider="opencode-go", findings=findings)
         self.assertIn("## Detalle del revisor\n\nSin hallazgos nuevos en este push.", body)
+
+    def test_dismiss_all_applies_once_and_never_to_later_findings(self):
+        todo = [{"id": 100, "user": "owner", "body": "ai-review: descartar todo"}]
+        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+            ids, all_open, last = review.collect_dismissals("o/r", "7", "bot", todo, 0)
+            self.assertEqual((ids, all_open, last), (set(), True, 100))
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", todo, 100), (set(), False, 100))
+
+    def test_seen_comment_id_survives_the_hidden_block(self):
+        state = {"findings": [make_finding("F1")], "next": 2, "seen": 100}
+        self.assertEqual(review.parse_findings_block(review.serialize_findings(state))["seen"], 100)
+        self.assertEqual(review.parse_findings_block(block_of(make_finding("F1")))["seen"], 0)
+
+    def test_publish_records_seen_so_the_next_push_ignores_old_dismissals(self):
+        prev_block = review.serialize_findings({"findings": [make_finding("F1")], "next": 2})
+        sticky = {"id": 9, "user": "github-actions[bot]",
+                  "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold"}
+        comments = [sticky, {"id": 100, "user": "owner", "body": "ai-review: descartar todo"}]
+        result = {"result": block_of(make_finding("F1"), dict(make_finding("F-new", file="b.py", title="Nuevo"), id=None))
+                  + "\nCOVERAGE: complete"}
+        manifest = dict(MANIFEST, mode="full", reason="no-prev", reviewed=["src/app.py", "b.py"])
+        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+            first = review.build_findings(result, manifest, sticky, "o/r", "7", "github-actions[bot]", comments)
+            self.assertEqual([(f["id"], f["state"]) for f in first["merged"]], [("F1", "dismissed"), ("F2", "open")])
+            sticky2 = dict(sticky, body=f"{review.MARKER}\n{review.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx")
+            again = review.build_findings({"result": block_of(make_finding("F2", file="b.py", title="Nuevo"))
+                                           + "\nCOVERAGE: complete"}, manifest, sticky2, "o/r", "7",
+                                          "github-actions[bot]", [sticky2, comments[1]])
+        self.assertEqual([(f["id"], f["state"]) for f in again["merged"]], [("F1", "dismissed"), ("F2", "open")])
+
+    def test_rerun_of_the_same_commit_can_not_resolve(self):
+        prev_block = review.serialize_findings({"findings": [make_finding("F1")], "next": 2})
+        sticky = {"id": 9, "user": "github-actions[bot]",
+                  "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold"}
+        result = {"result": block_of(make_finding("F1", state="resolved")) + "\nCOVERAGE: complete"}
+        manifest = dict(MANIFEST, mode="full", reason="same-sha", reviewed=["src/app.py"])
+        findings = review.build_findings(result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky])
+        self.assertEqual([(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")])
+
+    def test_repeated_prev_issue_as_new_keeps_its_old_id(self):
+        merged, new_ids = merge([make_finding("F1", title="Umbral de redact")],
+                                [dict(make_finding("F-new", title="umbral de redact"), id=None)])
+        self.assertEqual((new_ids, [f["id"] for f in merged["findings"]]), ([], ["F1"]))
+
+    def test_plain_path_does_not_keep_the_model_block_in_the_text(self):
+        findings = {"merged": [], "new_ids": [], "model_ok": True,
+                    "block": review.serialize_findings({"findings": [], "next": 1})}
+        body = review.compose({"result": "**Veredicto:** limpio.\n" + block_of() + "\nCOVERAGE: complete"},
+                              MANIFEST, sha=SHA, provider="opencode-go", findings=findings)
+        self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
+
+    def test_html5_comment_close_is_neutralized(self):
+        self.assertNotIn("--!>", review.one_line("a --!> b", 50))
 
     def test_html_in_titles_is_neutralized(self):
         line = review.finding_line(make_finding("F1", title="rompe </details> y <!-- esto"))

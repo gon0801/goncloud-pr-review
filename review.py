@@ -184,7 +184,7 @@ def one_line(text, limit):
     collapsed = " ".join(str(text or "").split())
     if len(collapsed) > limit:
         collapsed = collapsed[:limit].rstrip()
-    return collapsed.replace("-->", "--\u203a")
+    return collapsed.replace("--!>", "--!\u203a").replace("-->", "--\u203a")
 
 
 def normalize_severity(value):
@@ -273,8 +273,10 @@ def parse_findings_block(text, *, last=False):
     findings = [f for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"]) if f]
     claimed = data.get("next")
     minimum = derive_next(findings)
+    seen = data.get("seen")
     return {"findings": findings,
-            "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum}
+            "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum,
+            "seen": seen if isinstance(seen, int) and seen > 0 else 0}
 
 
 def parse_model_findings(text):
@@ -320,7 +322,8 @@ def serialize_findings(state):
         entries.append(entry)
 
     def build(items):
-        blob = json.dumps({"findings": items, "next": state["next"]},
+        blob = json.dumps({"findings": items, "next": state["next"],
+                           **({"seen": state["seen"]} if state.get("seen") else {})},
                           separators=(",", ":"), ensure_ascii=False)
         return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
 
@@ -377,6 +380,11 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
     for entry in ((model or {}).get("findings", []) if model else []):
         fid = entry.get("id")
         old = prev_by_id.get(fid) if fid else None
+        if old is None or old["file"] != entry["file"]:
+            # The model repeated a previous issue without its id (e.g. as F-new on a full review).
+            old = next((f for f in prev_list if f.get("id") and f["id"] not in seen
+                        and f["state"] != DISMISSED and same_issue(entry, f)), None)
+            fid = old["id"] if old else fid
         if old is not None and old["file"] == entry["file"]:
             if fid in seen:
                 continue  # first wins: the model repeated a previous id
@@ -384,9 +392,12 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
-            files = unique_paths(old.get("files", [old["file"]]) + entry.get("files", []))
+            registered = old.get("files", [old["file"]])
+            files = unique_paths(registered + entry.get("files", []))
             state = entry["state"]
-            if state == RESOLVED and not changed.intersection(files):
+            # Only files registered before this pass unlock "resolved": a file the model adds
+            # now counts from the next push, so it can't resolve a finding by naming any change.
+            if state == RESOLVED and not changed.intersection(registered):
                 state = OPEN
             if old["file"] in reverted:
                 state = RESOLVED
@@ -426,7 +437,7 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
     for finding in state["findings"]:
         wanted = finding["id"] in dismiss_ids or (dismiss_all and finding["state"] == OPEN)
         findings.append(dict(finding, state=DISMISSED) if wanted and finding.get("id") else dict(finding))
-    return {"findings": findings, "next": state["next"]}
+    return dict(state, findings=findings)
 
 
 def dismiss_wants_all(rest):
@@ -472,22 +483,29 @@ def collaborator_permission(repo, user):
     return proc.stdout.strip() or None
 
 
-def collect_dismissals(repo, pr, bot_login, comments):
-    """Apply dismiss commands from writer+ commenters. Third parties are ignored."""
-    ids, all_open, checked = set(), False, {}
+def collect_dismissals(repo, pr, bot_login, comments, after=0):
+    """Dismiss commands from writer+ commenters posted after comment id `after`.
+
+    Each command applies once, to the findings that existed when it was processed:
+    the state remembers the highest comment id handled, so an old "descartar todo"
+    never dismisses findings reported later. Returns (ids, all_open, last_id).
+    """
+    ids, all_open, checked, last = set(), False, {}, after
     for comment in comments or []:
         user = comment.get("user")
-        if not user or user == bot_login:
+        cid = comment.get("id") if isinstance(comment.get("id"), int) else 0
+        if not user or user == bot_login or cid <= after:
             continue
         found, wants_all = parse_dismiss_command(comment.get("body"))
         if not found and not wants_all:
             continue
+        last = max(last, cid)
         if user not in checked:
             checked[user] = collaborator_permission(repo, user)
         if checked[user] in WRITE_PERMISSIONS:
             ids |= found
             all_open = all_open or wants_all
-    return ids, all_open
+    return ids, all_open, last
 
 
 def plural(count, singular):
@@ -604,6 +622,8 @@ def compose(result, manifest, *, sha, provider, findings=None):
     if findings is not None and findings.get("merged"):
         return compose_with_findings(result, manifest, sha=sha, provider=provider,
                                      findings=findings, review=review, warnings=warnings)
+    if findings is not None:
+        review = strip_findings_block(review, last=True)
     parts = [MARKER, f"{SHA_PREFIX}{sha} -->"]
     if findings is not None:
         parts.append(findings["block"])
@@ -800,7 +820,7 @@ def cmd_gate(args):
     state = parse_findings_block(sticky["body"]) if sticky else None
     if state:
         try:
-            dismiss_ids, dismiss_all = collect_dismissals(repo, pr, login, comments)
+            dismiss_ids, dismiss_all, _ = collect_dismissals(repo, pr, login, comments, state.get("seen", 0))
             state = apply_dismissals(state, dismiss_ids, dismiss_all)
         except Exception as exc:
             print(f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar", file=sys.stderr)
@@ -1340,13 +1360,19 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
     prev = parse_findings_block(sticky["body"]) if sticky else None
     model = parse_model_findings((result or {}).get("result") or "")
     try:
-        dismiss_ids, dismiss_all = collect_dismissals(repo, pr, login, comments)
+        dismiss_ids, dismiss_all, last_seen = collect_dismissals(repo, pr, login, comments,
+                                                                (prev or {}).get("seen", 0))
     except Exception as exc:
         print(f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
               file=sys.stderr)
-        dismiss_ids, dismiss_all = set(), False
+        dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
     incremental = manifest.get("mode") == "incremental"
-    changed = manifest.get("changed_files", []) if incremental else manifest.get("reviewed", [])
+    if incremental:
+        changed = manifest.get("changed_files", [])
+    elif manifest.get("reason") == "same-sha":
+        changed = []  # a re-run of the same commit: nothing changed, nothing can be resolved
+    else:
+        changed = manifest.get("reviewed", [])
     # Revert detection needs to know what changed since the last review, so it only runs on
     # incremental passes, and only for prev findings whose own file changed in this push.
     watched = {f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN}
@@ -1358,6 +1384,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         reverted = set()
     merged, new_ids = merge_findings(prev, model, changed_files=changed, reverted_files=reverted,
                                      dismiss_ids=dismiss_ids, dismiss_all=dismiss_all)
+    merged["seen"] = last_seen
     return {"merged": merged["findings"], "new_ids": new_ids,
             "block": serialize_findings(merged), "model_ok": model is not None}
 
