@@ -20,7 +20,8 @@ jobs:
           - { repo: goncloud-Orbit, pr: 345, head: 7c80eabcf9729a42f517b2886a5b3932e3b693d5, base: cd6e63de0e43755a1c98a51b0d8afef3026e316a }
           - { repo: goncloud-Orbit, pr: 342, head: cb193a181c66102e4c9b84d315bac8462f062ce2, base: 024c1f76637bdebb6bdb48f1b3316ab6f2bb684f }
         version:
-          - { name: despues, ref: 347aad632f0d719ca1968f50861bc5a1af3e92a2 }
+          - { name: antes, ref: main }
+          - { name: despues, ref: ecc988bfa3fbaa44d1a1a963f067d75c4ce50d64 }
         attempt: [1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 30
