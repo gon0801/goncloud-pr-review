@@ -1,0 +1,95 @@
+name: comparativa
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    if: github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { repo: goncloud-openclaw, pr: 161, head: 40bad0f134b78347114fed02b6acd89a04d16ae0, base: 795fef29593efca095b51901bfa94b4c73b0c921 }
+          - { repo: goncloud-openclaw, pr: 175, head: 7bccee56e505762469e011587f96d32b598fb32d, base: 42ac130cefc5effa9b6f3e78f1ccef85002c5704 }
+          - { repo: goncloud-openclaw, pr: 160, head: d637e4c74021b6af28b408da23e8e109a7dc0cac, base: dda8c203d75c7f87ae926687c6d503556f9fd77b }
+          - { repo: goncloud-Orbit, pr: 345, head: 7c80eabcf9729a42f517b2886a5b3932e3b693d5, base: cd6e63de0e43755a1c98a51b0d8afef3026e316a }
+          - { repo: goncloud-Orbit, pr: 342, head: cb193a181c66102e4c9b84d315bac8462f062ce2, base: 024c1f76637bdebb6bdb48f1b3316ab6f2bb684f }
+        version:
+          - { name: antes, ref: main }
+          - { name: despues, ref: 347aad6a1b0f60d69326f6c5f4cfc3a3fc3fd3a6 }
+        attempt: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.version.ref }}
+          path: tool
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: gon0801/${{ matrix.target.repo }}
+          ref: ${{ matrix.target.head }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install
+        env:
+          PROVIDER: opencode-go
+        run: |
+          start=$(date +%s)
+          python3 tool/review.py install --work "$RUNNER_TEMP/ai-review"
+          echo "$(( $(date +%s) - start ))" > "$RUNNER_TEMP/install-seconds"
+      - name: Prepare
+        working-directory: target
+        env:
+          HEAD_SHA: ${{ matrix.target.head }}
+          BASE_SHA: ${{ matrix.target.base }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --quiet origin "$BASE_SHA"
+          echo '{"pull_request":{"title":"","body":""}}' > "$RUNNER_TEMP/event.json"
+          GITHUB_EVENT_PATH="$RUNNER_TEMP/event.json" python3 ../tool/review.py prepare --prompt ../tool/prompt.md
+      - name: Review
+        working-directory: target
+        env:
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          PROVIDER: opencode-go
+          REPO: gon0801/${{ matrix.target.repo }}
+          PR_NUMBER: ${{ matrix.target.pr }}
+        run: |
+          start=$(date +%s)
+          python3 ../tool/review.py run
+          echo "$(( $(date +%s) - start ))" > "$RUNNER_TEMP/review-seconds"
+      - name: Report
+        if: always()
+        env:
+          LABEL: ${{ matrix.target.repo }}#${{ matrix.target.pr }} ${{ matrix.version.name }} ${{ matrix.attempt }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          tmp = os.environ["RUNNER_TEMP"]; work = os.path.join(tmp, "ai-review")
+          def read(path, default=None):
+              try:
+                  return open(path).read().strip()
+              except OSError:
+                  return default
+          r = json.loads(read(os.path.join(work, "result.json"), "{}") or "{}")
+          m = json.loads(read(os.path.join(work, "manifest.json"), "{}") or "{}")
+          text = r.get("result") or ""
+          sev = {k: len(re.findall(p, text)) for k, p in
+                 {"critical": r"🔴", "high": r"🟠", "medium": r"🟡", "low": r"⚪"}.items()}
+          cov = re.search(r"COVERAGE:\s*(complete|partial)", text)
+          print("COMPARATIVA " + json.dumps({
+              "label": os.environ["LABEL"], "cap": m.get("max_turns", 60), "turns": r.get("num_turns"),
+              "subtype": r.get("subtype"), "error": r.get("ai_review_error") or r.get("error"),
+              "coverage": cov.group(1) if cov else None, "severities": sev,
+              "install_s": read(os.path.join(tmp, "install-seconds")),
+              "review_s": read(os.path.join(tmp, "review-seconds")),
+              "files": len(m.get("reviewed", [])), "diff_bytes": m.get("diff_bytes"),
+          }))
+          PY
