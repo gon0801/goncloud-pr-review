@@ -77,23 +77,28 @@ If there are no findings, output only the verdict line.
 
 On the line(s) right BEFORE the `COVERAGE:` line (never after it), emit the machine-readable state of every finding as a single HTML comment:
 
-<!-- ai-review:findings={"findings":[{"id":"F1","file":"path/to/file.ext","line":12,"severity":"High","title":"short title, same as the text","state":"open"}],"next":2} -->
+<!-- ai-review:findings={"findings":[{"id":"F-new","file":"src/api.py","line":12,"files":["tests/test_api.py"],"severity":"High","title":"short title, same as the text","state":"open"}],"next":2} -->
 
 Rules:
 
 - One entry per finding you report, with the same file, line, severity and title as the text above.
+- `file` is where the problem is. `files` lists the OTHER files involved, above all where the fix has to land (for example the callers or tests that break). A finding can only be marked resolved when one of these files changed, so list them.
 - `state` is `open` or `resolved`. Never emit `dismissed`: only a human discards.
-- On an incremental review, repeat every previous finding with its same `id`; new findings use `"id": "F-new"` (the publisher renumbers them).
-- Keep the block on as few lines as possible. The verdict counts only `open` findings.
+- Previous findings (see `prev_findings.md` when it exists) keep their same `id` for the same issue in the same file. New findings use `"id": "F-new"` (the publisher numbers them).
+- Never write `-->` inside any string of the block (titles, paths). Keep the block on as few lines as possible. The verdict counts only `open` findings.
 
 ## Incremental review (push 2 and later)
 
 When the user message says this is an INCREMENTAL review, the rest of the PR is already reviewed:
 
 1. Read `prev_findings.md` and verify each OPEN finding against the new diff.
-2. Mark `resolved` only what the new diff actually fixed. A finding whose file did not change since the last review cannot be resolved: keep it `open` (a fix in another file does not resolve it either).
+2. Mark `resolved` only what the new diff actually fixed. The fix may be in a related file (for example, tests updated to a renamed function): add that file to the finding's `files`. A finding none of whose files changed since the last review stays `open`.
 3. Look for NEW bugs only in the changed files listed in the user message.
-4. Carry every previous finding (open and resolved) into the new block with the same ids.
+4. Carry every previous open and resolved finding into the new block with the same ids. Dismissed findings: leave them out of the block and never describe them in the text.
+
+## Dismissed findings
+
+A person dismissed the findings listed as dismissed in `prev_findings.md`. Do not report them again, do not include them in the block, and do not describe or mention them in the text.
 
 The final line of your answer must be exactly one of:
 

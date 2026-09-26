@@ -3,6 +3,7 @@
 
 import argparse
 import fnmatch
+import html
 import json
 import os
 import re
@@ -28,6 +29,7 @@ FINDINGS_SUFFIX = " -->"
 FINDINGS_MAX_BYTES = 8000
 FINDINGS_MAX_COUNT = 60
 FINDINGS_TITLE_MAX = 160
+FINDING_FILES_MAX = 5
 INCREMENTAL_MAX_TURNS = 20
 INCREMENTAL_PROMPT_MAX_FILES = 50
 SEVERITIES = ("Critical", "High", "Medium", "Low")
@@ -209,9 +211,20 @@ def sanitize_finding(entry, *, allow_dismissed):
     if state not in (OPEN, RESOLVED, DISMISSED) or (state == DISMISSED and not allow_dismissed):
         state = OPEN
     fid = str(entry.get("id") or "").strip().upper()
-    return {"id": fid if finding_number(fid) else None, "file": path,
+    raw_files = entry.get("files") if isinstance(entry.get("files"), list) else []
+    files = unique_paths([path] + [one_line(item, 200) for item in raw_files])
+    return {"id": fid if finding_number(fid) else None, "file": path, "files": files,
             "line": max(line, 0), "severity": normalize_severity(entry.get("severity")),
             "title": title, "state": state}
+
+
+def unique_paths(paths):
+    """Primary path first, then related ones, no blanks or repeats, capped."""
+    out = []
+    for path in paths:
+        if path and path not in out:
+            out.append(path)
+    return out[:FINDING_FILES_MAX]
 
 
 def derive_next(findings):
@@ -219,26 +232,40 @@ def derive_next(findings):
     return (max(numbers) + 1) if numbers else 1
 
 
-def parse_findings_block(text):
-    """Extract the hidden findings state. None when missing or broken (B6 falls back).
+def find_findings_block(text, *, last=False):
+    """Locate a findings block: (start, end, data) or None.
 
-    The prompt demands the block before COVERAGE:, but a well-formed block parses
-    wherever it sits: usable memory is kept, and a misplaced block still triggers
-    the unknown-coverage warning through split_coverage.
+    Each ` -->` after the prefix is tried until the JSON parses, so a `-->` inside a
+    title can't cut the block short. The sticky's own block is the FIRST one (right
+    under the markers); the model's is the LAST one (right before COVERAGE), so a block
+    the model quotes from the PR earlier in its text never wins.
     """
     text = text or ""
-    start = text.find(FINDINGS_PREFIX)
-    if start < 0:
+    starts, pos = [], text.find(FINDINGS_PREFIX)
+    while pos >= 0:
+        starts.append(pos)
+        pos = text.find(FINDINGS_PREFIX, pos + 1)
+    for start in (reversed(starts) if last else starts):
+        body = start + len(FINDINGS_PREFIX)
+        end = text.find(FINDINGS_SUFFIX, body)
+        while end >= 0:
+            try:
+                data = json.loads(text[body:end])
+            except ValueError:
+                end = text.find(FINDINGS_SUFFIX, end + 1)
+                continue
+            if isinstance(data, dict) and isinstance(data.get("findings"), list):
+                return start, end + len(FINDINGS_SUFFIX), data
+            break
+    return None
+
+
+def parse_findings_block(text, *, last=False):
+    """Hidden findings state, or None when missing or broken (B6 falls back)."""
+    found = find_findings_block(text, last=last)
+    if found is None:
         return None
-    end = text.find(FINDINGS_SUFFIX, start + len(FINDINGS_PREFIX))
-    if end < 0:
-        return None
-    try:
-        data = json.loads(text[start + len(FINDINGS_PREFIX):end])
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
-        return None
+    data = found[2]
     findings = [f for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"]) if f]
     claimed = data.get("next")
     minimum = derive_next(findings)
@@ -248,7 +275,7 @@ def parse_findings_block(text):
 
 def parse_model_findings(text):
     """Parse the block the model emitted. The model may never dismiss; only users do."""
-    state = parse_findings_block(text)
+    state = parse_findings_block(text, last=True)
     if state is None:
         return None
     for finding in state["findings"]:
@@ -257,14 +284,12 @@ def parse_model_findings(text):
     return state
 
 
-def strip_findings_block(text):
-    start = (text or "").find(FINDINGS_PREFIX)
-    if start < 0:
+def strip_findings_block(text, *, last=False):
+    found = find_findings_block(text, last=last)
+    if found is None:
         return text or ""
-    end = text.find(FINDINGS_SUFFIX, start + len(FINDINGS_PREFIX))
-    if end < 0:
-        return text or ""
-    return (text[:start] + text[end + len(FINDINGS_SUFFIX):]).strip()
+    start, end, _ = found
+    return (text[:start] + text[end:]).strip()
 
 
 def serialize_findings(state):
@@ -280,9 +305,15 @@ def serialize_findings(state):
                       key=lambda f: finding_number(f["id"]) or 0, reverse=True)
         findings = sorted(open_only + rest[:max(0, FINDINGS_MAX_COUNT - len(open_only))],
                           key=lambda f: finding_number(f["id"]) or 0)
-    entries = [{"id": f["id"], "file": one_line(f["file"], 200), "line": f["line"],
-                "severity": f["severity"], "title": one_line(f["title"], FINDINGS_TITLE_MAX),
-                "state": f["state"]} for f in findings]
+    entries = []
+    for f in findings:
+        entry = {"id": f["id"], "file": one_line(f["file"], 200), "line": f["line"],
+                 "severity": f["severity"], "title": one_line(f["title"], FINDINGS_TITLE_MAX),
+                 "state": f["state"]}
+        related = [one_line(path, 200) for path in f.get("files", [])[1:]]
+        if related:
+            entry["files"] = related
+        entries.append(entry)
 
     def build(items):
         blob = json.dumps({"findings": items, "next": state["next"]},
@@ -298,66 +329,80 @@ def serialize_findings(state):
             title_limit = max(20, title_limit // 2)
             path_limit = max(25, path_limit // 2)
             entries = [dict(e, file=one_line(e["file"], path_limit),
-                            title=one_line(e["title"], title_limit)) for e in entries]
+                            title=one_line(e["title"], title_limit),
+                            **({"files": [one_line(x, path_limit) for x in e["files"]]} if "files" in e else {}))
+                       for e in entries]
+            continue
+        if any("files" in e for e in entries):
+            entries = [{k: v for k, v in e.items() if k != "files"} for e in entries]
             continue
         drop_from = [e for e in entries if e["state"] != OPEN] or entries
         victim = min(drop_from, key=lambda e: finding_number(e["id"]) or 0)
         entries = [e for e in entries if e is not victim]
 
 
-def merge_findings(prev, model, *, changed_files, base_same_files, dismiss_ids, dismiss_all):
+def same_issue(a, b):
+    return a["file"] == b["file"] and a["title"].casefold() == b["title"].casefold()
+
+
+def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, dismiss_all):
     """Join previous state with what the model reported. Pure; git stays outside.
 
-    - Ids from prev are stable; unknown model ids are renumbered, never trusted.
-    - A finding only flips to resolved when its own file changed since the last
-      review (B3 lock); a fix in another file leaves it open.
-    - A file back to its base content auto-resolves, even if the model missed it.
-    - Prev findings the model dropped stay open with their old data, never vanish.
-    - Dismissed always wins and is sticky.
+    - Ids from prev are stable, but only for the same primary file: a prev id the
+      model reuses for another file is a different finding and gets a new id.
+    - A finding flips to resolved only if one of its files (where the problem is or
+      where the fix lands) changed since the last review (B3 lock).
+    - A prev finding whose primary file changed in this push and is back to base
+      content auto-resolves (the change that caused it was reverted). New findings
+      never auto-resolve and never start resolved.
+    - Prev findings the model dropped stay with their old data, never vanish.
+    - Dismissed always wins, is sticky, and the model can't bring it back as new.
     Returns (merged_state, new_ids).
     """
     prev_list = (prev or {}).get("findings", []) if prev else []
     prev_by_id = {f["id"]: f for f in prev_list if f.get("id")}
     changed = set(changed_files or ())
-    base_same = set(base_same_files or ())
+    reverted = set(reverted_files or ())
     dismissed = set(dismiss_ids or ())
     if dismiss_all:
         dismissed |= {f["id"] for f in prev_list if f["state"] == OPEN and f.get("id")}
+    gone = [f for f in prev_list if f["state"] == DISMISSED or f.get("id") in dismissed]
 
     merged, new_ids, seen = [], [], set()
     counter = (prev or {}).get("next") or derive_next(prev_list)
     for entry in ((model or {}).get("findings", []) if model else []):
         fid = entry.get("id")
-        if fid and fid in prev_by_id:
+        old = prev_by_id.get(fid) if fid else None
+        if old is not None and old["file"] == entry["file"]:
             if fid in seen:
                 continue  # first wins: the model repeated a previous id
             seen.add(fid)
-            old = prev_by_id[fid]
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
+            files = unique_paths(old.get("files", [old["file"]]) + entry.get("files", []))
             state = entry["state"]
-            if state == RESOLVED and entry["file"] not in changed:
+            if state == RESOLVED and not changed.intersection(files):
                 state = OPEN
-            if entry["file"] in base_same:
+            if old["file"] in reverted:
                 state = RESOLVED
-            merged.append({"id": fid, "file": entry["file"], "line": entry["line"],
+            merged.append({"id": fid, "file": entry["file"], "files": files, "line": entry["line"],
                            "severity": entry["severity"], "title": entry["title"], "state": state})
-        else:
-            fid = f"F{counter}"
-            counter += 1
-            new_ids.append(fid)
-            state = RESOLVED if entry["file"] in base_same else OPEN
-            merged.append({"id": fid, "file": entry["file"], "line": entry["line"],
-                           "severity": entry["severity"], "title": entry["title"], "state": state})
+            continue
+        if entry["state"] == RESOLVED or any(same_issue(entry, g) for g in gone):
+            continue  # a brand-new finding can't already be fixed, nor revive a dismissed one
+        fid = f"F{counter}"
+        counter += 1
+        new_ids.append(fid)
+        merged.append({"id": fid, "file": entry["file"], "files": entry.get("files", [entry["file"]]),
+                       "line": entry["line"], "severity": entry["severity"], "title": entry["title"],
+                       "state": OPEN})
     for old in prev_list:
         if old.get("id") in seen or not old.get("id"):
             continue
-        if old["state"] == DISMISSED:
+        if old["state"] in (DISMISSED, RESOLVED):
             merged.append(dict(old))
-        elif old["state"] == RESOLVED:
-            merged.append(dict(old))
-        elif old["file"] in base_same:
+        elif old["file"] in reverted:
             merged.append(dict(old, state=RESOLVED))
         else:
             merged.append(dict(old, state=OPEN))
@@ -367,6 +412,17 @@ def merge_findings(prev, model, *, changed_files, base_same_files, dismiss_ids, 
     merged.sort(key=lambda f: finding_number(f["id"]) or 0)
     counter = max(counter, derive_next(merged))
     return {"findings": merged, "next": counter}, new_ids
+
+
+def apply_dismissals(state, dismiss_ids, dismiss_all):
+    """Mark prev findings dismissed before the review, so the model is told about them."""
+    if not state:
+        return state
+    findings = []
+    for finding in state["findings"]:
+        wanted = finding["id"] in dismiss_ids or (dismiss_all and finding["state"] == OPEN)
+        findings.append(dict(finding, state=DISMISSED) if wanted and finding.get("id") else dict(finding))
+    return {"findings": findings, "next": state["next"]}
 
 
 def dismiss_wants_all(rest):
@@ -450,8 +506,10 @@ def verdict_for(merged):
 
 def finding_line(finding):
     where = finding["file"] if not finding["line"] else f"{finding['file']}:{finding['line']}"
+    where = where.replace("`", "'")
+    title = html.escape(finding["title"], quote=False)
     return (f"- {SEVERITY_EMOJI[finding['severity']]} {finding['severity']} · `{where}` · "
-            f"{finding['title']} · {finding['id']}")
+            f"{title} · {finding['id']}")
 
 
 def sections_for(merged, new_ids):
@@ -527,14 +585,17 @@ def compose(result, manifest, *, sha, provider, findings=None):
     budget_cut = [e for e in manifest["excluded"] if e["reason"] == "budget"]
 
     warnings = []
+    reviewed_any = bool(manifest["reviewed"])
     if (result or {}).get("subtype") == "error_max_turns":
         warnings.append("el revisor se quedó sin turnos antes de terminar")
-    if coverage is None:
+    if coverage is None and reviewed_any:
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
         warnings.append("el revisor no alcanzó a revisar todo" + (f": {detail}" if detail else ""))
     if budget_cut:
         warnings.append(f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff")
+    if findings is not None and not findings.get("model_ok", True) and reviewed_any:
+        warnings.append("el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores")
 
     if findings is not None and findings.get("merged"):
         return compose_with_findings(result, manifest, sha=sha, provider=provider,
@@ -559,8 +620,9 @@ def compose(result, manifest, *, sha, provider, findings=None):
 
 def compose_with_findings(result, manifest, *, sha, provider, findings, review, warnings):
     merged, new_ids, block = findings["merged"], findings.get("new_ids", []), findings["block"]
-    review = strip_model_verdict(strip_findings_block(review))
-    budget = max(0, COMMENT_LIMIT - len(block))
+    review = strip_model_verdict(strip_findings_block(review, last=True))
+    sections = sections_for(merged, new_ids)
+    budget = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget:
         review = review[:budget] + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
@@ -570,7 +632,9 @@ def compose_with_findings(result, manifest, *, sha, provider, findings, review, 
     if warnings:
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     parts += [verdict_for(merged), ""]
-    parts += sections_for(merged, new_ids)
+    parts += sections
+    if not manifest["reviewed"]:
+        review = review or "No hubo archivos revisables en este push; los hallazgos anteriores se conservan."
     parts += ["", "## Detalle del revisor", "", review or "_El revisor no devolvió texto._", ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
@@ -650,15 +714,6 @@ def set_output(key, value):
         fh.write(f"{key}={value}\n")
 
 
-def find_sticky(repo, pr):
-    login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
-    out = sh("gh", "api", "--paginate", f"repos/{repo}/issues/{pr}/comments?per_page=100",
-             "--jq", f'.[] | select(.user.login == "{login}" and (.body | contains("{MARKER}"))) '
-                     "| {id: .id, body: .body} | tojson").stdout
-    found = [json.loads(line) for line in out.splitlines() if line.strip()]
-    return found[-1] if found else None
-
-
 def fetch_all_comments(repo, pr):
     out = sh("gh", "api", "--paginate", f"repos/{repo}/issues/{pr}/comments?per_page=100",
              "--jq", ".[] | {id: .id, user: .user.login, body: .body} | tojson").stdout
@@ -703,27 +758,44 @@ def files_matching_base(paths, base, head):
 
 
 def prev_findings_markdown(state):
-    lines = ["# Hallazgos de la revisión anterior (verifícalos contra el diff nuevo)", ""]
     findings = (state or {}).get("findings", []) if state else []
     if not findings:
-        return "# Sin hallazgos previos: es revisión completa.\n"
-    for finding in findings:
+        return "# Sin hallazgos previos en este PR.\n"
+
+    def line(finding):
         where = finding["file"] if not finding["line"] else f"{finding['file']}:{finding['line']}"
-        lines.append(f"- {finding['id']} [{finding['state']}] {finding['severity']} · "
-                     f"`{where}` · {finding['title']}")
-    lines += ["", "Repite cada hallazgo con su mismo id en el bloque nuevo; los nuevos llevan `\"id\": \"F-new\"; ",
-              "nunca emitas \"dismissed\" (solo un humano descarta)."]
+        also = [path for path in finding.get("files", [])[1:]]
+        extra = f" (archivos relacionados: {', '.join(also)})" if also else ""
+        return f"- {finding['id']} {finding['severity']} · `{where}` · {finding['title']}{extra}"
+
+    lines = ["# Hallazgos anteriores de este PR", ""]
+    groups = [(OPEN, "## Abiertos: verifícalos contra el diff y repítelos con su mismo id"),
+              (RESOLVED, "## Resueltos: repítelos con su mismo id; no los describas de nuevo salvo que hayan vuelto"),
+              (DISMISSED, "## Descartados por una persona: NO los reportes, NO los repitas en el bloque y NO los describas en el texto")]
+    for state_name, header in groups:
+        group = [f for f in findings if f["state"] == state_name]
+        if group:
+            lines += [header, "", *[line(f) for f in group], ""]
+    lines += ['Los hallazgos nuevos llevan `"id": "F-new"`. Nunca emitas "dismissed": solo una persona descarta.']
     return "\n".join(lines) + "\n"
 
 
 def cmd_gate(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
-    sticky = find_sticky(repo, pr)
+    login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
+    comments = fetch_all_comments(repo, pr)
+    sticky = sticky_from_comments(comments, login)
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    prev = {"sha": reviewed_sha(sticky["body"]) if sticky else None,
-            "state": parse_findings_block(sticky["body"]) if sticky else None}
+    state = parse_findings_block(sticky["body"]) if sticky else None
+    if state:
+        try:
+            dismiss_ids, dismiss_all = collect_dismissals(repo, pr, login, comments)
+            state = apply_dismissals(state, dismiss_ids, dismiss_all)
+        except Exception as exc:
+            print(f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar", file=sys.stderr)
+    prev = {"sha": reviewed_sha(sticky["body"]) if sticky else None, "state": state}
     (work / "prev.json").write_text(json.dumps(prev))
     if sticky and prev["sha"] == head and not rerun:
         print(f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite.")
@@ -887,6 +959,10 @@ def cmd_prepare(args):
         mode, reason = decide_mode(prev_sha, head)
     except OSError:
         mode, reason = "full", "git-unavailable"
+    if mode == "incremental" and not prev.get("state"):
+        # A sticky from before findings memory existed: without the previous findings an
+        # incremental pass would drop them, so review the whole PR once to rebuild state.
+        mode, reason = "full", "no-state"
     changed = changed_since(prev_sha, head) if mode == "incremental" else []
 
     numstat = sh("git", "diff", "--numstat", "-z", "--no-renames", merge_base, head).stdout
@@ -924,7 +1000,8 @@ def cmd_prepare(args):
     (work / "diff.patch").write_text("".join(chunks[p] for p in reviewed))
     manifest = {"base": merge_base, "head": head, "reviewed": reviewed, "excluded": excluded,
                 "diff_bytes": used, "mode": mode, "prev_sha": prev_sha,
-                "changed_files": changed, "reason": reason}
+                "changed_files": changed, "reason": reason,
+                "has_prev_findings": bool((prev.get("state") or {}).get("findings"))}
     (work / "manifest.json").write_text(json.dumps(manifest, indent=2))
     (work / "prev_findings.md").write_text(prev_findings_markdown(prev.get("state")))
 
@@ -1104,6 +1181,12 @@ def build_prompt(manifest, work, max_turns):
         f"- The repository at the PR head is your working directory.\n"
         f"Write the review in this language: {os.environ.get('LANGUAGE', 'es')}."
     )
+    if manifest.get("mode") != "incremental" and manifest.get("has_prev_findings"):
+        prompt += (
+            f"\n- This PR already has findings from an earlier review: {work}/prev_findings.md. "
+            f"Report the same issues with their same ids, use \"F-new\" for new ones, and never report "
+            f"or describe the dismissed ones."
+        )
     if manifest.get("mode") == "incremental":
         reviewed = manifest.get("reviewed", [])
         shown = reviewed[:INCREMENTAL_PROMPT_MAX_FILES]
@@ -1251,18 +1334,18 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         print(f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
               file=sys.stderr)
         dismiss_ids, dismiss_all = set(), False
-    if manifest.get("mode") == "incremental":
-        changed = manifest.get("changed_files", [])
-    else:
-        changed = manifest.get("reviewed", [])
-    watched = {f["file"] for state in (prev, model) if state for f in state["findings"]
-               if f["state"] == OPEN}
+    incremental = manifest.get("mode") == "incremental"
+    changed = manifest.get("changed_files", []) if incremental else manifest.get("reviewed", [])
+    # Revert detection needs to know what changed since the last review, so it only runs on
+    # incremental passes, and only for prev findings whose own file changed in this push.
+    watched = {f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN}
+    candidates = sorted(watched & set(changed)) if incremental else []
     base, head = manifest.get("base"), manifest.get("head")
     try:
-        base_same = files_matching_base(sorted(watched), base, head) if watched and base and head else set()
+        reverted = files_matching_base(candidates, base, head) if candidates and base and head else set()
     except Exception:
-        base_same = set()
-    merged, new_ids = merge_findings(prev, model, changed_files=changed, base_same_files=base_same,
+        reverted = set()
+    merged, new_ids = merge_findings(prev, model, changed_files=changed, reverted_files=reverted,
                                      dismiss_ids=dismiss_ids, dismiss_all=dismiss_all)
     return {"merged": merged["findings"], "new_ids": new_ids,
             "block": serialize_findings(merged), "model_ok": model is not None}
