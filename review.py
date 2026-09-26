@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -392,12 +393,15 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
-            files = unique_paths(old.get("files", [old["file"]]) + entry.get("files", []))
+            named = old.get("files", [old["file"]]) + entry.get("files", [])
+            others = [path for path in named if path != old["file"]]
+            files = unique_paths([old["file"]] + [path for path in others if path in changed]
+                                 + [path for path in others if path not in changed])
             state = entry["state"]
             # The lock guards the open -> resolved flip: one of the finding's files (registered
-            # before, or named now as where the fix landed) must have changed in this pass.
-            # Registered-only would leave a fix in a newly named file open forever.
-            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(files):
+            # before, or named now as where the fix landed) must have changed in this pass. It
+            # checks every named file, before the storage cap, so the fix file can't be cut off.
+            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(named):
                 state = OPEN
             if old["file"] in reverted:
                 state = RESOLVED
@@ -474,7 +478,9 @@ def collaborator_permission(repo, user):
               f"su descarte se ignora", file=sys.stderr)
         return None
     if proc.returncode != 0 and "HTTP 404" in (proc.stderr or ""):
-        return "none"  # a login that no longer exists: a definitive "no", not a failure to retry
+        # A login that no longer exists: a definitive "no", not a failure to retry.
+        print(f"ai-review: {user} no existe para este repo (HTTP 404); su descarte se ignora", file=sys.stderr)
+        return "none"
     if proc.returncode != 0:
         tail = (proc.stderr or "").strip().splitlines()
         detail = f": {tail[-1][:200]}" if tail else ""
@@ -563,8 +569,15 @@ VERDICT_RE = re.compile(r"^\s*\*\*Veredicto:\*\*")
 
 
 def strip_model_verdict(text):
-    """Drop every verdict line the model wrote: the publisher writes the only verdict."""
-    return "\n".join(line for line in (text or "").split("\n") if not VERDICT_RE.match(line)).strip()
+    """Drop every verdict line the model wrote (the publisher writes the only verdict),
+    except inside code fences, where it is quoted content."""
+    kept, fenced = [], False
+    for line in (text or "").split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        if fenced or not VERDICT_RE.match(line):
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def estimate_cost(prices, usage):
@@ -883,7 +896,8 @@ def build_callers(reviewed, chunks):
     return text
 
 
-TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs"})
+TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs", "testing",
+                       "test_utils", "test-utils", "testutils"})
 TEST_NAME_RE = re.compile(r"^(test|spec)s?([_.-]|$)|[_.-](test|spec)s?$")
 TEST_CAMEL_RE = re.compile(r"^Tests?[A-Z_]|[a-z0-9]Tests?$")
 
@@ -892,7 +906,9 @@ def looks_like_test(path):
     parts = path.split("/")
     name = parts[-1]
     stem = name.split(".", 1)[0]
-    return (any(p.lower() in TEST_DIRS for p in parts[:-1])
+    dirs = [p.lower() for p in parts[:-1]]
+    return (any(d in TEST_DIRS or d.endswith((".tests", ".test")) for d in dirs)
+            or name.lower() == "conftest.py"
             or bool(TEST_NAME_RE.search(stem.lower()))
             or ".test." in name.lower() or ".spec." in name.lower()
             or bool(TEST_CAMEL_RE.search(stem)))
@@ -1141,7 +1157,7 @@ def build_litellm_venv(venv):
                     f"litellm[proxy]=={LITELLM_VERSION}"], check=True)
 
 
-def ensure_litellm_venv(venv, build=build_litellm_venv):
+def ensure_litellm_venv(venv, build=None):
     """Reuse a cached venv only if it was built for this litellm AND this Python, and imports."""
     if venv_ready(venv):
         print(f"ai-review: litellm {LITELLM_VERSION} ya instalado (caché); se omite pip")
@@ -1149,7 +1165,7 @@ def ensure_litellm_venv(venv, build=build_litellm_venv):
     if venv.exists():
         print("ai-review: la caché de litellm no sirve con este Python; se reconstruye")
         shutil.rmtree(venv)
-    build(venv)
+    (build or build_litellm_venv)(venv)
     (venv / "ai-review-version.txt").write_text(venv_stamp() + "\n")
 
 
@@ -1173,6 +1189,7 @@ def cmd_install(args):
     _, provider = get_provider()
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
+    stage = claude_prefix()
     try:
         prefix = claude_prefix()
         if claude_version_ok(prefix / "bin" / "claude"):
@@ -1184,14 +1201,19 @@ def cmd_install(args):
             fh.write(f"{prefix / 'bin'}\n")
         if provider["via_proxy"]:
             venv = litellm_venv()
+            stage = venv
             ensure_litellm_venv(venv)
             with open(os.environ["GITHUB_PATH"], "a") as fh:
                 fh.write(f"{venv / 'bin'}\n")
     except (subprocess.CalledProcessError, OSError) as exc:
-        # Drop the half-built install: actions/cache saves this dir after the job under a key
-        # that is never rewritten, and a broken copy would be restored on every later run.
-        shutil.rmtree(claude_prefix(), ignore_errors=True)
-        shutil.rmtree(litellm_venv(), ignore_errors=True)
+        # Drop only the half-built piece: actions/cache saves this dir after the job under a
+        # key that is never rewritten, so a broken copy (or an empty dir) would be restored
+        # on every later run. A good Claude Code prefix stays when only pip failed.
+        shutil.rmtree(stage, ignore_errors=True)
+        try:
+            stage.parent.rmdir()  # only succeeds when nothing else is left in the cache root
+        except OSError:
+            pass
         reason = f"no se pudo instalar las herramientas de revisión ({exc})"
         (work / "install_error.txt").write_text(reason)
         print(f"::warning::ai-review: {reason}")
@@ -1311,6 +1333,27 @@ def print_proxy_log(work):
               file=sys.stderr)
 
 
+def run_in_group(cmd, env, timeout):
+    """subprocess.run with a timeout that kills the whole process group.
+
+    subprocess.run only kills the direct child; a tool it spawned that inherited
+    stdout/stderr keeps the pipes open and communicate() waits for it, up to the
+    job's own timeout (red). A new session lets us kill every descendant.
+    """
+    proc = subprocess.Popen(cmd, env=env, text=True, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        out, err = proc.communicate()
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from exc
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
     for attempt in range(1, attempts + 1):
@@ -1321,13 +1364,13 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
         timeout = max(1, min(attempt_timeout, remaining - 30))
         print(f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)", flush=True)
         try:
-            proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True, stdin=subprocess.DEVNULL,
-                                  timeout=timeout)
+            proc = run_in_group(cmd, child_env, timeout)
         except FileNotFoundError:
             soft_fail(result_path, "no se encontró el binario de claude (falló la instalación)")
             return
         except subprocess.TimeoutExpired as exc:
-            print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
+            err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+            print(f"ai-review: el intento excedió el tiempo límite\n{err[-4000:]}", file=sys.stderr)
             print_proxy_log(result_path.parent)
             soft_fail(result_path, f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo")
             return
