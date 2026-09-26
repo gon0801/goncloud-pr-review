@@ -1,6 +1,6 @@
 # Plans — goncloud-pr-review
 
-Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B pendiente.
+Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B implementado y probado en real el 2026-09-26 (PR #13).
 
 ## Diagnóstico (medido el 2026-09-25)
 
@@ -37,13 +37,15 @@ Meta de cortadas: cumplida. Meta de turnos (≤ 30) y de tiempo (2–5 min): no 
 
 | # | Tarea | Estado |
 |---|---|---|
-| B1 | Memoria en el propio comentario fijo: además del SHA revisado, un bloque oculto con la lista de hallazgos (id estable, archivo, línea, gravedad, título, estado). Sin base de datos, sobrevive entre corridas. El modelo lo emite antes de la línea `COVERAGE:` (nunca después: `split_coverage` descarta lo que va detrás y los recortes a 50.000/65.000 cortan por el final); su tamaño se reserva dentro de esos presupuestos. | cc:TODO |
-| B2 | Segunda vuelta incremental: desde el push 2, `prepare` calcula qué archivos cambiaron desde la última revisión y le pasa al modelo los hallazgos anteriores. El modelo verifica los abiertos contra lo que cambió, marca resueltos y busca bugs nuevos solo en lo que cambió. Meta: ≤ 20 turnos en esas vueltas. | cc:TODO |
-| B3 | Candado determinista contra falsos "resuelto": un hallazgo solo pasa a resuelto si su archivo cambió desde la última revisión; si no, sigue abierto diga lo que diga el modelo. Si el archivo volvió a su contenido base (el cambio que lo causó ya no está en el PR), se resuelve solo. El caso cross-file (arreglo en otro archivo) queda para el diseño fino de PR B, sin aflojar este candado. | cc:TODO |
-| B4 | Descartar a mano: un comentario `ai-review: descartar F3` (o `descartar todo`) en el PR, de un dueño o colaborador con permiso de escritura, se aplica en el siguiente push y ese hallazgo no vuelve a salir. Comentarios de terceros se ignoran. El diseño define con qué endpoint y token se verifica el permiso de escritura. | cc:TODO |
-| B5 | Comentario con secciones: "Nuevos en este push", "Siguen abiertos", y plegados "Resueltos" y "Descartados". El veredicto cuenta solo los abiertos. | cc:TODO |
-| B6 | Si el modelo no entrega el bloque de hallazgos bien formado, se cae a la revisión completa actual. Nunca se pierde una revisión por esto. En la caída se conserva el último estado parseable. Prueba unitaria: bloque bien formado sobrevive al parseo de cobertura y al recorte; bloque ausente o roto cae a revisión completa. | cc:TODO |
-| B7 | Rebase o force-push: si el SHA anterior ya no es ancestro del nuevo, revisión completa otra vez, conservando los descartes. | cc:TODO |
+| B1 | Memoria en el propio comentario fijo: además del SHA revisado, un bloque oculto con la lista de hallazgos (id estable, archivo, línea, gravedad, título, estado). Sin base de datos, sobrevive entre corridas. El modelo lo emite antes de la línea `COVERAGE:` (nunca después: `split_coverage` descarta lo que va detrás y los recortes a 50.000/65.000 cortan por el final); su tamaño se reserva dentro de esos presupuestos. | cc:done (35262e6) — bloque `ai-review:findings` JSON, tope 8 KB, re-emitido tras el SHA |
+| B2 | Segunda vuelta incremental: desde el push 2, `prepare` calcula qué archivos cambiaron desde la última revisión y le pasa al modelo los hallazgos anteriores. El modelo verifica los abiertos contra lo que cambió, marca resueltos y busca bugs nuevos solo en lo que cambió. Meta: ≤ 20 turnos en esas vueltas; el tope es 30 si el push incremental es chico (≤ 30 KB y ≤ 5 archivos) y el normal si no. | cc:done (35262e6) — `prev.json`→`prepare` angosta el diff, `prev_findings.md` al modelo, tope 20 turnos |
+| B3 | Candado determinista contra falsos "resuelto": un hallazgo solo pasa a resuelto si cambió alguno de sus archivos (donde está el problema o donde va el arreglo, por ejemplo las pruebas que usan una función renombrada) desde la última revisión. Un hallazgo previo cuyo archivo cambió en ese push y volvió al contenido base se resuelve solo; un hallazgo nuevo nunca nace resuelto. | cc:done — archivos relacionados por hallazgo tras el e2e del PR #15 (un arreglo en las pruebas dejaba el hallazgo abierto para siempre) |
+| B4 | Descartar a mano: un comentario `ai-review: descartar F3` (o `descartar todo`) en el PR, de un dueño o colaborador con permiso de escritura, se aplica en el siguiente push y ese hallazgo no vuelve a salir. Comentarios de terceros se ignoran. El diseño define con qué endpoint y token se verifica el permiso de escritura. | cc:done (35262e6) — endpoint `GET /repos/{repo}/collaborators/{user}/permission` con `github_token`; writer+ = admin/maintain/write |
+| B5 | Comentario con secciones: "Nuevos en este push", "Siguen abiertos", y plegados "Resueltos" y "Descartados". El veredicto cuenta solo los abiertos. | cc:done (35262e6) — `compose_with_findings`, veredicto generado solo-abiertos |
+| B6 | Si el modelo no entrega el bloque de hallazgos bien formado, se cae a la revisión completa actual. Nunca se pierde una revisión por esto. En la caída se conserva el último estado parseable. Prueba unitaria: bloque bien formado sobrevive al parseo de cobertura y al recorte; bloque ausente o roto cae a revisión completa. | cc:done (35262e6) — bloque ausente/roto publica el texto y conserva estado + aplica descartes |
+| B7 | Rebase o force-push: si el SHA anterior ya no es ancestro del nuevo, revisión completa otra vez, conservando los descartes. | cc:done (35262e6) — `decide_mode` por `merge-base --is-ancestor`; descartes pegajosos |
+
+**Resultado del e2e (2026-09-26, PR #16 sobre este código).** Push 1 completo: 2 bugs sembrados, F1 Critical y F2 High, cada uno con su archivo relacionado. Push 2, arreglo solo en las pruebas: F2 pasó a resuelto por su archivo relacionado y F1 siguió abierto (incremental, instalación desde caché). Descarte de F1 + push 3: "sin problemas abiertos (1 resuelto, 1 descartado)" y F1 no se volvió a describir. Re-run del mismo commit (revisión completa con estado previo): mismos ids, nada pisado ni duplicado, F1 no reapareció.
 
 ## Cómo se prueba
 

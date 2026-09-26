@@ -18,7 +18,7 @@ inputs:
     description: Extra newline-separated path globs to skip, on top of the built-in lock/generated/binary filters
     default: ""
   max_turns:
-    description: Agent turn cap per attempt, or "auto" (60, or 80 for diffs over 20 files or 300 KB)
+    description: Agent turn cap per attempt, or "auto" (60, or 80 for diffs over 20 files or 300 KB; 30 on small incremental pushes)
     default: "auto"
   max_diff_bytes:
     description: Diff size budget; lower-priority files beyond it are listed as not reviewed
