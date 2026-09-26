@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -873,6 +875,10 @@ class Workflows(unittest.TestCase):
         action = (ROOT / "action.yml").read_text()
         self.assertIn("${DISABLED,,}", action)
 
+    def test_action_max_turns_mentions_incremental_cap(self):
+        action = (ROOT / "action.yml").read_text()
+        self.assertIn("20 on incremental", action)
+
     def test_prompt_covers_precomputed_context_and_turn_budget(self):
         prompt = (ROOT / "prompt.md").read_text()
         for token in ("callers.txt", "tests.txt", "conventions.md", "Turn budget", "Plans.md",
@@ -959,6 +965,33 @@ class FindingsBlock(unittest.TestCase):
         back = review.parse_findings_block(block)
         self.assertEqual(back["findings"][0]["title"], "a --\u203a b nueva línea")
 
+    def test_hard_ceiling_drops_oldest_open_last(self):
+        findings = [make_finding(f"F{i}", file=f"src/muy/largo/{'d' * 180}/m{i}.py",
+                                 title="t" * 160) for i in range(1, 101)]
+        block = review.serialize_findings({"findings": findings, "next": 101})
+        self.assertLessEqual(len(block), review.FINDINGS_MAX_BYTES)
+        back = review.parse_findings_block(block)
+        kept = [review.finding_number(f["id"]) for f in back["findings"]]
+        self.assertLess(len(kept), 100, "100 long findings cannot all fit in 8 KB")
+        self.assertEqual(sorted(kept), list(range(101 - len(kept), 101)),
+                         "only the oldest open findings go, newest stay")
+        self.assertEqual(back["next"], 101)
+
+    def test_hard_ceiling_prefers_dropping_closed_over_open(self):
+        findings = [make_finding("F1"), make_finding("F2", state="resolved"),
+                    make_finding("F3"), make_finding("F4", state="dismissed"),
+                    make_finding("F5")]
+        with mock.patch.object(review, "FINDINGS_MAX_BYTES", 400):
+            block = review.serialize_findings({"findings": findings, "next": 6})
+        self.assertLessEqual(len(block), 400)
+        back = review.parse_findings_block(block)
+        kept = {f["id"]: f["state"] for f in back["findings"]}
+        dropped_opens = {"F1", "F3", "F5"} - set(kept)
+        kept_closed = {i for i, s in kept.items() if s != "open"}
+        self.assertFalse(dropped_opens and kept_closed,
+                         "an open finding goes only when no closed one is left")
+        self.assertEqual(back["next"], 6)
+
 
 class DismissCommands(unittest.TestCase):
     def test_parse_single_multiple_and_all(self):
@@ -967,6 +1000,20 @@ class DismissCommands(unittest.TestCase):
         self.assertEqual(review.parse_dismiss_command("ai-review: descartar F01"), ({"F1"}, False))
         self.assertEqual(review.parse_dismiss_command("ai-review: descartar todo"), (set(), True))
         self.assertEqual(review.parse_dismiss_command("ai-review: descartar F3 y todo lo demás"), ({"F3"}, True))
+
+    def test_todo_inside_prose_never_discards_everything(self):
+        for body, expected in (
+            ("ai-review: descartar F3, todo bien", ({"F3"}, False)),
+            ("ai-review: descartar todo bien", (set(), False)),
+            ("ai-review: descartar todos", (set(), False)),
+            ("ai-review: descartar F1 y F2", ({"F1", "F2"}, False)),
+            ("ai-review: descartar todo.", (set(), True)),
+            ("ai-review: descartar todo lo demás", (set(), True)),
+            ("ai-review: descartar TODO LO DEMAS", (set(), True)),
+            ("ai-review: descartar F1, F2 y todo", ({"F1", "F2"}, True)),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(review.parse_dismiss_command(body), expected)
 
     def test_parse_ignores_other_text(self):
         for body in ("descartar F3", "ai-review: hola", "mira F3", "", None):
@@ -995,6 +1042,7 @@ class DismissCommands(unittest.TestCase):
 
     def test_permission_uses_collaborators_endpoint_without_token_in_args(self):
         with mock.patch.object(review, "sh") as fake:
+            fake.return_value.returncode = 0
             fake.return_value.stdout = "write\n"
             self.assertEqual(review.collaborator_permission("o/r", "ana"), "write")
             args = fake.call_args[0]
@@ -1003,10 +1051,28 @@ class DismissCommands(unittest.TestCase):
 
     def test_unknown_user_is_not_writer(self):
         with mock.patch.object(review, "sh") as fake:
+            fake.return_value.returncode = 0
             fake.return_value.stdout = "\n"
             self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
-            fake.side_effect = OSError("sin gh")
-            self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
+
+    def test_failed_permission_query_is_logged_not_silent(self):
+        with mock.patch.object(review, "sh") as fake:
+            fake.return_value.returncode = 1
+            fake.return_value.stdout = ""
+            fake.return_value.stderr = "gh: Not Found (HTTP 404)\n"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+            self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
+            self.assertIn("HTTP 404", err.getvalue())
+
+    def test_permission_query_without_gh_is_logged_not_silent(self):
+        with mock.patch.object(review, "sh", side_effect=OSError("sin gh")):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+            self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
+            self.assertIn("sin gh", err.getvalue())
 
 
 def merge(prev_list, model_list, **kw):
@@ -1092,6 +1158,14 @@ class FindingIds(unittest.TestCase):
                            dismiss_ids={"F1"})
         self.assertEqual(merged["findings"][0]["state"], "dismissed")
 
+    def test_repeated_prev_id_keeps_first_only(self):
+        merged, new_ids = merge([make_finding("F1", title="Viejo")],
+                                 [make_finding("F1", title="Primero"),
+                                  make_finding("F1", title="Repetido")])
+        self.assertEqual(new_ids, [])
+        self.assertEqual([(f["id"], f["title"]) for f in merged["findings"]],
+                         [("F1", "Primero")])
+
 
 class Fallback(unittest.TestCase):
     def test_wellformed_block_survives_coverage_and_trim(self):
@@ -1175,10 +1249,20 @@ class VerdictSections(unittest.TestCase):
                               findings={"merged": merged, "new_ids": ["F1"],
                                         "block": review.serialize_findings({"findings": merged, "next": 2})})
         lines = body.split("\n")
-        self.assertEqual((lines[0], lines[2]), (review.MARKER, body.split("\n")[2]))
+        self.assertEqual(lines[0], review.MARKER)
+        self.assertTrue(lines[1].startswith(review.SHA_PREFIX))
         self.assertTrue(lines[2].startswith(review.FINDINGS_PREFIX))
         self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
+
+    def test_oversized_block_never_eats_the_scope_section(self):
+        merged = [make_finding("F1")]
+        body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
+                              MANIFEST, sha=SHA, provider="opencode-go",
+                              findings={"merged": merged, "new_ids": ["F1"],
+                                        "block": "B" * (review.COMMENT_LIMIT + 10000)})
+        self.assertIn("recortada por el límite", body)
+        self.assertTrue(body.endswith("</details>"))
 
 
 class Rebase(unittest.TestCase):
@@ -1345,12 +1429,24 @@ class IncrementalRun(unittest.TestCase):
             self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 33)
 
     def test_incremental_prompt_points_at_prev_findings(self):
-        manifest = self.manifest(mode="incremental", prev_sha="p" * 40, changed_files=["b.py"])
+        manifest = self.manifest(mode="incremental", prev_sha="p" * 40, reviewed=["b.py"],
+                                 changed_files=["b.py", "uv.lock"])
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
             prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
         self.assertIn("INCREMENTAL review since ppppppp", prompt)
         self.assertIn("/tmp/w/prev_findings.md", prompt)
-        self.assertIn("b.py", prompt)
+        self.assertIn("`b.py`", prompt)
+        self.assertNotIn("uv.lock", prompt)
+
+    def test_incremental_prompt_caps_file_list(self):
+        files = [f"src/f{i:03d}.py" for i in range(review.INCREMENTAL_PROMPT_MAX_FILES + 10)]
+        manifest = self.manifest(mode="incremental", prev_sha="p" * 40, reviewed=files,
+                                 changed_files=files)
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
+            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+        self.assertIn("`src/f000.py`", prompt)
+        self.assertNotIn("src/f059.py", prompt)
+        self.assertIn("… y 10 más", prompt)
 
     def test_full_prompt_has_no_incremental_line(self):
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):

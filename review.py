@@ -29,6 +29,7 @@ FINDINGS_MAX_BYTES = 8000
 FINDINGS_MAX_COUNT = 60
 FINDINGS_TITLE_MAX = 160
 INCREMENTAL_MAX_TURNS = 20
+INCREMENTAL_PROMPT_MAX_FILES = 50
 SEVERITIES = ("Critical", "High", "Medium", "Low")
 SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "⚪"}
 OPEN, RESOLVED, DISMISSED = "open", "resolved", "dismissed"
@@ -38,6 +39,9 @@ FINDING_ID_RE = re.compile(r"^F(\d+)$")
 # Only applied when the comment author has push access, checked with the same token
 # that reads/writes the review (inputs.github_token via GH_TOKEN) against:
 #   GET /repos/{repo}/collaborators/{username}/permission
+# That endpoint only needs Metadata:read, which every GITHUB_TOKEN carries
+# implicitly (`metadata` is not even a settable `permissions:` key), so the
+# minimal template token (contents:read + pull-requests:write) is enough.
 DISMISS_RE = re.compile(r"ai-review:\s*descartar\s+(.+)", re.IGNORECASE)
 DISMISS_ALL_WORD = "todo"
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
@@ -264,7 +268,11 @@ def strip_findings_block(text):
 
 
 def serialize_findings(state):
-    """Canonical hidden block. Never drops open findings; oldest resolved/dismissed go first."""
+    """Canonical hidden block, always within FINDINGS_MAX_BYTES.
+
+    Titles and paths shrink first; oldest resolved/dismissed go next; oldest
+    open findings go only as a last resort so the comment budgets never break.
+    """
     findings = sorted(state["findings"], key=lambda f: finding_number(f["id"]) or 0)
     if len(findings) > FINDINGS_MAX_COUNT:
         open_only = [f for f in findings if f["state"] == OPEN]
@@ -275,15 +283,26 @@ def serialize_findings(state):
     entries = [{"id": f["id"], "file": one_line(f["file"], 200), "line": f["line"],
                 "severity": f["severity"], "title": one_line(f["title"], FINDINGS_TITLE_MAX),
                 "state": f["state"]} for f in findings]
-    limit = FINDINGS_TITLE_MAX
+
+    def build(items):
+        blob = json.dumps({"findings": items, "next": state["next"]},
+                          separators=(",", ":"), ensure_ascii=False)
+        return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+
+    title_limit, path_limit = FINDINGS_TITLE_MAX, 200
     while True:
-        payload = {"findings": entries, "next": state["next"]}
-        blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-        block = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
-        if len(block) <= FINDINGS_MAX_BYTES or limit <= 20:
+        block = build(entries)
+        if len(block) <= FINDINGS_MAX_BYTES:
             return block
-        limit //= 2
-        entries = [dict(e, title=one_line(e["title"], limit)) for e in entries]
+        if title_limit > 20 or path_limit > 25:
+            title_limit = max(20, title_limit // 2)
+            path_limit = max(25, path_limit // 2)
+            entries = [dict(e, file=one_line(e["file"], path_limit),
+                            title=one_line(e["title"], title_limit)) for e in entries]
+            continue
+        drop_from = [e for e in entries if e["state"] != OPEN] or entries
+        victim = min(drop_from, key=lambda e: finding_number(e["id"]) or 0)
+        entries = [e for e in entries if e is not victim]
 
 
 def merge_findings(prev, model, *, changed_files, base_same_files, dismiss_ids, dismiss_all):
@@ -310,6 +329,8 @@ def merge_findings(prev, model, *, changed_files, base_same_files, dismiss_ids, 
     for entry in ((model or {}).get("findings", []) if model else []):
         fid = entry.get("id")
         if fid and fid in prev_by_id:
+            if fid in seen:
+                continue  # first wins: the model repeated a previous id
             seen.add(fid)
             old = prev_by_id[fid]
             if old["state"] == DISMISSED:
@@ -348,12 +369,23 @@ def merge_findings(prev, model, *, changed_files, base_same_files, dismiss_ids, 
     return {"findings": merged, "next": counter}, new_ids
 
 
+def dismiss_wants_all(rest):
+    """Whether `todo` is the explicit target. `todo` inside prose
+    ("todo bien") must never discard everything: strip F-ids, commas and
+    conjunctions, then accept only `todo` plus optional `lo demás`."""
+    tmp = re.sub(r"F\d+", " ", rest, flags=re.IGNORECASE)
+    tmp = re.sub(r"\b(?:y|e|o)\b", " ", tmp, flags=re.IGNORECASE)
+    tmp = tmp.replace(",", " ").strip()
+    return bool(re.fullmatch(DISMISS_ALL_WORD + r"(\s+lo\s+dem[áa]s)?[\s.,;:!¡?¿]*",
+                             tmp, re.IGNORECASE))
+
+
 def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
     ids, all_open = set(), False
     for match in DISMISS_RE.finditer(body or ""):
         rest = match.group(1)
-        if re.search(r"\b" + DISMISS_ALL_WORD + r"\b", rest, re.IGNORECASE):
+        if dismiss_wants_all(rest):
             all_open = True
         for number in re.findall(r"F(\d+)", rest, re.IGNORECASE):
             ids.add(f"F{int(number)}")
@@ -361,12 +393,23 @@ def parse_dismiss_command(body):
 
 
 def collaborator_permission(repo, user):
+    """Push access of a comment author, or None. A failed query is logged to
+    stderr (never silent: without it B4 would die quietly); no-write is not."""
     try:
-        out = sh("gh", "api", f"repos/{repo}/collaborators/{user}/permission",
-                 "--jq", ".permission", check=False).stdout.strip()
-    except OSError:
+        proc = sh("gh", "api", f"repos/{repo}/collaborators/{user}/permission",
+                  "--jq", ".permission", check=False)
+    except OSError as exc:
+        print(f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
+              f"su descarte se ignora", file=sys.stderr)
         return None
-    return out or None
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()
+        detail = f": {tail[-1][:200]}" if tail else ""
+        print(f"ai-review: no se pudo verificar el permiso de {user} "
+              f"(gh api salió {proc.returncode}{detail}); su descarte se ignora",
+              file=sys.stderr)
+        return None
+    return proc.stdout.strip() or None
 
 
 def collect_dismissals(repo, pr, bot_login, comments):
@@ -517,7 +560,7 @@ def compose(result, manifest, *, sha, provider, findings=None):
 def compose_with_findings(result, manifest, *, sha, provider, findings, review, warnings):
     merged, new_ids, block = findings["merged"], findings.get("new_ids", []), findings["block"]
     review = strip_model_verdict(strip_findings_block(review))
-    budget = COMMENT_LIMIT - len(block)
+    budget = max(0, COMMENT_LIMIT - len(block))
     if len(review) > budget:
         review = review[:budget] + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
@@ -1062,11 +1105,15 @@ def build_prompt(manifest, work, max_turns):
         f"Write the review in this language: {os.environ.get('LANGUAGE', 'es')}."
     )
     if manifest.get("mode") == "incremental":
-        changed = manifest.get("changed_files", [])
+        reviewed = manifest.get("reviewed", [])
+        shown = reviewed[:INCREMENTAL_PROMPT_MAX_FILES]
+        listed = ", ".join(f"`{path}`" for path in shown)
+        if len(reviewed) > len(shown):
+            listed += f", … y {len(reviewed) - len(shown)} más"
         prompt += (
             f"\n- INCREMENTAL review since {manifest['prev_sha'][:7]}: the rest of the PR is already "
             f"reviewed. Verify each OPEN finding in {work}/prev_findings.md against the new diff and "
-            f"look for NEW bugs only in: {', '.join(changed) or '(no files changed)'}. "
+            f"look for NEW bugs only in: {listed or '(no files in scope)'}. "
             f"Emit the updated findings block before COVERAGE."
         )
     return prompt
