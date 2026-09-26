@@ -83,3 +83,4 @@ python3 -m unittest discover -s tests -v
 ```
 
 CI corre las pruebas y `actionlint`. Este repo se revisa a sí mismo con `.github/workflows/ai-review.yml`, que usa la action local (`uses: ./`).
+
