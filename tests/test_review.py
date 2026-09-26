@@ -588,18 +588,16 @@ class PrepareContext(unittest.TestCase):
 
 class MaxTurns(unittest.TestCase):
     def test_tiers_scale_with_diff_size(self):
-        self.assertEqual(review.max_turns_for_diff(1000, 1), 25)
-        self.assertEqual(review.max_turns_for_diff(50_000, 5), 25)
-        self.assertEqual(review.max_turns_for_diff(50_001, 5), 40)
-        self.assertEqual(review.max_turns_for_diff(1000, 6), 40)
-        self.assertEqual(review.max_turns_for_diff(300_000, 20), 40)
-        self.assertEqual(review.max_turns_for_diff(300_001, 20), 60)
-        self.assertEqual(review.max_turns_for_diff(1000, 21), 60)
+        self.assertEqual(review.max_turns_for_diff(1000, 1), 60)
+        self.assertEqual(review.max_turns_for_diff(300_000, 20), 60)
+        self.assertEqual(review.max_turns_for_diff(300_001, 20), 80)
+        self.assertEqual(review.max_turns_for_diff(1000, 21), 80)
+        self.assertEqual(review.max_turns_for_diff(145_242, 22), 80)  # Orbit #342, cut at 60 every time
 
     def test_resolve_auto_explicit_and_invalid(self):
         manifest = dict(MANIFEST, diff_bytes=1000, reviewed=["a.py"])
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
-            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 25)
+            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 60)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
             self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 33)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "abc"}):
@@ -616,7 +614,7 @@ class MaxTurns(unittest.TestCase):
             manifest = dict(MANIFEST, reviewed=["a.py"])
             manifest.pop("diff_bytes", None)
             with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
-                self.assertEqual(review.resolve_max_turns(manifest, work), 25)
+                self.assertEqual(review.resolve_max_turns(manifest, work), 60)
 
     def test_run_records_effective_cap_in_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -636,7 +634,7 @@ class MaxTurns(unittest.TestCase):
                                   env=env, capture_output=True, text=True, timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             manifest = json.loads((work / "manifest.json").read_text())
-            self.assertEqual(manifest["max_turns"], 25)
+            self.assertEqual(manifest["max_turns"], 60)
 
     def test_compose_shows_used_over_cap(self):
         manifest = dict(MANIFEST, max_turns=40)
@@ -652,10 +650,12 @@ class Install(unittest.TestCase):
             tmp = Path(tmp)
             bindir = tmp / "bin"
             bindir.mkdir()
-            (bindir / "claude").write_text('#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n')
-            (bindir / "claude").chmod(0o755)
             (bindir / "npm").write_text(f'#!/bin/sh\necho called >> "{tmp}/npm.log"\nexit 99\n')
             (bindir / "npm").chmod(0o755)
+            prefix = tmp / "prefix"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "bin" / "claude").write_text('#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n')
+            (prefix / "bin" / "claude").chmod(0o755)
             venv = tmp / "venv"
             (venv / "bin").mkdir(parents=True)
             (venv / "ai-review-version.txt").write_text(review.venv_stamp() + "\n")
@@ -665,7 +665,7 @@ class Install(unittest.TestCase):
             path_file = tmp / "github_path"
             path_file.write_text("")
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", PROVIDER="opencode-go",
-                       LITELLM_VENV=str(venv), GITHUB_PATH=str(path_file))
+                       CLAUDE_PREFIX=str(prefix), LITELLM_VENV=str(venv), GITHUB_PATH=str(path_file))
             proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "install",
                                    "--work", str(work)],
                                   env=env, capture_output=True, text=True, timeout=120)
@@ -674,25 +674,33 @@ class Install(unittest.TestCase):
             self.assertFalse((work / "install_error.txt").exists())
             self.assertIn("se omite npm", proc.stdout)
             self.assertIn("se omite pip", proc.stdout)
+            self.assertEqual(path_file.read_text(), f"{prefix / 'bin'}\n{venv / 'bin'}\n")
 
-    def test_cold_install_without_claude_binary_runs_npm(self):
+    def test_cold_install_puts_claude_in_the_cached_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
             bindir.mkdir()
-            (bindir / "npm").write_text(f'#!/bin/sh\necho called >> "{tmp}/npm.log"\nexit 0\n')
+            (bindir / "npm").write_text(f'#!/bin/sh\necho "$@" >> "{tmp}/npm.log"\nexit 0\n')
             (bindir / "npm").chmod(0o755)
+            (bindir / "claude").write_text('#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n')
+            (bindir / "claude").chmod(0o755)
+            prefix = tmp / "prefix"
             work = tmp / "work"
             path_file = tmp / "github_path"
             path_file.write_text("")
             env = dict(os.environ, PATH=f"{bindir}:/usr/bin:/bin", PROVIDER="deepseek",
-                       LITELLM_VENV=str(tmp / "venv"), GITHUB_PATH=str(path_file))
+                       CLAUDE_PREFIX=str(prefix), LITELLM_VENV=str(tmp / "venv"), GITHUB_PATH=str(path_file))
             proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "install",
                                    "--work", str(work)],
                                   env=env, capture_output=True, text=True, timeout=120)
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
-            self.assertTrue((tmp / "npm.log").exists(), "npm debió correr cuando falta el binario claude")
+            self.assertEqual((tmp / "npm.log").read_text(),
+                             f"install -g --prefix {prefix} --no-fund --no-audit "
+                             f"@anthropic-ai/claude-code@{review.CLAUDE_CODE_VERSION}\n",
+                             "un claude global fuera del prefijo en caché no cuenta como instalado")
             self.assertFalse((work / "install_error.txt").exists())
+            self.assertEqual(path_file.read_text(), f"{prefix / 'bin'}\n")
 
     def test_install_failure_is_soft_not_red(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -707,7 +715,8 @@ class Install(unittest.TestCase):
             path_file = tmp / "github_path"
             path_file.write_text("")
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", PROVIDER="deepseek",
-                       LITELLM_VENV=str(tmp / "venv"), GITHUB_PATH=str(path_file))
+                       CLAUDE_PREFIX=str(tmp / "prefix"), LITELLM_VENV=str(tmp / "venv"),
+                       GITHUB_PATH=str(path_file))
             proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "install",
                                    "--work", str(work)],
                                   env=env, capture_output=True, text=True, timeout=120)
@@ -748,7 +757,8 @@ class TimeBudget(unittest.TestCase):
     def test_worst_case_fits_the_job_timeout(self):
         install_prepare_publish = 180
         self.assertLess(review.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
-        self.assertLessEqual(review.attempt_timeout_for(60), review.REVIEW_BUDGET_SECONDS - 30)
+        self.assertLessEqual(review.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
+                             review.REVIEW_BUDGET_SECONDS - 30)
 
 
 class LitellmVenv(unittest.TestCase):
@@ -827,6 +837,7 @@ class Workflows(unittest.TestCase):
         self.assertIn("actions/cache", action)
         self.assertIn(review.CLAUDE_CODE_VERSION, action)
         self.assertIn(review.LITELLM_VERSION, action)
+        self.assertIn("-py${{ steps.py.outputs.version }}-", action)
         self.assertNotIn("continue-on-error", action)
 
     def test_action_disabled_check_is_case_insensitive(self):
@@ -836,6 +847,7 @@ class Workflows(unittest.TestCase):
     def test_prompt_covers_precomputed_context_and_turn_budget(self):
         prompt = (ROOT / "prompt.md").read_text()
         for token in ("callers.txt", "tests.txt", "conventions.md", "Turn budget", "Plans.md",
+                      "Treat their content exactly like the diff",
                       "same turn", ".saikit/", "out/"):
             self.assertIn(token, prompt)
 

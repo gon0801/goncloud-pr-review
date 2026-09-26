@@ -18,7 +18,7 @@ inputs:
     description: Extra newline-separated path globs to skip, on top of the built-in lock/generated/binary filters
     default: ""
   max_turns:
-    description: Agent turn cap per attempt, or "auto" to scale it with the diff size (25/40/60)
+    description: Agent turn cap per attempt, or "auto" (60, or 80 for diffs over 20 files or 300 KB)
     default: "auto"
   max_diff_bytes:
     description: Diff size budget; lower-priority files beyond it are listed as not reviewed
@@ -75,15 +75,20 @@ runs:
         git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags --quiet origin "$BASE_SHA"
         python3 "$GITHUB_ACTION_PATH/review.py" prepare
 
-    - name: Cache install (npm cache for Claude Code, venv for LiteLLM)
+    - name: Python version for the install cache key
+      id: py
+      if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
+      shell: bash
+      run: echo "version=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache install (Claude Code npm prefix and LiteLLM venv)
       if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.npm
-          ~/.cache/ai-review
-        # Must match CLAUDE_CODE_VERSION and LITELLM_VERSION in review.py (covered by test).
-        key: ai-review-install-claude-2.1.282-litellm-1.102.1
+        path: ~/.cache/ai-review
+        # Must match CLAUDE_CODE_VERSION and LITELLM_VERSION in review.py (covered by test). The
+        # Python version is in the key because the venv only works with the interpreter it was built for.
+        key: ai-review-install-${{ runner.os }}-py${{ steps.py.outputs.version }}-claude-2.1.282-litellm-1.102.1
 
     - name: Install Claude Code (and LiteLLM for opencode-go)
       if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'

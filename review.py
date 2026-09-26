@@ -398,12 +398,17 @@ def build_conventions(base):
     return "\n\n".join(parts)
 
 
+# The tier only goes UP for big diffs. Measured 2026-09-26 on 5 real PRs (openclaw #161,
+# #175, #160, Orbit #345, #342): caps of 25/40 doubled the reviews cut by the cap (20% -> 40%)
+# and lost a High finding on Orbit #345, while 22-file Orbit #342 was cut at 60 every time.
+DEFAULT_MAX_TURNS = 60
+LARGE_DIFF_MAX_TURNS = 80
+
+
 def max_turns_for_diff(diff_bytes, n_files):
-    if diff_bytes <= 50_000 and n_files <= 5:
-        return 25
-    if diff_bytes <= 300_000 and n_files <= 20:
-        return 40
-    return 60
+    if diff_bytes > 300_000 or n_files > 20:
+        return LARGE_DIFF_MAX_TURNS
+    return DEFAULT_MAX_TURNS
 
 
 def resolve_max_turns(manifest, work):
@@ -583,10 +588,18 @@ def ensure_litellm_venv(venv, build=build_litellm_venv):
     (venv / "ai-review-version.txt").write_text(venv_stamp() + "\n")
 
 
-def claude_version_ok():
+def claude_prefix():
+    """npm global prefix inside the cached dir, so a warm cache skips npm entirely."""
+    override = os.environ.get("CLAUDE_PREFIX")
+    if override:
+        return Path(override)
+    return Path.home() / ".cache" / "ai-review" / "npm-global"
+
+
+def claude_version_ok(claude_bin):
     try:
-        found = sh("claude", "--version", check=False)
-    except FileNotFoundError:
+        found = sh(str(claude_bin), "--version", check=False)
+    except OSError:
         return False
     return found.returncode == 0 and CLAUDE_CODE_VERSION in (found.stdout or "")
 
@@ -596,11 +609,14 @@ def cmd_install(args):
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     try:
-        if claude_version_ok():
+        prefix = claude_prefix()
+        if claude_version_ok(prefix / "bin" / "claude"):
             print(f"ai-review: claude-code {CLAUDE_CODE_VERSION} ya instalado (caché); se omite npm")
         else:
-            subprocess.run(["npm", "install", "-g", "--no-fund", "--no-audit",
+            subprocess.run(["npm", "install", "-g", "--prefix", str(prefix), "--no-fund", "--no-audit",
                             f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"], check=True)
+        with open(os.environ["GITHUB_PATH"], "a") as fh:
+            fh.write(f"{prefix / 'bin'}\n")
         if provider["via_proxy"]:
             venv = litellm_venv()
             ensure_litellm_venv(venv)
