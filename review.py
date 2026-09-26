@@ -171,7 +171,7 @@ def split_coverage(text):
 
 def redact(text, secrets):
     for secret in secrets:
-        if secret and len(secret) >= 8:
+        if secret and len(secret) > 64:
             text = text.replace(secret, "[REDACTED]")
     return text
 
@@ -578,7 +578,7 @@ def scope_lines(result, manifest, provider):
     return scope
 
 
-def compose(result, manifest, *, sha, provider, findings=None):
+def compose(result, manifest, *, head_sha, provider, findings=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
     review, coverage, detail = split_coverage(text)
@@ -598,12 +598,12 @@ def compose(result, manifest, *, sha, provider, findings=None):
         warnings.append("el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores")
 
     if findings is not None and findings.get("merged"):
-        return compose_with_findings(result, manifest, sha=sha, provider=provider,
+        return compose_with_findings(result, manifest, sha=head_sha, provider=provider,
                                      findings=findings, review=review, warnings=warnings)
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->"]
+    parts = [MARKER, f"{SHA_PREFIX}{head_sha} -->"]
     if findings is not None:
         parts.append(findings["block"])
-    parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
+    parts += [f"### Revisión automática · {provider['label']} · {head_sha[:7]}", ""]
     if warnings:
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     if not manifest["reviewed"]:
@@ -1376,7 +1376,7 @@ def cmd_publish(args):
         summary_text = redact(banner, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
-        body = redact(compose(result, manifest, sha=head, provider=name, findings=findings),
+        body = redact(compose(result, manifest, head_sha=head, provider=name, findings=findings),
                       [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
         summary_text = summary_of(body)
 
