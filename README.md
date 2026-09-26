@@ -35,14 +35,14 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 ## Operación
 
 - **Modelo.** Solo DeepSeek V4.1 Flash. No hay input para cambiarlo; los proveedores permitidos viven en `PROVIDERS` de `review.py` y cualquier otro valor de `provider` se rechaza.
-- **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite): el primer paso del workflow ve la variable, sin importar mayúsculas, y se salta el checkout y la action.
+- **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite): el primer paso del workflow ve la variable, sin importar mayúsculas, y se salta el checkout y la action. Eso es de la plantilla nueva; en los repos que ya tienen el workflow viejo, la action igual termina en verde sin revisar, pero antes hace el checkout.
 - **Token propio.** Si pasas `github_token` de una GitHub App, pasa también `bot_login` con el login de esa App (por ejemplo `mi-app[bot]`). Solo los comentarios de ese login cuentan como la revisión fija.
 - **Pedir otra revisión del mismo commit.** En la pestaña Checks del PR, "Re-run jobs" sobre `AI review`. Un re-run se salta el gate a propósito.
 - **Revisión nueva.** Se hace sola con cada push.
 
 ## Proveedor y costo
 
-**Ahora: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Go cuenta peticiones en ventanas de 5 horas, semana y mes. DeepSeek V4.1 Flash da unas 6,500 peticiones cada 5 horas y 32,500 al mes con la promoción 4× que termina el 27 de septiembre de 2026; sin ella, una cuarta parte. Una revisión gasta unas 20 a 60 peticiones. Cuando la cuota se agota, el check queda en verde con un aviso amarillo hasta que la ventana se renueva, y el merge no se bloquea.
+**Ahora: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Go cuenta peticiones en ventanas de 5 horas, semana y mes. DeepSeek V4.1 Flash da unas 6,500 peticiones cada 5 horas y 32,500 al mes con la promoción 4× que termina el 27 de septiembre de 2026; sin ella, una cuarta parte. Una revisión gasta unas 20 a 80 peticiones. Cuando la cuota se agota, el check queda en verde con un aviso amarillo hasta que la ventana se renueva, y el merge no se bloquea.
 
 **Destino: `provider: deepseek`, la API de DeepSeek, sin cuotas y pagando por uso.** Para cambiar:
 

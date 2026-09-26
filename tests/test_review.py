@@ -419,6 +419,13 @@ class RunAgent(unittest.TestCase):
         self.assertNotIn("intento 2/2", proc.stdout)
         self.assertIn("excedió el tiempo límite de 1 s", result[review.ERROR_KEY])
 
+    def test_retry_runs_only_if_it_still_gets_the_minimum_attempt_time(self):
+        overloaded = {"result": "overloaded", "is_error": True, "api_error_status": 529}
+        _, calls, _, _, _ = self.run_agent(overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="345")
+        self.assertEqual(len(calls), 2, "345 s de presupuesto dejan >= 300 s para el reintento")
+        _, calls, _, _, _ = self.run_agent(overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="320")
+        self.assertEqual(len(calls), 1, "320 s de presupuesto no alcanzan un reintento de 300 s")
+
     def test_retry_is_skipped_when_the_budget_cannot_fit_it(self):
         proc, calls, result, _, _ = self.run_agent({"result": "overloaded", "is_error": True, "api_error_status": 529},
                                                    provider="deepseek", REVIEW_BUDGET_SECONDS="100")
@@ -701,6 +708,28 @@ class Install(unittest.TestCase):
                              "un claude global fuera del prefijo en caché no cuenta como instalado")
             self.assertFalse((work / "install_error.txt").exists())
             self.assertEqual(path_file.read_text(), f"{prefix / 'bin'}\n")
+
+    def test_install_failure_removes_the_half_built_install_from_the_cache_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "npm").write_text("#!/bin/sh\nexit 1\n")
+            (bindir / "npm").chmod(0o755)
+            prefix = tmp / "prefix"
+            (prefix / "lib").mkdir(parents=True)
+            (prefix / "lib" / "half.txt").write_text("partial")
+            venv = tmp / "venv"
+            (venv / "bin").mkdir(parents=True)
+            path_file = tmp / "github_path"
+            path_file.write_text("")
+            env = dict(os.environ, PATH=f"{bindir}:/usr/bin:/bin", PROVIDER="opencode-go",
+                       CLAUDE_PREFIX=str(prefix), LITELLM_VENV=str(venv), GITHUB_PATH=str(path_file))
+            proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "install", "--work", str(tmp / "work")],
+                                  env=env, capture_output=True, text=True, timeout=120)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(prefix.exists())
+            self.assertFalse(venv.exists())
 
     def test_install_failure_is_soft_not_red(self):
         with tempfile.TemporaryDirectory() as tmp:

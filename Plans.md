@@ -1,6 +1,6 @@
 # Plans — goncloud-pr-review
 
-Plan de mejoras del revisor automático de PRs. Aprobado para diseño el 2026-09-25; **no implementado todavía**. Orden: PR A, luego PR B.
+Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B pendiente.
 
 ## Diagnóstico (medido el 2026-09-25)
 
@@ -13,13 +13,25 @@ Plan de mejoras del revisor automático de PRs. Aprobado para diseño el 2026-09
 
 | # | Tarea | Estado |
 |---|---|---|
-| A1 | Guardar en caché (`actions/cache`) el paquete de Claude Code y el venv de LiteLLM, con llave por versión fijada. Meta: instalar pasa de ~45 s a ~15 s. | cc:done e71b7b4 |
-| A2 | Que `prepare` precalcule el contexto sin gastar turnos: `callers.txt` (con `git grep`, quién usa cada símbolo cambiado en el diff), `tests.txt` (pruebas que mencionan los archivos cambiados) y `conventions.md` (CLAUDE.md/AGENTS.md recortados desde la rama base, igual que `.github/ai-review.md`, para que un PR no cuele instrucciones como contexto). El prompt manda leer esos 3 archivos antes de explorar. | cc:done e71b7b4 |
-| A3 | Prompt con presupuesto explícito: cuántos turnos tiene, agrupar lecturas independientes en un mismo turno, y no leer planes, ledgers ni evidencias (`Plans.md`, `docs/evidencia/`, `.saikit/`, `out/`) salvo que el diff los toque. | cc:done e71b7b4 |
-| A4 | Tope de turnos según tamaño del diff, en vez de 60 fijo. Ajustar timeouts para que el peor caso quede con margen bajo el límite de 30 min del job (issue #5). | cc:done e71b7b4 |
-| A5 | Cerrar el issue #5 completo, punto por punto: (1) el aviso no dice "revisión anterior" cuando el sticky es solo-aviso; (2) `install` falla suave en Python en vez de depender de `continue-on-error`; (3) tiempos con margen bajo el límite de 30 min (va en A4); (4) `disabled` sin distinguir mayúsculas; (5) README sin contradicciones: color del check, si corre Publish, rango de duración, y tabla con `provider` inválido y fallas de Gate/Prepare; (6) pruebas: `disabled:` presente en la plantilla y `assertNotIn(SHA)` en error+sticky; (7) `redact()` también en el camino de error de Publish; (8) con `disabled=true` no se corre checkout (hoy un checkout fallido deja rojo el check apagado); (9) la clave `error` de `result.json` se separa de la salida cruda del CLI (`ai_review_error`). | cc:done e71b7b4 |
+| A1 | Guardar en caché (`actions/cache`) el paquete de Claude Code y el venv de LiteLLM, con llave por versión fijada. Meta: instalar pasa de ~45 s a ~15 s. | cc:done — medido: instalar pasa de ~45 s a ~7 s con caché caliente (2º push en adelante; la caché de GitHub se comparte solo dentro del mismo PR) |
+| A2 | Que `prepare` precalcule el contexto sin gastar turnos: `callers.txt` (con `git grep`, quién usa cada símbolo cambiado en el diff), `tests.txt` (pruebas que mencionan los archivos cambiados) y `conventions.md` (CLAUDE.md/AGENTS.md recortados desde la rama base, igual que `.github/ai-review.md`, para que un PR no cuele instrucciones como contexto). El prompt manda leer esos 3 archivos antes de explorar. | cc:done — sin efecto medible en turnos (mediana 56 → 57.5 en la comparativa); se queda como pista para el modelo |
+| A3 | Prompt con presupuesto explícito: cuántos turnos tiene, agrupar lecturas independientes en un mismo turno, y no leer planes, ledgers ni evidencias (`Plans.md`, `docs/evidencia/`, `.saikit/`, `out/`) salvo que el diff los toque. | cc:done |
+| A4 | Tope de turnos según tamaño del diff, solo hacia arriba: 60 por default y 80 si el diff pasa de 20 archivos o 300 KB. El tiempo por intento es 15 s por turno permitido (mínimo 5 min), con un presupuesto de 22 min para el paso Review; un intento cortado por tiempo no se reintenta. Los topes 25/40 del primer intento duplicaron las revisiones cortadas y se descartaron. | cc:done — medido: revisiones cortadas 3/10 → 0/10 |
+| A5 | Cerrar el issue #5 completo, punto por punto: (1) el aviso no dice "revisión anterior" cuando el sticky es solo-aviso; (2) `install` falla suave en Python en vez de depender de `continue-on-error`; (3) tiempos con margen bajo el límite de 30 min (va en A4); (4) `disabled` sin distinguir mayúsculas; (5) README sin contradicciones: color del check, si corre Publish, rango de duración, y tabla con `provider` inválido y fallas de Gate/Prepare; (6) pruebas: `disabled:` presente en la plantilla y `assertNotIn(SHA)` en error+sticky; (7) `redact()` también en el camino de error de Publish; (8) con `disabled=true` no se corre checkout (hoy un checkout fallido deja rojo el check apagado); (9) la clave `error` de `result.json` se separa de la salida cruda del CLI (`ai_review_error`). | cc:done |
 
 **Metas del PR A:** mediana de turnos en primera revisión de ~45 a ≤ 30; revisiones cortadas por tope de ~20% a < 5% (medido igual que el Diagnóstico: sobre el último comentario de cada PR con revisión); tiempo total por revisión de 4–9 min a 2–5 min.
+
+**Resultado medido (2026-09-26).** Comparativa en 5 PRs reales (openclaw #161, #175 y #160; Orbit #345 y #342), cada uno revisado 2 veces con `main` y 2 con el PR A, en la misma corrida:
+
+| | Antes (`main`) | Después (PR A) |
+|---|---|---|
+| Revisiones cortadas o incompletas | 3 de 10 (+1 con cobertura parcial) | 0 de 10 |
+| Hallazgos High | 1 | 2 (Orbit #345 en las 2 corridas) |
+| Mediana de turnos | 56 | 57.5 |
+| Tiempo promedio de revisión | 373 s | 394 s |
+| Instalación, 2º push en adelante | ~45 s | ~7 s |
+
+Meta de cortadas: cumplida. Meta de turnos (≤ 30) y de tiempo (2–5 min): no cumplidas; la revisión sigue en ~6 min. La palanca de velocidad real es el PR B, que en los pushes siguientes revisa solo lo que cambió.
 
 ## PR B — No repetir hallazgos
 

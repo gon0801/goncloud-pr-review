@@ -89,7 +89,6 @@ cada dos son esta estan hay ser fue eran ello esto eso aqui alli ahora antes
 SECONDS_PER_TURN = 15
 MIN_ATTEMPT_SECONDS = 300
 REVIEW_BUDGET_SECONDS = 1320
-MIN_RETRY_SECONDS = 180
 RETRY_DELAY = "30"
 PROXY_START_TIMEOUT = "60"
 
@@ -318,7 +317,8 @@ def grep_files(patterns, limit):
 
 
 def build_callers(reviewed, chunks):
-    lines = ["# Quién usa los símbolos cambiados (precalculado con git grep; no gastes turnos en esto)", ""]
+    lines = ["# Dónde aparece cada símbolo cambiado (búsqueda de texto con git grep: es una pista, no una prueba;",
+             "# no ve usos dinámicos, por reflexión o armados con strings)", ""]
     total = 0
     for path in reviewed[:CALLERS_MAX_FILES]:
         symbols = changed_symbols(chunks.get(path, "")) if total < CALLERS_MAX_SYMBOLS else []
@@ -332,7 +332,7 @@ def build_callers(reviewed, chunks):
             matches = grep_files([symbol], CALLERS_MAX_MATCHES)
             lines.append(f"### `{symbol}`")
             if not matches:
-                lines.append("- (sin otros usos en el repo)")
+                lines.append("- (git grep no encontró el texto en otro archivo; puede haber usos dinámicos)")
             else:
                 lines += [f"- {m}" for m in matches[:CALLERS_MAX_MATCHES]]
                 if len(matches) > CALLERS_MAX_MATCHES:
@@ -623,6 +623,10 @@ def cmd_install(args):
             with open(os.environ["GITHUB_PATH"], "a") as fh:
                 fh.write(f"{venv / 'bin'}\n")
     except (subprocess.CalledProcessError, OSError) as exc:
+        # Drop the half-built install: actions/cache saves this dir after the job under a key
+        # that is never rewritten, and a broken copy would be restored on every later run.
+        shutil.rmtree(claude_prefix(), ignore_errors=True)
+        shutil.rmtree(litellm_venv(), ignore_errors=True)
         reason = f"no se pudo instalar las herramientas de revisión ({exc})"
         (work / "install_error.txt").write_text(reason)
         print(f"::warning::ai-review: {reason}")
@@ -723,7 +727,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
-        if attempt > 1 and remaining < MIN_RETRY_SECONDS:
+        if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
             print(f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)", file=sys.stderr)
             break
         timeout = max(1, min(attempt_timeout, remaining - 30))
