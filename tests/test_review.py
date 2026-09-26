@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import io
 import json
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -732,7 +734,43 @@ class Install(unittest.TestCase):
                                   env=env, capture_output=True, text=True, timeout=120)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse(prefix.exists())
+            self.assertTrue(venv.exists(), "si falló npm, el venv en caché no se toca")
+
+    def install_with(self, tmp, npm_exit, pip_exit, prefix, venv):
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        (bindir / "npm").write_text(f"#!/bin/sh\nmkdir -p {prefix}/lib\nexit {npm_exit}\n")
+        (bindir / "npm").chmod(0o755)
+        path_file = tmp / "github_path"
+        path_file.write_text("")
+        env = dict(os.environ, PATH=f"{bindir}:/usr/bin:/bin", PROVIDER="opencode-go",
+                   CLAUDE_PREFIX=str(prefix), LITELLM_VENV=str(venv), GITHUB_PATH=str(path_file))
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(review, "build_litellm_venv",
+                                  side_effect=subprocess.CalledProcessError(pip_exit, "pip") if pip_exit else None):
+            with contextlib.redirect_stdout(io.StringIO()):
+                review.cmd_install(argparse.Namespace(work=str(tmp / "work")))
+
+    def test_cold_install_failure_leaves_no_empty_cache_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            cache = tmp / "cache"
+            self.install_with(tmp, 1, 0, cache / "npm-global", cache / "litellm-venv")
+            self.assertFalse(cache.exists(), "una caché vacía se guardaría bajo la llave inmutable")
+
+    def test_pip_failure_keeps_a_good_claude_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            cache = tmp / "cache"
+            prefix = cache / "npm-global"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "bin" / "claude").write_text('#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n')
+            (prefix / "bin" / "claude").chmod(0o755)
+            venv = cache / "litellm-venv"
+            self.install_with(tmp, 0, 1, prefix, venv)
+            self.assertTrue((prefix / "bin" / "claude").exists())
             self.assertFalse(venv.exists())
+            self.assertIn("no se pudo instalar", (tmp / "work" / "install_error.txt").read_text())
 
     def test_install_failure_is_soft_not_red(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -779,12 +817,86 @@ class Install(unittest.TestCase):
 
 
 class TimeBudget(unittest.TestCase):
+    def test_proxy_start_counts_inside_the_budget(self):
+        clock = iter(range(1000, 100000, 100))
+        captured = {}
+
+        def fake_start_proxy(work, provider, key, session):
+            review.time.monotonic()  # the proxy start takes time on the same clock
+            proxy = mock.Mock()
+            proxy.wait.return_value = 0
+            return proxy, "http://127.0.0.1:4000", "sk-token"
+
+        def fake_run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
+            captured["deadline"] = deadline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "manifest.json").write_text(json.dumps(dict(MANIFEST, diff_bytes=10)))
+            env = dict(os.environ, API_KEY="sk-go-key-123", PROVIDER="opencode-go", REPO="o/r",
+                       PR_NUMBER="7", REVIEW_BUDGET_SECONDS="1320")
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(review.time, "monotonic", side_effect=lambda: next(clock)), \
+                    mock.patch.object(review, "start_proxy", side_effect=fake_start_proxy), \
+                    mock.patch.object(review, "run_agent", side_effect=fake_run_agent):
+                review.cmd_run(argparse.Namespace(work=str(work)))
+        self.assertEqual(captured["deadline"], 1000 + 1320)
+
+    def test_timeout_kills_grandchildren_that_hold_the_output(self):
+        script = textwrap.dedent("""\
+            import subprocess, sys, time
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            time.sleep(60)
+        """)
+        start = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            review.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
+        self.assertLess(time.monotonic() - start, 15, "un nieto con la salida abierta no debe colgar el job")
+
+    def test_finished_agent_output_is_kept_when_only_a_descendant_holds_the_pipes(self):
+        script = textwrap.dedent("""\
+            import subprocess, sys
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            print('{"result": "ok", "subtype": "success"}', flush=True)
+        """)
+        start = time.monotonic()
+        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual((done.returncode, json.loads(done.stdout)["result"]), (0, "ok"))
+
+    def test_descendant_that_escapes_the_group_still_yields_text_output(self):
+        script = textwrap.dedent("""\
+            import subprocess, sys
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+            print("aviso en stderr", file=sys.stderr, flush=True)
+            print('{"result": "ok", "subtype": "success"}', flush=True)
+        """)
+        start = time.monotonic()
+        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertIsInstance(done.stdout, str)
+        self.assertIsInstance(done.stderr, str)
+        self.assertEqual((done.returncode, json.loads(done.stdout)["result"], done.stderr.strip()),
+                         (0, "ok", "aviso en stderr"))
+
+    def test_action_cache_path_matches_the_install_dirs(self):
+        action = (ROOT / "action.yml").read_text()
+        cache_step = action[action.index("uses: actions/cache"):]
+        path_line = next(l for l in cache_step.splitlines() if l.strip().startswith("path:"))
+        cached = Path(path_line.split(":", 1)[1].strip().replace("~", str(Path.home()), 1))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CLAUDE_PREFIX", None)
+            os.environ.pop("LITELLM_VENV", None)
+            for path in (review.claude_prefix(), review.litellm_venv()):
+                with self.subTest(path=str(path)):
+                    self.assertTrue(str(path).startswith(str(cached) + "/"), f"{path} no está bajo {cached}")
+
     def test_attempt_time_scales_with_turn_cap(self):
         self.assertEqual([review.attempt_timeout_for(t) for t in (10, 25, 40, 60)], [300, 375, 600, 900])
 
     def test_measured_long_review_fits_its_attempt(self):
-        # Orbit run 36208215400: 48 turns (cap 40 tier would stop earlier) took 492 s.
-        self.assertGreaterEqual(review.attempt_timeout_for(40), 492)
+        # Orbit run 36208215400: 48 turns took 492 s; the default cap is 60 turns.
+        self.assertGreaterEqual(review.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492)
 
     def test_worst_case_fits_the_job_timeout(self):
         install_prepare_publish = 180
@@ -841,6 +953,11 @@ class TestFileDetection(unittest.TestCase):
             "spec/models/user_spec.rb": True,
             "src/test/java/FooTest.java": True,
             "src/main/java/TestUtils.java": True,
+            "conftest.py": True,
+            "pkg/testing/helpers.py": True,
+            "src/test_utils/factory.py": True,
+            "src/Foo.Tests/BarTests.cs": True,
+            "src/Foo.Tests/Helpers.cs": True,
             "src/inspect.py": False,
             "docs/latest.md": False,
             "contest/entry.py": False,
@@ -1827,7 +1944,35 @@ class BlockingFixes(unittest.TestCase):
             fake.return_value.returncode = 1
             fake.return_value.stderr = "gh: Not Found (HTTP 404)"
             fake.return_value.stdout = ""
-            self.assertEqual(review.collaborator_permission("o/r", "nadie"), "none")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(review.collaborator_permission("o/r", "nadie"), "none")
+            self.assertIn("nadie no existe para este repo (HTTP 404)", err.getvalue())
+
+    def test_forbidden_is_retried_not_a_definitive_no(self):
+        with mock.patch.object(review, "sh") as fake:
+            fake.return_value.returncode = 1
+            fake.return_value.stderr = "gh: Resource not accessible by integration (HTTP 403)"
+            fake.return_value.stdout = ""
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+
+    def test_unclosed_fence_does_not_protect_a_verdict(self):
+        text = "Texto\n```\ncódigo sin cerrar\n**Veredicto:** del modelo"
+        self.assertEqual(review.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar")
+
+    def test_verdict_inside_a_code_fence_is_kept(self):
+        text = "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```\n**Veredicto:** del modelo"
+        self.assertEqual(review.strip_model_verdict(text), "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```")
+
+    def test_fix_file_is_never_cut_by_the_files_cap(self):
+        registered = ["review.py", "a.py", "b.py", "c.py", "d.py"]
+        prev = [dict(make_finding("F2", file="review.py"), files=registered)]
+        model = [dict(make_finding("F2", file="review.py", state="resolved"), files=["review.py", "tests/t.py"])]
+        merged, _ = merge(prev, model, changed_files=["tests/t.py"])
+        finding = merged["findings"][0]
+        self.assertEqual(finding["state"], "resolved")
+        self.assertEqual(finding["files"], ["review.py", "tests/t.py", "a.py", "b.py", "c.py"])
 
     def test_model_verdict_anywhere_in_the_text_is_dropped(self):
         text = "Intro del modelo.\n**Veredicto:** 1 High.\n\n#### 🟠 High · `a.py:1` · X"
