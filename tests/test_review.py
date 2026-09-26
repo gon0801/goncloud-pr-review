@@ -878,7 +878,7 @@ class Workflows(unittest.TestCase):
 
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()
-        self.assertIn("20 on incremental", action)
+        self.assertIn("30 on small incremental pushes", action)
 
     def test_prompt_covers_precomputed_context_and_turn_budget(self):
         prompt = (ROOT / "prompt.md").read_text()
@@ -1452,12 +1452,19 @@ class IncrementalRun(unittest.TestCase):
         manifest = dict(MANIFEST, **kw)
         return manifest
 
-    def test_auto_turns_capped_at_20_on_incremental(self):
+    def test_auto_turns_capped_at_30_on_small_incremental(self):
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
-            self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 20)
+            self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 30)
             self.assertEqual(review.resolve_max_turns(self.manifest(mode="full"), Path("/tmp")), 60)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
             self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 33)
+
+    def test_big_incremental_push_gets_the_normal_cap(self):
+        with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
+            big = dict(self.manifest(mode="incremental"), diff_bytes=30_001)
+            self.assertEqual(review.resolve_max_turns(big, Path("/tmp")), 60)
+            many = dict(self.manifest(mode="incremental"), reviewed=[f"f{i}.py" for i in range(6)])
+            self.assertEqual(review.resolve_max_turns(many, Path("/tmp")), 60)
 
     def test_incremental_prompt_points_at_prev_findings(self):
         manifest = self.manifest(mode="incremental", prev_sha="p" * 40, reviewed=["b.py"],

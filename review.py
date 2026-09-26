@@ -30,7 +30,11 @@ FINDINGS_MAX_BYTES = 8000
 FINDINGS_MAX_COUNT = 60
 FINDINGS_TITLE_MAX = 160
 FINDING_FILES_MAX = 5
-INCREMENTAL_MAX_TURNS = 20
+# Small incremental pushes get a short cap; big ones (a whole fix round) get the normal one.
+# PR #13's own incremental review of a ~800-line fix round ran out of turns at a flat 20.
+INCREMENTAL_MAX_TURNS = 30
+INCREMENTAL_SMALL_BYTES = 30_000
+INCREMENTAL_SMALL_FILES = 5
 INCREMENTAL_PROMPT_MAX_FILES = 50
 SEVERITIES = ("Critical", "High", "Medium", "Low")
 SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "⚪"}
@@ -936,13 +940,15 @@ def resolve_max_turns(manifest, work):
         if turns < 1:
             sys.exit(f"ai-review: MAX_TURNS inválido: {raw!r} (usa un número o 'auto')")
         return turns
-    if manifest.get("mode") == "incremental":
-        return INCREMENTAL_MAX_TURNS
     diff_bytes = manifest.get("diff_bytes")
     if diff_bytes is None:
         patch = work / "diff.patch"
         diff_bytes = len(patch.read_bytes()) if patch.exists() else 0
-    return max_turns_for_diff(diff_bytes, len(manifest["reviewed"]))
+    n_files = len(manifest["reviewed"])
+    if (manifest.get("mode") == "incremental" and diff_bytes <= INCREMENTAL_SMALL_BYTES
+            and n_files <= INCREMENTAL_SMALL_FILES):
+        return INCREMENTAL_MAX_TURNS
+    return max_turns_for_diff(diff_bytes, n_files)
 
 
 def cmd_prepare(args):
