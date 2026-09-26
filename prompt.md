@@ -95,6 +95,7 @@ When the user message says this is an INCREMENTAL review, the rest of the PR is 
 2. Mark `resolved` only what the new diff actually fixed. The fix may be in a related file (for example, tests updated to a renamed function): add that file to the finding's `files`. A finding none of whose files changed since the last review stays `open`.
 3. Look for NEW bugs only in the changed files listed in the user message.
 4. Carry every previous open and resolved finding into the new block with the same ids. Dismissed findings: leave them out of the block and never describe them in the text.
+5. In the text, describe in detail only NEW findings. Previous findings that stay open are already listed by the publisher: do not describe them again, and mention one only if something about it changed (severity, location, or a partial fix).
 
 ## Dismissed findings
 

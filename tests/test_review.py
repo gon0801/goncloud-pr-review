@@ -1700,6 +1700,11 @@ class BlockingFixes(unittest.TestCase):
 
 
 class PromptFindings(unittest.TestCase):
+    def test_incremental_prompt_asks_to_describe_only_new_findings(self):
+        prompt = (ROOT / "prompt.md").read_text()
+        self.assertIn("describe in detail only NEW findings", prompt)
+        self.assertIn("never describe them in the text", prompt)
+
     def test_prompt_specifies_findings_block_and_incremental(self):
         prompt = (ROOT / "prompt.md").read_text()
         for token in ("ai-review:findings", '"F-new"', "never after", "prev_findings.md",
