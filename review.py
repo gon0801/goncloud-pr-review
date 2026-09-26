@@ -633,9 +633,14 @@ def compose_with_findings(result, manifest, *, sha, provider, findings, review, 
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     parts += [verdict_for(merged), ""]
     parts += sections
-    if not manifest["reviewed"]:
-        review = review or "No hubo archivos revisables en este push; los hallazgos anteriores se conservan."
-    parts += ["", "## Detalle del revisor", "", review or "_El revisor no devolvió texto._", ""]
+    if not review:
+        if not manifest["reviewed"]:
+            review = "No hubo archivos revisables en este push; los hallazgos anteriores se conservan."
+        elif findings.get("model_ok", True):
+            review = "Sin hallazgos nuevos en este push."
+        else:
+            review = "_El revisor no devolvió texto._"
+    parts += ["", "## Detalle del revisor", "", review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         scope.insert(0, f"- Modo: incremental desde {manifest['prev_sha'][:7]} "

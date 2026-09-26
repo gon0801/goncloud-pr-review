@@ -1693,6 +1693,13 @@ class BlockingFixes(unittest.TestCase):
             findings = review.build_findings(result, manifest, sticky, "o/r", "7", "github-actions[bot]", [])
         self.assertEqual([(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")])
 
+    def test_empty_detail_with_a_valid_block_says_nothing_new(self):
+        findings = {"merged": [make_finding("F1", state="resolved")], "new_ids": [], "model_ok": True,
+                    "block": review.serialize_findings({"findings": [make_finding("F1", state="resolved")], "next": 2})}
+        body = review.compose({"result": block_of(make_finding("F1", state="resolved")) + "\nCOVERAGE: complete"},
+                              MANIFEST, sha=SHA, provider="opencode-go", findings=findings)
+        self.assertIn("## Detalle del revisor\n\nSin hallazgos nuevos en este push.", body)
+
     def test_html_in_titles_is_neutralized(self):
         line = review.finding_line(make_finding("F1", title="rompe </details> y <!-- esto"))
         self.assertNotIn("</details>", line)
