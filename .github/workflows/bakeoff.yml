@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 env:
-  TARGET_HEAD: b2b64d7dc8255bcb1eb29b81b71496705a036e20
-  TARGET_BASE: 48c43a90ae593c12f7777fdb67381f8e1d139cbc
+  TARGET_HEAD: 8cc0e5dc8fd111a8d8daa154172a953452e763a0
+  TARGET_BASE: c17077dde15800b8267ecf3e2cda6c31274b6cb2
 
 jobs:
   models:
@@ -51,7 +51,7 @@ jobs:
         working-directory: target
         run: |
           git cat-file -e "$TARGET_BASE^{commit}" 2>/dev/null || git fetch --quiet origin "$TARGET_BASE"
-          echo '{"pull_request":{"title":"refactor: rename compose sha kwarg and tighten redact threshold","body":"Renombra el kwarg de compose para que sea explícito y sube el umbral de redact."}}' > "$RUNNER_TEMP/event.json"
+          echo '{"pull_request":{"title":"refactor: input max_agent_turns explícito, marcador de SHA corto y helper de la línea de uso","body":"Renombra el input max_turns a max_agent_turns para que sea explícito, acorta el marcador de SHA del comentario a 7 caracteres para que se lea igual que el encabezado, y extrae el helper usage_line de compose."}}' > "$RUNNER_TEMP/event.json"
           HEAD_SHA="$TARGET_HEAD" BASE_SHA="$TARGET_BASE" GITHUB_EVENT_PATH="$RUNNER_TEMP/event.json" \
             python3 ../tool/review.py prepare --prompt ../tool/prompt.md
       - name: Review
