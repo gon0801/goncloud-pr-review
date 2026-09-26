@@ -1,6 +1,6 @@
 # Plans — goncloud-pr-review
 
-Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B pendiente.
+Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B implementado y probado en real el 2026-09-26 (PR #13).
 
 ## Diagnóstico (medido el 2026-09-25)
 
