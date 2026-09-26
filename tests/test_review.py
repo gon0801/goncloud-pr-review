@@ -314,15 +314,20 @@ class GitHubGlue(unittest.TestCase):
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
             (work / "result.json").write_text(json.dumps({review.ERROR_KEY: f"falla con secreto {secret}"}))
+            summary = tmp / "summary.md"
+            summary.write_text("")
             env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
                        FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
+                       GITHUB_STEP_SUMMARY=str(summary),
                        REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, RUN_ATTEMPT="1", API_KEY=secret)
-            env.pop("GITHUB_STEP_SUMMARY", None)
             subprocess.run([sys.executable, str(ROOT / "review.py"), "publish", "--work", str(work)],
                            env=env, check=True, capture_output=True)
             body = json.loads((work / "comment.json").read_text())["body"]
             self.assertNotIn(secret, body)
             self.assertIn("[REDACTED]", body)
+            summary_text = summary.read_text()
+            self.assertNotIn(secret, summary_text)
+            self.assertIn("[REDACTED]", summary_text)
 
 
 FAKE_CLAUDE = textwrap.dedent("""\
@@ -552,6 +557,15 @@ class PrepareContext(unittest.TestCase):
             self.assertIn("no trae símbolos identificables", (work / "callers.txt").read_text())
             self.assertIn("Ninguna prueba menciona", (work / "tests.txt").read_text())
             self.assertIn("no tiene CLAUDE.md", (work / "conventions.md").read_text())
+
+    def test_build_tests_finds_coverage_buried_under_common_stem_noise(self):
+        pool = [f"src/noise{i}.py" for i in range(review.TESTS_MAX_RESULTS + 1)]
+        pool.append("tests/test_app.py")
+        with mock.patch.object(review, "grep_files",
+                               side_effect=lambda patterns, limit: pool[:limit + 1]):
+            text = review.build_tests(["src/app.py"])
+        self.assertIn("- tests/test_app.py", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
 
 
 class MaxTurns(unittest.TestCase):

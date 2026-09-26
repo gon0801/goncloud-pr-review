@@ -354,7 +354,7 @@ def build_tests(reviewed):
         name = path.rsplit("/", 1)[-1]
         stem = name.rsplit(".", 1)[0] if "." in name else name
         patterns = [p for p in (stem, name) if len(p) >= 3]
-        for match in grep_files(patterns, TESTS_MAX_RESULTS):
+        for match in grep_files(patterns, TESTS_MAX_RESULTS * 5):
             if match not in seen and looks_like_test(match):
                 seen.add(match)
                 lines.append(f"- {match} (menciona `{stem}`)")
@@ -708,7 +708,7 @@ def cmd_publish(args):
         banner = caution_banner(reason, head, has_previous=has_previous)
         body = insert_caution_banner(sticky["body"], banner) if sticky else f"{MARKER}\n{banner}"
         body = redact(body, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
-        summary_text = banner
+        summary_text = redact(banner, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
     else:
         body = redact(compose(result, manifest, sha=head, provider=name),
                       [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
