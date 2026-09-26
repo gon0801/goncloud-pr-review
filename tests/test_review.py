@@ -408,6 +408,24 @@ class RunAgent(unittest.TestCase):
         self.assertIn("ai-review: el intento excedió el tiempo límite", proc.stderr)
         self.assertIn("ai-review: últimas líneas del proxy LiteLLM:", proc.stderr)
         self.assertIn("INFO: POST /v1/messages HTTP/1.1 429 Too Many Requests", proc.stderr)
+        self.assertEqual(result, {review.ERROR_KEY: "la revisión excedió el tiempo límite de 1 s; "
+                                                    "no se reintenta porque otro intento tardaría lo mismo"})
+
+    def test_timed_out_attempt_is_not_retried(self):
+        proc, _, result, _, _ = self.run_agent(OK_REPLY, provider="deepseek", FAKE_CLAUDE_SLEEP="5",
+                                               ATTEMPT_TIMEOUT="1", ATTEMPTS="2")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("intento 1/2", proc.stdout)
+        self.assertNotIn("intento 2/2", proc.stdout)
+        self.assertIn("excedió el tiempo límite de 1 s", result[review.ERROR_KEY])
+
+    def test_retry_is_skipped_when_the_budget_cannot_fit_it(self):
+        proc, calls, result, _, _ = self.run_agent({"result": "overloaded", "is_error": True, "api_error_status": 529},
+                                                   provider="deepseek", REVIEW_BUDGET_SECONDS="100")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertRegex(proc.stdout, r"intento 1/2 con deepseek \(límite (6[5-9]|70) s\)")
+        self.assertIn("no queda tiempo para otro intento", proc.stderr)
         self.assertEqual(result, {review.ERROR_KEY: "la revisión falló en todos los intentos (proveedor no disponible por ahora)"})
 
     def test_deepseek_api_gets_the_key_directly_and_github_token_is_withheld(self):
@@ -640,7 +658,9 @@ class Install(unittest.TestCase):
             (bindir / "npm").chmod(0o755)
             venv = tmp / "venv"
             (venv / "bin").mkdir(parents=True)
-            (venv / "ai-review-version.txt").write_text(review.LITELLM_VERSION + "\n")
+            (venv / "ai-review-version.txt").write_text(review.venv_stamp() + "\n")
+            (venv / "bin" / "python").write_text("#!/bin/sh\nexit 0\n")
+            (venv / "bin" / "python").chmod(0o755)
             work = tmp / "work"
             path_file = tmp / "github_path"
             path_file.write_text("")
@@ -715,6 +735,79 @@ class Install(unittest.TestCase):
             self.assertFalse((tmp / "log").exists())
             result = json.loads((work / "result.json").read_text())
             self.assertIn("no se pudo instalar", result[review.ERROR_KEY])
+
+
+class TimeBudget(unittest.TestCase):
+    def test_attempt_time_scales_with_turn_cap(self):
+        self.assertEqual([review.attempt_timeout_for(t) for t in (10, 25, 40, 60)], [300, 375, 600, 900])
+
+    def test_measured_long_review_fits_its_attempt(self):
+        # Orbit run 36208215400: 48 turns (cap 40 tier would stop earlier) took 492 s.
+        self.assertGreaterEqual(review.attempt_timeout_for(40), 492)
+
+    def test_worst_case_fits_the_job_timeout(self):
+        install_prepare_publish = 180
+        self.assertLess(review.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
+        self.assertLessEqual(review.attempt_timeout_for(60), review.REVIEW_BUDGET_SECONDS - 30)
+
+
+class LitellmVenv(unittest.TestCase):
+    def make_venv(self, tmp, stamp, python_exit):
+        venv = Path(tmp) / "venv"
+        (venv / "bin").mkdir(parents=True)
+        (venv / "ai-review-version.txt").write_text(stamp + "\n")
+        (venv / "bin" / "python").write_text(f"#!/bin/sh\nexit {python_exit}\n")
+        (venv / "bin" / "python").chmod(0o755)
+        (venv / "stale.txt").write_text("old")
+        return venv
+
+    def ensure(self, venv):
+        built = []
+        def fake_build(path):
+            built.append(path)
+            (path / "bin").mkdir(parents=True)
+        review.ensure_litellm_venv(venv, build=fake_build)
+        return built
+
+    def test_valid_cache_is_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = self.make_venv(tmp, review.venv_stamp(), python_exit=0)
+            self.assertEqual(self.ensure(venv), [])
+            self.assertTrue((venv / "stale.txt").exists())
+
+    def test_cache_that_cannot_import_litellm_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = self.make_venv(tmp, review.venv_stamp(), python_exit=1)
+            self.assertEqual(self.ensure(venv), [venv])
+            self.assertFalse((venv / "stale.txt").exists())
+            self.assertEqual((venv / "ai-review-version.txt").read_text(), review.venv_stamp() + "\n")
+
+    def test_cache_built_for_another_python_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = self.make_venv(tmp, f"{review.LITELLM_VERSION} py2.7", python_exit=0)
+            self.assertEqual(self.ensure(venv), [venv])
+
+
+class TestFileDetection(unittest.TestCase):
+    def test_only_real_test_paths_count(self):
+        cases = {
+            "tests/test_review.py": True,
+            "pkg/foo_test.go": True,
+            "web/app.spec.ts": True,
+            "web/app.test.js": True,
+            "src/__tests__/view.js": True,
+            "spec/models/user_spec.rb": True,
+            "src/test/java/FooTest.java": True,
+            "src/main/java/TestUtils.java": True,
+            "src/inspect.py": False,
+            "docs/latest.md": False,
+            "contest/entry.py": False,
+            "specification.md": False,
+            "review.py": False,
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(review.looks_like_test(path), expected)
 
 
 class Workflows(unittest.TestCase):

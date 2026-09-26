@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -80,10 +81,15 @@ estas entre sin sobre hasta desde donde porque cuando muy mucho tambien solo
 cada dos son esta estan hay ser fue eran ello esto eso aqui alli ahora antes
 """.split())
 
-# Dynamic turn cap (A4): (diff bytes, files) tiers. Worst case stays well under the
-# 30 min job timeout: 2 attempts x 480 s + 30 s retry + 60 s proxy start + ~90 s
-# install ~= 19 min, leaving ~11 min of margin.
-ATTEMPT_TIMEOUT = "480"
+# Time budget (A4). Real reviews took 5-13 s per turn (Orbit: 48 turns in 492 s), so an
+# attempt gets SECONDS_PER_TURN per allowed turn instead of a flat cap that cuts long
+# reviews short. The whole run step (proxy start + attempts + retry wait) must fit in
+# REVIEW_BUDGET_SECONDS; with install, prepare and publish (~3 min) that stays under the
+# 30 min job limit. A timed-out attempt is not retried: another one would take as long.
+SECONDS_PER_TURN = 15
+MIN_ATTEMPT_SECONDS = 300
+REVIEW_BUDGET_SECONDS = 1320
+MIN_RETRY_SECONDS = 180
 RETRY_DELAY = "30"
 PROXY_START_TIMEOUT = "60"
 
@@ -340,11 +346,19 @@ def build_callers(reviewed, chunks):
     return text
 
 
+TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs"})
+TEST_NAME_RE = re.compile(r"^(test|spec)s?([_.-]|$)|[_.-](test|spec)s?$")
+TEST_CAMEL_RE = re.compile(r"^Tests?[A-Z_]|[a-z0-9]Tests?$")
+
+
 def looks_like_test(path):
-    low = path.lower()
-    parts = low.split("/")[:-1]
-    return ("test" in low or "spec" in low or "tests" in parts or "test" in parts
-            or "__tests__" in parts or "spec" in parts)
+    parts = path.split("/")
+    name = parts[-1]
+    stem = name.split(".", 1)[0]
+    return (any(p.lower() in TEST_DIRS for p in parts[:-1])
+            or bool(TEST_NAME_RE.search(stem.lower()))
+            or ".test." in name.lower() or ".spec." in name.lower()
+            or bool(TEST_CAMEL_RE.search(stem)))
 
 
 def build_tests(reviewed):
@@ -524,11 +538,49 @@ def start_proxy(work, provider, key, session):
     return None
 
 
+def attempt_timeout_for(max_turns):
+    return max(MIN_ATTEMPT_SECONDS, SECONDS_PER_TURN * max_turns)
+
+
 def litellm_venv():
     override = os.environ.get("LITELLM_VENV")
     if override:
         return Path(override)
     return Path.home() / ".cache" / "ai-review" / "litellm-venv"
+
+
+def venv_stamp():
+    return f"{LITELLM_VERSION} py{sys.version_info[0]}.{sys.version_info[1]}"
+
+
+def venv_ready(venv):
+    marker = venv / "ai-review-version.txt"
+    if not marker.exists() or marker.read_text().strip() != venv_stamp():
+        return False
+    try:
+        probe = subprocess.run([str(venv / "bin" / "python"), "-c", "import litellm"],
+                               capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def build_litellm_venv(venv):
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+    subprocess.run([str(venv / "bin/pip"), "install", "--quiet", "--disable-pip-version-check",
+                    f"litellm[proxy]=={LITELLM_VERSION}"], check=True)
+
+
+def ensure_litellm_venv(venv, build=build_litellm_venv):
+    """Reuse a cached venv only if it was built for this litellm AND this Python, and imports."""
+    if venv_ready(venv):
+        print(f"ai-review: litellm {LITELLM_VERSION} ya instalado (caché); se omite pip")
+        return
+    if venv.exists():
+        print("ai-review: la caché de litellm no sirve con este Python; se reconstruye")
+        shutil.rmtree(venv)
+    build(venv)
+    (venv / "ai-review-version.txt").write_text(venv_stamp() + "\n")
 
 
 def claude_version_ok():
@@ -551,15 +603,7 @@ def cmd_install(args):
                             f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"], check=True)
         if provider["via_proxy"]:
             venv = litellm_venv()
-            marker = venv / "ai-review-version.txt"
-            if marker.exists() and marker.read_text().strip() == LITELLM_VERSION:
-                print(f"ai-review: litellm {LITELLM_VERSION} ya instalado (caché); se omite pip")
-            else:
-                if not (venv / "bin" / "pip").exists():
-                    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-                subprocess.run([str(venv / "bin/pip"), "install", "--quiet", "--disable-pip-version-check",
-                                f"litellm[proxy]=={LITELLM_VERSION}"], check=True)
-                marker.write_text(LITELLM_VERSION + "\n")
+            ensure_litellm_venv(venv)
             with open(os.environ["GITHUB_PATH"], "a") as fh:
                 fh.write(f"{venv / 'bin'}\n")
     except (subprocess.CalledProcessError, OSError) as exc:
@@ -570,6 +614,7 @@ def cmd_install(args):
 
 
 def cmd_run(args):
+    deadline = time.monotonic() + int(os.environ.get("REVIEW_BUDGET_SECONDS", REVIEW_BUDGET_SECONDS))
     work = Path(args.work)
     name, provider = get_provider()
     model = provider["model"]
@@ -643,7 +688,8 @@ def cmd_run(args):
     })
 
     try:
-        run_agent(cmd, child_env, result_path, name)
+        attempt_timeout = int(os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns))
+        run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
     finally:
         if proxy:
             proxy.terminate()
@@ -657,20 +703,26 @@ def print_proxy_log(work):
               file=sys.stderr)
 
 
-def run_agent(cmd, child_env, result_path, name):
+def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
     for attempt in range(1, attempts + 1):
-        print(f"ai-review: intento {attempt}/{attempts} con {name}", flush=True)
+        remaining = int(deadline - time.monotonic())
+        if attempt > 1 and remaining < MIN_RETRY_SECONDS:
+            print(f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)", file=sys.stderr)
+            break
+        timeout = max(1, min(attempt_timeout, remaining - 30))
+        print(f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)", flush=True)
         try:
             proc = subprocess.run(cmd, env=child_env, text=True, capture_output=True, stdin=subprocess.DEVNULL,
-                                  timeout=int(os.environ.get("ATTEMPT_TIMEOUT", ATTEMPT_TIMEOUT)))
+                                  timeout=timeout)
         except FileNotFoundError:
             soft_fail(result_path, "no se encontró el binario de claude (falló la instalación)")
             return
         except subprocess.TimeoutExpired as exc:
             print(f"ai-review: el intento excedió el tiempo límite\n{(exc.stderr or b'').decode(errors='replace')[-4000:]}", file=sys.stderr)
             print_proxy_log(result_path.parent)
-            continue
+            soft_fail(result_path, f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo")
+            return
         sys.stderr.write(proc.stderr[-4000:])
         try:
             result = json.loads(proc.stdout)

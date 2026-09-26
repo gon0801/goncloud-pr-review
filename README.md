@@ -8,7 +8,7 @@ Cada repo lleva un workflow chico (`.github/workflows/ai-review.yml`, copia de `
 
 1. **Gate.** Busca el comentario fijo del bot en el PR. Si ya revisó exactamente ese commit, termina sin gastar tokens.
 2. **Prepare.** Calcula el diff contra el merge-base y saca lockfiles, binarios, `dist/`, `build/` y `vendor/` de la raíz, `node_modules/` a cualquier profundidad, y lo que el repo agregue en `exclude`. Ordena lo restante con el código primero, luego config y al final docs. Si el diff pasa de `max_diff_bytes`, lo que no cabe queda listado como no revisado. También precalcula sin gastar turnos quién usa los símbolos cambiados, qué pruebas los mencionan y las convenciones del repo.
-3. **Install.** Instala Claude Code con la versión fijada (con caché entre corridas). Si la instalación falla, no tumba el check: sigue el mismo camino suave que cualquier otra falla de infraestructura.
+3. **Install.** Instala Claude Code y LiteLLM con la versión fijada. La caché solo se comparte dentro del mismo PR (así la acota GitHub): la primera revisión de cada PR instala en frío (~45 s) y las siguientes la reusan. El entorno de LiteLLM en caché se prueba antes de usarlo y se reconstruye si no arranca con el Python de la máquina. Si la instalación falla, no tumba el check: sigue el mismo camino suave que cualquier otra falla de infraestructura.
 4. **Review.** Corre `claude -p` con `--restricted --safe-mode --strict-mcp-config --tools Read,Grep,Glob` y un tope de turnos según el tamaño del diff (`max_turns: auto` = 25/40/60). No puede ejecutar código, escribir archivos, salir a la red, ni leer fuera del checkout y del directorio de trabajo. También ignora los settings, hooks, MCP y CLAUDE.md que traiga el PR. Con OpenCode Go, Claude Code habla con un proxy LiteLLM local (versión fijada) que traduce a `/chat/completions`, porque Go solo sirve DeepSeek en formato OpenAI. Solo el proxy tiene la llave; Claude Code recibe un token desechable por corrida. Si falla por algo transitorio, reintenta una vez; si es 400/401/403/404, no reintenta. Ninguna de estas fallas tumba el check en rojo: si el equipo del repo no puede arreglarlas (falta la llave, el proxy no arrancó, el proveedor está caído), el job termina en verde con una anotación amarilla y Publish agrega el aviso "No se pudo revisar..." sin marcar el commit como revisado.
 5. **Publish.** Edita el comentario fijo del PR, o lo crea si no existe. El comentario lleva un marcador oculto con el SHA revisado. Antes de publicar se borra del texto cualquier aparición de la API key o del token. Si el paso anterior falló por algo de infraestructura, este commit no se marca como revisado: si ya había un comentario de una revisión anterior, se le agrega arriba un aviso "No se pudo revisar el commit..." sin tocar la revisión anterior; si no había comentario, se crea uno solo con el aviso. Así la próxima vez (otro push o un "Re-run jobs") se vuelve a intentar sobre este mismo commit.
 
@@ -35,7 +35,7 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 ## Operación
 
 - **Modelo.** Solo DeepSeek V4.1 Flash. No hay input para cambiarlo; los proveedores permitidos viven en `PROVIDERS` de `review.py` y cualquier otro valor de `provider` se rechaza.
-- **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite), porque el apagado lo maneja la action, no una condición del workflow.
+- **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite): el primer paso del workflow ve la variable, sin importar mayúsculas, y se salta el checkout y la action.
 - **Token propio.** Si pasas `github_token` de una GitHub App, pasa también `bot_login` con el login de esa App (por ejemplo `mi-app[bot]`). Solo los comentarios de ese login cuentan como la revisión fija.
 - **Pedir otra revisión del mismo commit.** En la pestaña Checks del PR, "Re-run jobs" sobre `AI review`. Un re-run se salta el gate a propósito.
 - **Revisión nueva.** Se hace sola con cada push.
@@ -59,8 +59,9 @@ Las fallas que el repo no puede arreglar (falta la llave, el proxy no arrancó, 
 | Síntoma | Causa probable |
 |---|---|
 | El job termina verde pero con una anotación amarilla en "Review" | Falta el secret `AI_REVIEW_API_KEY`, el proxy o Claude Code no arrancaron, o el proveedor devolvió un error; el detalle está en la anotación y, si aplica, en el aviso del comentario fijo |
-| El job falla en rojo de verdad | Un evento que no es `pull_request`, un `provider` inválido, una falla en Gate o Prepare (git o la API de GitHub), o "Publish" no pudo escribir el comentario (ver la fila de abajo) |
+| El job falla en rojo de verdad | Un evento que no es `pull_request`, un `provider` o `max_turns` inválido, una falla en Gate o Prepare (git o la API de GitHub), o "Publish" no pudo escribir el comentario (ver la fila de abajo) |
 | No aparece el job | El PR es draft o viene de un fork |
+| La anotación dice "excedió el tiempo límite" | El intento pasó de su tiempo máximo (15 s por turno permitido, mínimo 5 min). No se reintenta, porque otro intento tardaría lo mismo; el siguiente push o "Re-run jobs" lo vuelve a intentar |
 | El comentario dice "Revisión incompleta" | El diff pasó el presupuesto, se acabaron los turnos, o el revisor declaró cobertura parcial; el detalle viene en el mismo comentario |
 | Falla "Publish" con 403 | El workflow del repo no tiene `pull-requests: write` |
 
