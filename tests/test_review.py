@@ -864,6 +864,21 @@ class TimeBudget(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 15)
         self.assertEqual((done.returncode, json.loads(done.stdout)["result"]), (0, "ok"))
 
+    def test_descendant_that_escapes_the_group_still_yields_text_output(self):
+        script = textwrap.dedent("""\
+            import subprocess, sys
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+            print("aviso en stderr", file=sys.stderr, flush=True)
+            print('{"result": "ok", "subtype": "success"}', flush=True)
+        """)
+        start = time.monotonic()
+        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertIsInstance(done.stdout, str)
+        self.assertIsInstance(done.stderr, str)
+        self.assertEqual((done.returncode, json.loads(done.stdout)["result"], done.stderr.strip()),
+                         (0, "ok", "aviso en stderr"))
+
     def test_action_cache_path_matches_the_install_dirs(self):
         action = (ROOT / "action.yml").read_text()
         cache_step = action[action.index("uses: actions/cache"):]

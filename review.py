@@ -1338,6 +1338,11 @@ def print_proxy_log(work):
               file=sys.stderr)
 
 
+def as_text(value):
+    """TimeoutExpired carries bytes even with text=True; everything downstream wants str."""
+    return value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
+
+
 def run_in_group(cmd, env, timeout):
     """subprocess.run with a timeout that kills the whole process group.
 
@@ -1362,7 +1367,7 @@ def run_in_group(cmd, env, timeout):
             proc.stdout.close()
             proc.stderr.close()
             proc.wait()
-            out, err = exc.output or "", exc.stderr or ""
+            out, err = as_text(exc.output), as_text(exc.stderr)
         if finished:
             return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from exc
@@ -1384,8 +1389,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
             soft_fail(result_path, "no se encontró el binario de claude (falló la instalación)")
             return
         except subprocess.TimeoutExpired as exc:
-            err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
-            print(f"ai-review: el intento excedió el tiempo límite\n{err[-4000:]}", file=sys.stderr)
+            print(f"ai-review: el intento excedió el tiempo límite\n{as_text(exc.stderr)[-4000:]}", file=sys.stderr)
             print_proxy_log(result_path.parent)
             soft_fail(result_path, f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo")
             return
