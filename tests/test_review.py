@@ -641,6 +641,25 @@ class Install(unittest.TestCase):
             self.assertIn("se omite npm", proc.stdout)
             self.assertIn("se omite pip", proc.stdout)
 
+    def test_cold_install_without_claude_binary_runs_npm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "npm").write_text(f'#!/bin/sh\necho called >> "{tmp}/npm.log"\nexit 0\n')
+            (bindir / "npm").chmod(0o755)
+            work = tmp / "work"
+            path_file = tmp / "github_path"
+            path_file.write_text("")
+            env = dict(os.environ, PATH=f"{bindir}:/usr/bin:/bin", PROVIDER="deepseek",
+                       LITELLM_VENV=str(tmp / "venv"), GITHUB_PATH=str(path_file))
+            proc = subprocess.run([sys.executable, str(ROOT / "review.py"), "install",
+                                   "--work", str(work)],
+                                  env=env, capture_output=True, text=True, timeout=120)
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertTrue((tmp / "npm.log").exists(), "npm debió correr cuando falta el binario claude")
+            self.assertFalse((work / "install_error.txt").exists())
+
     def test_install_failure_is_soft_not_red(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

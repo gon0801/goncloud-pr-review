@@ -499,16 +499,16 @@ def start_proxy(work, provider, key, session):
     config = work / "litellm.yaml"
     config.write_text(json.dumps(litellm_config(provider, session)))
     master = "sk-" + secrets.token_hex(16)
-    log = open(work / "litellm.log", "w")
-    try:
-        proc = subprocess.Popen(
-            [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
-            stdout=log, stderr=subprocess.STDOUT,
-            env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
-                 "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
-    except FileNotFoundError:
-        print("ai-review: no se encontró el binario de litellm", file=sys.stderr)
-        return None
+    with open(work / "litellm.log", "w") as log:
+        try:
+            proc = subprocess.Popen(
+                [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
+                stdout=log, stderr=subprocess.STDOUT,
+                env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
+                     "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
+        except FileNotFoundError:
+            print("ai-review: no se encontró el binario de litellm", file=sys.stderr)
+            return None
     base_url = f"http://127.0.0.1:{port}"
     deadline = time.time() + int(os.environ.get("PROXY_START_TIMEOUT", PROXY_START_TIMEOUT))
     while time.time() < deadline:
@@ -532,7 +532,10 @@ def litellm_venv():
 
 
 def claude_version_ok():
-    found = sh("claude", "--version", check=False)
+    try:
+        found = sh("claude", "--version", check=False)
+    except FileNotFoundError:
+        return False
     return found.returncode == 0 and CLAUDE_CODE_VERSION in (found.stdout or "")
 
 
