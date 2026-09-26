@@ -47,6 +47,28 @@ PROVIDERS = {
         "via_proxy": False,
         "prices": (0.30, 0.006, 1.20),
     },
+    "go-mimo": {
+        "label": "MiMo-V2.6-Flash · OpenCode Go",
+        "model": "mimo-v2.6-flash",
+        "upstream": "https://opencode.ai/zen/go/v1",
+        "via_proxy": True,
+        "prices": None,
+    },
+    "go-glm": {
+        "label": "GLM 5.3 Flash · OpenCode Go",
+        "model": "glm-5.3-flash",
+        "upstream": "https://opencode.ai/zen/go/v1",
+        "via_proxy": True,
+        "prices": None,
+    },
+    "go-luna": {
+        "label": "GPT 6 Luna · OpenCode Go",
+        "model": "gpt-6-luna",
+        "upstream": "https://opencode.ai/zen/go/v1",
+        "via_proxy": True,
+        "chat": False,
+        "prices": None,
+    },
 }
 CLAUDE_CODE_VERSION = "2.1.282"
 LITELLM_VERSION = "1.102.1"
@@ -321,7 +343,8 @@ def litellm_config(provider, session):
                 "extra_headers": {"User-Agent": "goncloud-pr-review/1.0", "x-opencode-session": session},
             },
         }],
-        "litellm_settings": {"drop_params": True, "use_chat_completions_url_for_anthropic_messages": True},
+        "litellm_settings": {"drop_params": True,
+                             "use_chat_completions_url_for_anthropic_messages": provider.get("chat", True)},
         "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY"},
     }
 

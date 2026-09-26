@@ -1,0 +1,88 @@
+name: bakeoff
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+env:
+  TARGET_HEAD: b2b64d7dc8255bcb1eb29b81b71496705a036e20
+  TARGET_BASE: 48c43a90ae593c12f7777fdb67381f8e1d139cbc
+
+jobs:
+  models:
+    if: github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Modelos disponibles en OpenCode Go
+        env:
+          KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+        run: |
+          curl -sS https://opencode.ai/zen/go/v1/models -H "Authorization: Bearer $KEY" \
+            | python3 -c "import sys, json; print('\n'.join(sorted(m['id'] for m in json.load(sys.stdin)['data'])))"
+
+  run:
+    if: github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [opencode-go, go-mimo, go-glm, go-luna]
+        attempt: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tool
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: python3 tool/review.py install
+      - name: Prepare
+        working-directory: target
+        run: |
+          git cat-file -e "$TARGET_BASE^{commit}" 2>/dev/null || git fetch --quiet origin "$TARGET_BASE"
+          echo '{"pull_request":{"title":"refactor: rename compose sha kwarg and tighten redact threshold","body":"Renombra el kwarg de compose para que sea explícito y sube el umbral de redact."}}' > "$RUNNER_TEMP/event.json"
+          HEAD_SHA="$TARGET_HEAD" BASE_SHA="$TARGET_BASE" GITHUB_EVENT_PATH="$RUNNER_TEMP/event.json" \
+            python3 ../tool/review.py prepare --prompt ../tool/prompt.md
+      - name: Review
+        working-directory: target
+        env:
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          PROVIDER: ${{ matrix.provider }}
+          REPO: gon0801/goncloud-pr-review
+          PR_NUMBER: "3"
+          ATTEMPTS: "1"
+        run: |
+          start=$(date +%s)
+          python3 ../tool/review.py run
+          echo "$(( $(date +%s) - start ))" > "$RUNNER_TEMP/ai-review/seconds"
+      - name: Report
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          ATTEMPT: ${{ matrix.attempt }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          work = os.path.join(os.environ["RUNNER_TEMP"], "ai-review")
+          r = json.load(open(os.path.join(work, "result.json")))
+          secs = open(os.path.join(work, "seconds")).read().strip()
+          print("BAKEOFF " + json.dumps({
+              "provider": os.environ["PROVIDER"], "attempt": os.environ["ATTEMPT"], "seconds": secs,
+              "error": r.get("error"), "subtype": r.get("subtype"), "turns": r.get("num_turns"),
+              "usage": {k: (r.get("usage") or {}).get(k) for k in
+                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")},
+          }))
+          print("BAKEOFF_TEXT_START")
+          print(r.get("result") or "")
+          print("BAKEOFF_TEXT_END")
+          PY
