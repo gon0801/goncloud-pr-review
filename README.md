@@ -38,7 +38,8 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 - **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite): el primer paso del workflow ve la variable, sin importar mayúsculas, y se salta el checkout y la action. Eso es de la plantilla nueva; en los repos que ya tienen el workflow viejo, la action igual termina en verde sin revisar, pero antes hace el checkout.
 - **Token propio.** Si pasas `github_token` de una GitHub App, pasa también `bot_login` con el login de esa App (por ejemplo `mi-app[bot]`). Solo los comentarios de ese login cuentan como la revisión fija.
 - **Pedir otra revisión del mismo commit.** En la pestaña Checks del PR, "Re-run jobs" sobre `AI review`. Un re-run se salta el gate a propósito.
-- **Revisión nueva.** Se hace sola con cada push.
+- **Revisión nueva.** Se hace sola con cada push. Del segundo push en adelante es incremental: solo revisa lo que cambió desde la última revisión (tope de 20 turnos), verifica los hallazgos abiertos y conserva sus ids (F1, F2, ...). El veredicto cuenta solo los abiertos; los resueltos y descartados van plegados. Si el push es un rebase (el commit anterior ya no es ancestro), se revisa todo de nuevo pero se conservan los descartes.
+- **Descartar un hallazgo.** Comenta en el PR `ai-review: descartar F3` (o `ai-review: descartar todo`) y se aplica en el siguiente push: ese hallazgo no vuelve a salir. Solo cuenta si lo escribe alguien con permiso de escritura en el repo (el revisor lo verifica con el endpoint de colaboradores usando el mismo token del comentario); los comentarios de terceros se ignoran.
 
 ## Proveedor y costo
 

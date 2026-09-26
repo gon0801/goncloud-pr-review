@@ -881,5 +881,569 @@ class Workflows(unittest.TestCase):
             self.assertIn(token, prompt)
 
 
+def make_finding(fid="F1", file="src/app.py", line=10, severity="High", title="Bug", state="open"):
+    return {"id": fid, "file": file, "line": line, "severity": severity, "title": title, "state": state}
+
+
+def block_of(*findings, next=None):
+    ids = [f.get("id") for f in findings
+           if isinstance(f, dict) and review.finding_number(f.get("id"))]
+    n = next if next is not None else ((max(int(i[1:]) for i in ids) + 1) if ids else 1)
+    return review.FINDINGS_PREFIX + json.dumps({"findings": list(findings), "next": n}) + review.FINDINGS_SUFFIX
+
+
+class FindingsBlock(unittest.TestCase):
+    def test_valid_block_round_trips(self):
+        state = review.parse_findings_block(block_of(make_finding(), make_finding("F2", state="resolved")))
+        self.assertEqual([f["id"] for f in state["findings"]], ["F1", "F2"])
+        self.assertEqual(state["next"], 3)
+        self.assertEqual(review.parse_findings_block(review.serialize_findings(state)), state)
+
+    def test_missing_block_returns_none(self):
+        self.assertIsNone(review.parse_findings_block("**Veredicto:** ok"))
+        self.assertIsNone(review.parse_findings_block(""))
+        self.assertIsNone(review.parse_findings_block(None))
+
+    def test_broken_json_returns_none(self):
+        self.assertIsNone(review.parse_findings_block(review.FINDINGS_PREFIX + "{oops" + review.FINDINGS_SUFFIX))
+        self.assertIsNone(review.parse_findings_block(review.FINDINGS_PREFIX + "sin cierre"))
+
+    def test_findings_must_be_a_list(self):
+        for blob in ('{"findings": {}}', '{"next": 1}', '[]', '"x"'):
+            with self.subTest(blob=blob):
+                self.assertIsNone(review.parse_findings_block(review.FINDINGS_PREFIX + blob + review.FINDINGS_SUFFIX))
+
+    def test_bad_entries_dropped_and_fields_normalized(self):
+        state = review.parse_findings_block(block_of(
+            make_finding("F1", severity="high"), make_finding("F2", severity="bogus", line="x"),
+            make_finding("F-new"), {"id": "F3", "file": "", "title": "sin archivo"},
+            {"id": "F4", "file": "a.py", "title": "", "line": -5}, "no-dict"))
+        by_id = {f["id"]: f for f in state["findings"]}
+        self.assertEqual(by_id["F1"]["severity"], "High")
+        self.assertEqual((by_id["F2"]["severity"], by_id["F2"]["line"]), ("Medium", 0))
+        self.assertIsNone(by_id[None]["id"])
+        self.assertNotIn("F3", by_id)
+        self.assertNotIn("F4", by_id)
+
+    def test_next_counter_is_repaired_when_too_small(self):
+        state = review.parse_findings_block(block_of(make_finding("F5"), next=1))
+        self.assertEqual(state["next"], 6)
+
+    def test_model_cannot_dismiss(self):
+        state = review.parse_model_findings(block_of(make_finding("F1", state="dismissed")))
+        self.assertEqual(state["findings"][0]["state"], "open")
+
+    def test_block_position_before_or_after_coverage(self):
+        block = block_of(make_finding())
+        text = f"**Veredicto:** x\n\n{block}\nCOVERAGE: complete"
+        self.assertEqual(review.split_coverage(text)[1], "complete")
+        self.assertIsNotNone(review.parse_findings_block(text))
+        misplaced = f"**Veredicto:** x\nCOVERAGE: complete\n{block}"
+        self.assertIsNone(review.split_coverage(misplaced)[1], "la cobertura queda desconocida")
+        self.assertIsNotNone(review.parse_findings_block(misplaced), "la memoria bien formada se conserva")
+
+    def test_serialize_never_drops_open_and_fits_budget(self):
+        findings = [make_finding(f"F{i}", title="t" * 160) for i in range(1, 61)]
+        findings += [make_finding(f"F{i}", state="resolved") for i in range(61, 71)]
+        block = review.serialize_findings({"findings": findings, "next": 71})
+        self.assertLessEqual(len(block), review.FINDINGS_MAX_BYTES)
+        back = review.parse_findings_block(block)
+        self.assertEqual(sum(1 for f in back["findings"] if f["state"] == "open"), 60)
+        self.assertLessEqual(len(back["findings"]), review.FINDINGS_MAX_COUNT)
+        self.assertEqual(back["next"], 71)
+
+    def test_title_cannot_break_the_comment(self):
+        state = {"findings": [make_finding("F1", title="a --> b\nnueva línea")], "next": 2}
+        block = review.serialize_findings(state)
+        self.assertEqual(block.count(review.FINDINGS_SUFFIX.strip()), 1)
+        back = review.parse_findings_block(block)
+        self.assertEqual(back["findings"][0]["title"], "a --\u203a b nueva línea")
+
+
+class DismissCommands(unittest.TestCase):
+    def test_parse_single_multiple_and_all(self):
+        self.assertEqual(review.parse_dismiss_command("ai-review: descartar F3"), ({"F3"}, False))
+        self.assertEqual(review.parse_dismiss_command("AI-REVIEW: DESCARTAR f1, F2"), ({"F1", "F2"}, False))
+        self.assertEqual(review.parse_dismiss_command("ai-review: descartar F01"), ({"F1"}, False))
+        self.assertEqual(review.parse_dismiss_command("ai-review: descartar todo"), (set(), True))
+        self.assertEqual(review.parse_dismiss_command("ai-review: descartar F3 y todo lo demás"), ({"F3"}, True))
+
+    def test_parse_ignores_other_text(self):
+        for body in ("descartar F3", "ai-review: hola", "mira F3", "", None):
+            with self.subTest(body=body):
+                self.assertEqual(review.parse_dismiss_command(body), (set(), False))
+
+    def test_only_writer_plus_counts_and_bot_is_ignored(self):
+        comments = [
+            {"user": "owner", "body": "ai-review: descartar F1"},
+            {"user": "owner", "body": "ai-review: descartar F2"},
+            {"user": "reader", "body": "ai-review: descartar F3"},
+            {"user": "ghost", "body": "ai-review: descartar todo"},
+            {"user": "github-actions[bot]", "body": "ai-review: descartar F4"},
+        ]
+        perms = {"owner": "write", "reader": "read", "ghost": None}
+        with mock.patch.object(review, "collaborator_permission",
+                               side_effect=lambda repo, user: perms[user]) as perm:
+            self.assertEqual(review.collect_dismissals("o/r", "7", "github-actions[bot]", comments),
+                             ({"F1", "F2"}, False))
+            self.assertEqual(perm.call_count, 3, "el permiso se revisa una vez por autor")
+
+    def test_maintain_and_admin_count_as_writer(self):
+        comments = [{"user": u, "body": "ai-review: descartar todo"} for u in ("m", "a")]
+        with mock.patch.object(review, "collaborator_permission", side_effect=["maintain", "admin"]):
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments), (set(), True))
+
+    def test_permission_uses_collaborators_endpoint_without_token_in_args(self):
+        with mock.patch.object(review, "sh") as fake:
+            fake.return_value.stdout = "write\n"
+            self.assertEqual(review.collaborator_permission("o/r", "ana"), "write")
+            args = fake.call_args[0]
+            self.assertEqual(args[:3], ("gh", "api", "repos/o/r/collaborators/ana/permission"))
+            self.assertNotIn("GH_TOKEN", " ".join(a for a in args if isinstance(a, str)))
+
+    def test_unknown_user_is_not_writer(self):
+        with mock.patch.object(review, "sh") as fake:
+            fake.return_value.stdout = "\n"
+            self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
+            fake.side_effect = OSError("sin gh")
+            self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
+
+
+def merge(prev_list, model_list, **kw):
+    prev = {"findings": prev_list, "next": review.derive_next(prev_list)} if prev_list is not None else None
+    model = {"findings": model_list, "next": 99} if model_list is not None else None
+    args = {"changed_files": [], "base_same_files": set(), "dismiss_ids": set(), "dismiss_all": False}
+    args.update(kw)
+    return review.merge_findings(prev, model, **args)
+
+
+class ResolvedLock(unittest.TestCase):
+    def test_resolved_requires_own_file_changed(self):
+        merged, _ = merge([make_finding("F1")], [make_finding("F1", state="resolved")])
+        self.assertEqual(merged["findings"][0]["state"], "open")
+
+    def test_resolved_allowed_when_file_changed(self):
+        merged, _ = merge([make_finding("F1")], [make_finding("F1", state="resolved")],
+                           changed_files=["src/app.py"])
+        self.assertEqual(merged["findings"][0]["state"], "resolved")
+
+    def test_base_content_auto_resolves(self):
+        merged, _ = merge([make_finding("F1")], [make_finding("F1")],
+                           base_same_files={"src/app.py"})
+        self.assertEqual(merged["findings"][0]["state"], "resolved")
+
+    def test_auto_resolve_yields_to_dismissed(self):
+        merged, _ = merge([make_finding("F1", state="dismissed")], [make_finding("F1")],
+                           changed_files=["src/app.py"], base_same_files={"src/app.py"})
+        self.assertEqual(merged["findings"][0]["state"], "dismissed")
+
+    def test_cross_file_fix_stays_open(self):
+        merged, _ = merge([make_finding("F1")], [make_finding("F1", state="resolved")],
+                           changed_files=["src/other.py"])
+        self.assertEqual(merged["findings"][0]["state"], "open")
+
+    def test_dropped_prev_open_stays_open(self):
+        merged, _ = merge([make_finding("F1", title="Viejo"), make_finding("F2", file="b.py")],
+                           [make_finding("F2", file="b.py")], changed_files=["b.py"])
+        by_id = {f["id"]: f for f in merged["findings"]}
+        self.assertEqual((by_id["F1"]["state"], by_id["F1"]["title"]), ("open", "Viejo"))
+
+    def test_prev_resolved_stays_resolved_when_dropped(self):
+        merged, _ = merge([make_finding("F1", state="resolved")], [])
+        self.assertEqual(merged["findings"][0]["state"], "resolved")
+
+
+class FindingIds(unittest.TestCase):
+    def test_prev_ids_stable_across_merge(self):
+        merged, new_ids = merge([make_finding("F1", title="Viejo")],
+                                 [make_finding("F1", title="Nuevo", line=20)],
+                                 changed_files=["src/app.py"])
+        self.assertEqual(new_ids, [])
+        self.assertEqual(merged["findings"][0],
+                         make_finding("F1", line=20, title="Nuevo"))
+
+    def test_new_findings_get_sequential_ids(self):
+        prev = [make_finding("F1"), make_finding("F2")]
+        model = [dict(make_finding("F-new"), id=None), dict(make_finding("F-new"), id=None)]
+        merged, new_ids = merge(prev, model)
+        self.assertEqual(new_ids, ["F3", "F4"])
+        self.assertEqual(merged["next"], 5)
+        self.assertTrue(all(f["state"] == "open" for f in merged["findings"][2:]))
+
+    def test_unknown_model_ids_are_remapped(self):
+        merged, new_ids = merge([make_finding("F1")], [make_finding("F99")])
+        self.assertEqual(new_ids, ["F2"])
+        self.assertEqual([f["id"] for f in merged["findings"]], ["F1", "F2"])
+
+    def test_next_never_reuses(self):
+        prev = [make_finding("F1", state="dismissed"), make_finding("F2", state="resolved")]
+        merged, new_ids = merge(prev, [dict(make_finding("F-new"), id=None)])
+        self.assertEqual((new_ids, merged["next"]), (["F3"], 4))
+
+    def test_first_push_assigns_from_one(self):
+        merged, new_ids = merge(None, [dict(make_finding("F-new"), id=None),
+                                        dict(make_finding("F-new"), id=None)])
+        self.assertEqual((new_ids, merged["next"]), (["F1", "F2"], 3))
+
+    def test_dismiss_of_unknown_id_is_ignored(self):
+        merged, _ = merge([make_finding("F1")], [make_finding("F1")], dismiss_ids={"F9"})
+        self.assertEqual(merged["findings"][0]["state"], "open")
+        merged, _ = merge([make_finding("F1")], [make_finding("F1")],
+                           dismiss_ids={"F1"})
+        self.assertEqual(merged["findings"][0]["state"], "dismissed")
+
+
+class Fallback(unittest.TestCase):
+    def test_wellformed_block_survives_coverage_and_trim(self):
+        block = block_of(make_finding())
+        text = f"**Veredicto:** 1 High.\n\n{'detalle ' * 20000}\n\n{block}\nCOVERAGE: complete"
+        result = {"result": text, "usage": {"input_tokens": 10, "output_tokens": 5}, "num_turns": 7}
+        manifest = dict(MANIFEST, max_turns=60)
+        model = review.parse_model_findings(review.split_coverage(text)[0])
+        merged, new_ids = review.merge_findings(None, model, changed_files=["src/app.py"],
+                                                base_same_files=set(), dismiss_ids=set(),
+                                                dismiss_all=False)
+        body = review.compose(result, manifest, sha=SHA, provider="opencode-go",
+                              findings={"merged": merged["findings"], "new_ids": new_ids,
+                                        "block": review.serialize_findings(merged)})
+        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertEqual(review.parse_findings_block(body)["findings"], merged["findings"])
+        self.assertIn("recortada por el límite", body)
+
+    def test_missing_or_broken_block_keeps_last_parseable(self):
+        prev = [make_finding("F1"), make_finding("F2", state="resolved")]
+        for model in (None, review.parse_model_findings("**Veredicto:** x\nCOVERAGE: complete")):
+            with self.subTest(model=model):
+                merged, new_ids = merge(prev, model["findings"] if model else None)
+                self.assertEqual(new_ids, [])
+                self.assertEqual([(f["id"], f["state"]) for f in merged["findings"]],
+                                 [("F1", "open"), ("F2", "resolved")])
+
+    def test_fallback_still_applies_dismisses(self):
+        merged, _ = merge([make_finding("F1")], None, dismiss_ids={"F1"})
+        self.assertEqual(merged["findings"][0]["state"], "dismissed")
+
+    def test_empty_state_uses_legacy_body(self):
+        result = {"result": "**Veredicto:** 1 High.\n\nDetalle.\nCOVERAGE: complete"}
+        body = review.compose(result, MANIFEST, sha=SHA, provider="opencode-go",
+                              findings={"merged": [], "new_ids": [],
+                                        "block": review.serialize_findings({"findings": [], "next": 1})})
+        self.assertIn("**Veredicto:** 1 High.", body)
+        self.assertNotIn("## Nuevos en este push", body)
+        self.assertIsNotNone(review.parse_findings_block(body))
+
+
+class VerdictSections(unittest.TestCase):
+    def test_verdict_counts_only_open(self):
+        merged = [make_finding("F1", severity="High"), make_finding("F2", severity="Medium"),
+                  make_finding("F3", state="resolved"), make_finding("F4", state="dismissed")]
+        self.assertEqual(review.verdict_for(merged),
+                         "**Veredicto:** 1 High, 1 Medium abiertos (1 resuelto, 1 descartado).")
+
+    def test_verdict_all_closed(self):
+        merged = [make_finding("F1", state="resolved"), make_finding("F2", state="resolved")]
+        self.assertEqual(review.verdict_for(merged), "**Veredicto:** sin problemas abiertos (2 resueltos).")
+
+    def test_sections_layout(self):
+        merged = [make_finding("F1"), make_finding("F2"), make_finding("F3", state="resolved"),
+                  make_finding("F4", state="dismissed")]
+        body = review.compose({"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"}, MANIFEST,
+                              sha=SHA, provider="opencode-go",
+                              findings={"merged": merged, "new_ids": ["F2"],
+                                        "block": review.serialize_findings({"findings": merged, "next": 5})})
+        nuevos = body.index("## Nuevos en este push")
+        siguen = body.index("## Siguen abiertos")
+        self.assertIn("· F2", body[nuevos:siguen])
+        self.assertIn("· F1", body[siguen:])
+        self.assertIn("<details><summary>Resueltos (1)</summary>", body)
+        self.assertIn("<details><summary>Descartados (1)</summary>", body)
+        self.assertIn("## Detalle del revisor", body)
+
+    def test_model_verdict_replaced_not_duplicated(self):
+        merged = [make_finding("F1", severity="High")]
+        body = review.compose({"result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"},
+                              MANIFEST, sha=SHA, provider="opencode-go",
+                              findings={"merged": merged, "new_ids": ["F1"],
+                                        "block": review.serialize_findings({"findings": merged, "next": 2})})
+        self.assertEqual(body.count("**Veredicto:**"), 1)
+        self.assertIn("**Veredicto:** 1 High abierto.", body)
+
+    def test_block_right_after_sha_and_within_budgets(self):
+        merged = [make_finding("F1")]
+        body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
+                              MANIFEST, sha=SHA, provider="opencode-go",
+                              findings={"merged": merged, "new_ids": ["F1"],
+                                        "block": review.serialize_findings({"findings": merged, "next": 2})})
+        lines = body.split("\n")
+        self.assertEqual((lines[0], lines[2]), (review.MARKER, body.split("\n")[2]))
+        self.assertTrue(lines[2].startswith(review.FINDINGS_PREFIX))
+        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertIn("recortada por el límite", body)
+
+
+class Rebase(unittest.TestCase):
+    def test_decide_mode_matrix(self):
+        self.assertEqual(review.decide_mode(None, "h" * 40), ("full", "no-prev"))
+        self.assertEqual(review.decide_mode("h" * 40, "h" * 40), ("full", "same-sha"))
+        with mock.patch.object(review, "is_ancestor", return_value=False):
+            self.assertEqual(review.decide_mode("p" * 40, "h" * 40), ("full", "rebase"))
+        with mock.patch.object(review, "is_ancestor", return_value=True):
+            self.assertEqual(review.decide_mode("p" * 40, "h" * 40), ("incremental", ""))
+
+    def test_rebase_preserves_dismisses(self):
+        prev = [make_finding("F1", state="dismissed"), make_finding("F2")]
+        merged, _ = merge(prev, [make_finding("F2", state="resolved")],
+                           changed_files=["src/app.py"])
+        by_id = {f["id"]: f for f in merged["findings"]}
+        self.assertEqual(by_id["F1"]["state"], "dismissed")
+        self.assertEqual(by_id["F2"]["state"], "resolved")
+
+    def test_ancestry_and_base_match_with_real_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "app.py").write_text("v1\n")
+            (repo / "other.py").write_text("v1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "app.py").write_text("v2\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "prev")
+            prev = git(repo, "rev-parse", "HEAD")
+            (repo / "app.py").write_text("v1\n")
+            (repo / "other.py").write_text("v2\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "head")
+            head = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "--orphan", "huérfana")
+            git(repo, "commit", "-qam", "otra historia")
+            orphan = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "main")
+            old = os.getcwd()
+            os.chdir(repo)
+            try:
+                self.assertTrue(review.is_ancestor(prev, head))
+                self.assertTrue(review.is_ancestor(base, head))
+                self.assertFalse(review.is_ancestor(head, prev))
+                self.assertFalse(review.is_ancestor(orphan, head))
+                self.assertEqual(review.files_matching_base(["app.py", "other.py"], base, head), {"app.py"})
+            finally:
+                os.chdir(old)
+
+
+class IncrementalPrepare(unittest.TestCase):
+    def make_repo(self, tmp):
+        repo, work = Path(tmp, "repo"), Path(tmp, "work")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@t")
+        git(repo, "config", "user.name", "t")
+        (repo / "app.py").write_text("v1\n")
+        (repo / "other.py").write_text("v1\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        base = git(repo, "rev-parse", "HEAD")
+        (repo / "app.py").write_text("v2\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "prev")
+        prev = git(repo, "rev-parse", "HEAD")
+        (repo / "other.py").write_text("v2\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "head")
+        head = git(repo, "rev-parse", "HEAD")
+        return repo, work, base, prev, head
+
+    def run_prepare(self, repo, work, base, head, prev_state):
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "prev.json").write_text(json.dumps(prev_state))
+        event = work / "event.json"
+        event.write_text(json.dumps({"pull_request": {"title": "t", "body": None}}))
+        env = dict(os.environ, HEAD_SHA=head, BASE_SHA=base, EXTRA_EXCLUDES="",
+                   MAX_DIFF_BYTES="1500000", GITHUB_EVENT_PATH=str(event))
+        subprocess.run([sys.executable, str(ROOT / "review.py"), "prepare", "--work", str(work)],
+                       cwd=repo, env=env, check=True, capture_output=True)
+        return json.loads((work / "manifest.json").read_text())
+
+    def test_push2_narrows_diff_and_hands_prev_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = self.make_repo(tmp)
+            manifest = self.run_prepare(repo, work, base, head,
+                                        {"sha": prev, "state": {"findings": [make_finding("F1")], "next": 2}})
+            self.assertEqual(manifest["mode"], "incremental")
+            self.assertEqual(manifest["changed_files"], ["other.py"])
+            self.assertEqual(manifest["reviewed"], ["other.py"])
+            patch = (work / "diff.patch").read_text()
+            self.assertIn("other.py", patch)
+            self.assertNotIn("app.py", patch)
+            prev_md = (work / "prev_findings.md").read_text()
+            self.assertIn("F1", prev_md)
+            self.assertIn("app.py", prev_md)
+
+    def test_rebase_falls_back_to_full(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = self.make_repo(tmp)
+            git(repo, "checkout", "-q", "--orphan", "huérfana")
+            git(repo, "commit", "-qam", "otra historia")
+            orphan = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "main")
+            manifest = self.run_prepare(repo, work, base, head,
+                                        {"sha": orphan, "state": {"findings": [make_finding("F1")], "next": 2}})
+            self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "rebase"))
+            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
+
+    def test_first_push_is_full(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = self.make_repo(tmp)
+            manifest = self.run_prepare(repo, work, base, head, {"sha": None, "state": None})
+            self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-prev"))
+
+
+class GatePrev(unittest.TestCase):
+    def run_gate(self, comments):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "gh").write_text(FAKE_GH)
+            (bindir / "gh").chmod(0o755)
+            (tmp / "comments.json").write_text(json.dumps(comments))
+            work = tmp / "work"
+            env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
+                       FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
+                       REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, RUN_ATTEMPT="1")
+            subprocess.run([sys.executable, str(ROOT / "review.py"), "gate", "--work", str(work)],
+                           env=env, check=True, capture_output=True)
+            return (tmp / "out").read_text(), json.loads((work / "prev.json").read_text())
+
+    def test_gate_persists_prev_sha_and_findings(self):
+        block = block_of(make_finding("F1"), next=2)
+        sticky = {"id": 9, "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext"}
+        output, prev = self.run_gate([sticky])
+        self.assertEqual(output, "skip=false\n")
+        self.assertEqual(prev["sha"], "f" * 40)
+        self.assertEqual([f["id"] for f in prev["state"]["findings"]], ["F1"])
+
+    def test_gate_without_sticky_persists_empty_prev(self):
+        output, prev = self.run_gate([])
+        self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None}))
+
+
+class IncrementalRun(unittest.TestCase):
+    def manifest(self, **kw):
+        manifest = dict(MANIFEST, **kw)
+        return manifest
+
+    def test_auto_turns_capped_at_20_on_incremental(self):
+        with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
+            self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 20)
+            self.assertEqual(review.resolve_max_turns(self.manifest(mode="full"), Path("/tmp")), 60)
+        with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
+            self.assertEqual(review.resolve_max_turns(self.manifest(mode="incremental"), Path("/tmp")), 33)
+
+    def test_incremental_prompt_points_at_prev_findings(self):
+        manifest = self.manifest(mode="incremental", prev_sha="p" * 40, changed_files=["b.py"])
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
+            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+        self.assertIn("INCREMENTAL review since ppppppp", prompt)
+        self.assertIn("/tmp/w/prev_findings.md", prompt)
+        self.assertIn("b.py", prompt)
+
+    def test_full_prompt_has_no_incremental_line(self):
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
+            prompt = review.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
+        self.assertNotIn("INCREMENTAL", prompt)
+
+
+class StickyComments(unittest.TestCase):
+    def test_latest_bot_sticky_wins(self):
+        comments = [
+            {"id": 1, "user": "github-actions[bot]", "body": f"{review.MARKER}\nold"},
+            {"id": 2, "user": "ana", "body": f"{review.MARKER}\nplantado"},
+            {"id": 3, "user": "github-actions[bot]", "body": f"{review.MARKER}\nnew"},
+        ]
+        self.assertEqual(review.sticky_from_comments(comments, "github-actions[bot]")["id"], 3)
+
+    def test_no_sticky_returns_none(self):
+        self.assertIsNone(review.sticky_from_comments([{"id": 1, "user": "ana", "body": "hola"}], "bot"))
+        self.assertIsNone(review.sticky_from_comments([], "bot"))
+
+    def test_summary_skips_hidden_markers(self):
+        body = "\n".join([review.MARKER, f"{review.SHA_PREFIX}{SHA} -->",
+                          block_of(make_finding()), "### Título", "", "texto"])
+        self.assertEqual(review.summary_of(body), "### Título\n\ntexto")
+
+
+FAKE_GH_WRITER = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, os, sys
+    with open(os.environ["FAKE_GH_LOG"], "a") as fh:
+        fh.write(json.dumps(sys.argv[1:]) + "\\n")
+    if "--paginate" in sys.argv:
+        for c in json.loads(open(os.environ["FAKE_GH_COMMENTS"]).read()):
+            print(json.dumps(c))
+    elif any("permission" in a for a in sys.argv):
+        print("write")
+""")
+
+
+class PublishFindings(unittest.TestCase):
+    def test_publish_applies_dismiss_and_renders_sections(self):
+        prev_block = block_of(make_finding("F1", title="Viejo"), next=2)
+        comments = [
+            {"id": 99, "user": "github-actions[bot]",
+             "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold"},
+            {"id": 100, "user": "owner", "body": "ai-review: descartar F1, gracias"},
+        ]
+        model_block = block_of(make_finding("F1", title="Viejo"),
+                               dict(make_finding("F-new", file="b.py", line=3,
+                                                 severity="Medium", title="Nuevo"), id=None))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "gh").write_text(FAKE_GH_WRITER)
+            (bindir / "gh").chmod(0o755)
+            (tmp / "comments.json").write_text(json.dumps(comments))
+            work = tmp / "work"
+            work.mkdir()
+            (work / "manifest.json").write_text(
+                json.dumps(dict(MANIFEST, mode="full", reviewed=["src/app.py", "b.py"])))
+            (work / "result.json").write_text(json.dumps(
+                {"result": f"**Veredicto:** del modelo\n\nDetalle.\n\n{model_block}\nCOVERAGE: complete"}))
+            env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
+                       FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
+                       REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, RUN_ATTEMPT="1")
+            env.pop("GITHUB_STEP_SUMMARY", None)
+            subprocess.run([sys.executable, str(ROOT / "review.py"), "publish", "--work", str(work)],
+                           env=env, check=True, capture_output=True)
+            calls = [json.loads(l) for l in (tmp / "log").read_text().splitlines()]
+            body = json.loads((work / "comment.json").read_text())["body"]
+        self.assertEqual(calls[1][:3], ["api", "repos/o/r/collaborators/owner/permission", "--jq"])
+        self.assertEqual(calls[2][:3], ["api", "-X", "PATCH"])
+        self.assertIn("**Veredicto:** 1 Medium abierto (1 descartado).", body)
+        self.assertEqual(body.count("**Veredicto:**"), 1)
+        nuevos = body.index("## Nuevos en este push")
+        siguen = body.index("## Siguen abiertos")
+        self.assertIn("· F2", body[nuevos:siguen])
+        self.assertIn("Ninguno.", body[siguen:])
+        self.assertIn("<details><summary>Descartados (1)</summary>", body)
+        state = review.parse_findings_block(body)
+        self.assertEqual([(f["id"], f["state"]) for f in state["findings"]],
+                         [("F1", "dismissed"), ("F2", "open")])
+        self.assertEqual(state["next"], 3)
+
+
+class PromptFindings(unittest.TestCase):
+    def test_prompt_specifies_findings_block_and_incremental(self):
+        prompt = (ROOT / "prompt.md").read_text()
+        for token in ("ai-review:findings", '"F-new"', "never after", "prev_findings.md",
+                      "Incremental review", "counts only `open`"):
+            self.assertIn(token, prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
