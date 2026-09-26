@@ -45,6 +45,8 @@ Meta de cortadas: cumplida. Meta de turnos (≤ 30) y de tiempo (2–5 min): no 
 | B6 | Si el modelo no entrega el bloque de hallazgos bien formado, se cae a la revisión completa actual. Nunca se pierde una revisión por esto. En la caída se conserva el último estado parseable. Prueba unitaria: bloque bien formado sobrevive al parseo de cobertura y al recorte; bloque ausente o roto cae a revisión completa. | cc:done (35262e6) — bloque ausente/roto publica el texto y conserva estado + aplica descartes |
 | B7 | Rebase o force-push: si el SHA anterior ya no es ancestro del nuevo, revisión completa otra vez, conservando los descartes. | cc:done (35262e6) — `decide_mode` por `merge-base --is-ancestor`; descartes pegajosos |
 
+**Resultado del e2e (2026-09-26, PR #16 sobre este código).** Push 1 completo: 2 bugs sembrados, F1 Critical y F2 High, cada uno con su archivo relacionado. Push 2, arreglo solo en las pruebas: F2 pasó a resuelto por su archivo relacionado y F1 siguió abierto (incremental, instalación desde caché). Descarte de F1 + push 3: "sin problemas abiertos (1 resuelto, 1 descartado)" y F1 no se volvió a describir. Re-run del mismo commit (revisión completa con estado previo): mismos ids, nada pisado ni duplicado, F1 no reapareció.
+
 ## Cómo se prueba
 
 - **Unitarias** para cada regla: parseo del estado, autorización de descartes, candado de "resuelto", continuidad de ids, caída a revisión completa y rebase.
