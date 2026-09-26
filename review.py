@@ -393,15 +393,15 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
-            named = old.get("files", [old["file"]]) + entry.get("files", [])
-            others = [path for path in named if path != old["file"]]
+            others = [path for path in old.get("files", [old["file"]]) + entry.get("files", [])
+                      if path != old["file"]]
             files = unique_paths([old["file"]] + [path for path in others if path in changed]
                                  + [path for path in others if path not in changed])
             state = entry["state"]
             # The lock guards the open -> resolved flip: one of the finding's files (registered
-            # before, or named now as where the fix landed) must have changed in this pass. It
-            # checks every named file, before the storage cap, so the fix file can't be cut off.
-            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(named):
+            # before, or named now as where the fix landed) must have changed in this pass. Changed
+            # files are stored first, so the cap never drops the one that unlocks it.
+            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(files):
                 state = OPEN
             if old["file"] in reverted:
                 state = RESOLVED
@@ -571,13 +571,18 @@ VERDICT_RE = re.compile(r"^\s*\*\*Veredicto:\*\*")
 def strip_model_verdict(text):
     """Drop every verdict line the model wrote (the publisher writes the only verdict),
     except inside code fences, where it is quoted content."""
-    kept, fenced = [], False
-    for line in (text or "").split("\n"):
+    lines = (text or "").split("\n")
+    fenced, opened = set(), None
+    for i, line in enumerate(lines):
         if line.lstrip().startswith("```"):
-            fenced = not fenced
-        if fenced or not VERDICT_RE.match(line):
-            kept.append(line)
-    return "\n".join(kept).strip()
+            if opened is None:
+                opened = i
+            else:
+                fenced.update(range(opened, i + 1))
+                opened = None
+    # An unclosed fence counts as plain text: it can't hide a verdict to strip.
+    return "\n".join(line for i, line in enumerate(lines)
+                     if i in fenced or not VERDICT_RE.match(line)).strip()
 
 
 def estimate_cost(prices, usage):
@@ -1345,11 +1350,21 @@ def run_in_group(cmd, env, timeout):
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        finished = proc.poll() is not None  # the agent ended; only a descendant held the pipes
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            # A descendant escaped the group (its own setsid) and still holds the pipes.
+            proc.stdout.close()
+            proc.stderr.close()
+            proc.wait()
+            out, err = exc.output or "", exc.stderr or ""
+        if finished:
+            return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from exc
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 

@@ -853,6 +853,17 @@ class TimeBudget(unittest.TestCase):
             review.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
         self.assertLess(time.monotonic() - start, 15, "un nieto con la salida abierta no debe colgar el job")
 
+    def test_finished_agent_output_is_kept_when_only_a_descendant_holds_the_pipes(self):
+        script = textwrap.dedent("""\
+            import subprocess, sys
+            subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            print('{"result": "ok", "subtype": "success"}', flush=True)
+        """)
+        start = time.monotonic()
+        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual((done.returncode, json.loads(done.stdout)["result"]), (0, "ok"))
+
     def test_action_cache_path_matches_the_install_dirs(self):
         action = (ROOT / "action.yml").read_text()
         cache_step = action[action.index("uses: actions/cache"):]
@@ -1930,6 +1941,10 @@ class BlockingFixes(unittest.TestCase):
             fake.return_value.stdout = ""
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+
+    def test_unclosed_fence_does_not_protect_a_verdict(self):
+        text = "Texto\n```\ncódigo sin cerrar\n**Veredicto:** del modelo"
+        self.assertEqual(review.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar")
 
     def test_verdict_inside_a_code_fence_is_kept(self):
         text = "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```\n**Veredicto:** del modelo"
