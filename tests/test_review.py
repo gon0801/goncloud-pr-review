@@ -1060,12 +1060,12 @@ class DismissCommands(unittest.TestCase):
         with mock.patch.object(review, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stdout = ""
-            fake.return_value.stderr = "gh: Not Found (HTTP 404)\n"
+            fake.return_value.stderr = "gh: Server Error (HTTP 500)\n"
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 self.assertIsNone(review.collaborator_permission("o/r", "ana"))
             self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
-            self.assertIn("HTTP 404", err.getvalue())
+            self.assertIn("HTTP 500", err.getvalue())
 
     def test_permission_query_without_gh_is_logged_not_silent(self):
         with mock.patch.object(review, "sh", side_effect=OSError("sin gh")):
@@ -1645,14 +1645,19 @@ class BlockingFixes(unittest.TestCase):
                           changed_files=["tests/test_review.py"])
         self.assertEqual(merged["findings"][0]["state"], "resolved")
 
-    def test_model_added_related_file_counts_from_the_next_push(self):
+    def test_fix_in_a_file_the_model_names_now_resolves(self):
+        # A fix that lands in a file nobody registered must not stay open forever.
         prev = [make_finding("F2", file="review.py")]
         model = [dict(make_finding("F2", file="review.py", state="resolved"), files=["review.py", "tests/t.py"])]
         merged, _ = merge(prev, model, changed_files=["tests/t.py"])
         self.assertEqual((merged["findings"][0]["state"], merged["findings"][0]["files"]),
-                         ("open", ["review.py", "tests/t.py"]))
-        again, _ = merge(merged["findings"], model, changed_files=["tests/t.py"])
-        self.assertEqual(again["findings"][0]["state"], "resolved")
+                         ("resolved", ["review.py", "tests/t.py"]))
+
+    def test_resolution_still_needs_some_related_file_to_change(self):
+        prev = [make_finding("F2", file="review.py")]
+        model = [dict(make_finding("F2", file="review.py", state="resolved"), files=["review.py", "tests/t.py"])]
+        merged, _ = merge(prev, model, changed_files=["README.md"])
+        self.assertEqual(merged["findings"][0]["state"], "open")
 
     def test_unrelated_change_does_not_resolve(self):
         prev = [dict(make_finding("F2", file="review.py"), files=["review.py", "tests/test_review.py"])]
@@ -1816,6 +1821,17 @@ class BlockingFixes(unittest.TestCase):
         with mock.patch.object(review, "collaborator_permission", side_effect=[None, "write"]):
             self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), (set(), False, 0),
                              "si 101 avanzara seen, el 100 no verificado se perdería para siempre")
+
+    def test_deleted_login_is_a_definitive_no(self):
+        with mock.patch.object(review, "sh") as fake:
+            fake.return_value.returncode = 1
+            fake.return_value.stderr = "gh: Not Found (HTTP 404)"
+            fake.return_value.stdout = ""
+            self.assertEqual(review.collaborator_permission("o/r", "nadie"), "none")
+
+    def test_model_verdict_anywhere_in_the_text_is_dropped(self):
+        text = "Intro del modelo.\n**Veredicto:** 1 High.\n\n#### 🟠 High · `a.py:1` · X"
+        self.assertEqual(review.strip_model_verdict(text), "Intro del modelo.\n\n#### 🟠 High · `a.py:1` · X")
 
     def test_non_writer_dismiss_is_marked_seen(self):
         comments = [{"id": 100, "user": "lector", "body": "ai-review: descartar F1"}]

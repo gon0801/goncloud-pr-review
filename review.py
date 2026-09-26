@@ -392,13 +392,13 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
-            registered = old.get("files", [old["file"]])
-            files = unique_paths(registered + entry.get("files", []))
+            files = unique_paths(old.get("files", [old["file"]]) + entry.get("files", []))
             state = entry["state"]
-            # Only files registered before this pass unlock "resolved": a file the model adds
-            # now counts from the next push, so it can't resolve a finding by naming any change.
-            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(registered):
-                state = OPEN  # the lock guards the open -> resolved flip; already resolved stays resolved
+            # The lock guards the open -> resolved flip: one of the finding's files (registered
+            # before, or named now as where the fix landed) must have changed in this pass.
+            # Registered-only would leave a fix in a newly named file open forever.
+            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(files):
+                state = OPEN
             if old["file"] in reverted:
                 state = RESOLVED
             merged.append({"id": fid, "file": entry["file"], "files": files, "line": entry["line"],
@@ -473,6 +473,8 @@ def collaborator_permission(repo, user):
         print(f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
               f"su descarte se ignora", file=sys.stderr)
         return None
+    if proc.returncode != 0 and "HTTP 404" in (proc.stderr or ""):
+        return "none"  # a login that no longer exists: a definitive "no", not a failure to retry
     if proc.returncode != 0:
         tail = (proc.stderr or "").strip().splitlines()
         detail = f": {tail[-1][:200]}" if tail else ""
@@ -561,14 +563,8 @@ VERDICT_RE = re.compile(r"^\s*\*\*Veredicto:\*\*")
 
 
 def strip_model_verdict(text):
-    lines = (text or "").split("\n")
-    for i, line in enumerate(lines):
-        if not line.strip():
-            continue
-        if VERDICT_RE.match(line):
-            return "\n".join(lines[i + 1:]).strip()
-        return (text or "").strip()
-    return ""
+    """Drop every verdict line the model wrote: the publisher writes the only verdict."""
+    return "\n".join(line for line in (text or "").split("\n") if not VERDICT_RE.match(line)).strip()
 
 
 def estimate_cost(prices, usage):
