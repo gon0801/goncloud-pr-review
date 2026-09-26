@@ -63,7 +63,7 @@ class Coverage(unittest.TestCase):
 class Compose(unittest.TestCase):
     def test_complete_review_has_marker_sha_and_no_warning(self):
         body = review.compose({"result": "**Veredicto:** sin problemas.\nCOVERAGE: complete"},
-                              MANIFEST, sha=SHA, provider="opencode-go")
+                              MANIFEST, head_sha=SHA, provider="opencode-go")
         self.assertTrue(body.startswith(review.MARKER))
         self.assertEqual(review.reviewed_sha(body), SHA)
         self.assertIn("### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · 0123456", body)
@@ -74,7 +74,7 @@ class Compose(unittest.TestCase):
     def test_max_turns_and_budget_cut_are_never_silent(self):
         manifest = dict(MANIFEST, excluded=[{"path": "big.py", "reason": "budget"}])
         body = review.compose({"result": "**Veredicto:** 1 High.", "subtype": "error_max_turns"},
-                              manifest, sha=SHA, provider="opencode-go")
+                              manifest, head_sha=SHA, provider="opencode-go")
         self.assertIn("**Revisión incompleta:** el revisor se quedó sin turnos antes de terminar; "
                       "el revisor no declaró su cobertura; "
                       "1 archivo(s) quedaron fuera por tamaño del diff.", body)
@@ -83,24 +83,24 @@ class Compose(unittest.TestCase):
     def test_comment_never_exceeds_github_limit(self):
         manifest = dict(MANIFEST, excluded=[{"path": "x" * 300, "reason": "filtro " + "y" * 3000}] * 40)
         body = review.compose({"result": "x" * 70000 + "\nCOVERAGE: complete"},
-                              manifest, sha=SHA, provider="opencode-go")
+                              manifest, head_sha=SHA, provider="opencode-go")
         self.assertEqual(len(body), 65000)
 
     def test_partial_coverage_detail_is_shown(self):
         body = review.compose({"result": "v\nCOVERAGE: partial | tests/ sin leer"},
-                              MANIFEST, sha=SHA, provider="opencode-go")
+                              MANIFEST, head_sha=SHA, provider="opencode-go")
         self.assertIn("el revisor no alcanzó a revisar todo: tests/ sin leer", body)
 
     def test_usage_line_uses_deepseek_prices(self):
         usage = {"input_tokens": 100_000, "cache_read_input_tokens": 1_000_000, "output_tokens": 10_000}
         body = review.compose({"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
-                              MANIFEST, sha=SHA, provider="deepseek")
+                              MANIFEST, head_sha=SHA, provider="deepseek")
         self.assertIn("- Turnos: 7 · tokens entrada 100,000 (+1,000,000 en caché) · salida 10,000 · costo aprox $0.048", body)
 
     def test_oversized_review_is_truncated_but_keeps_scope_section(self):
         manifest = dict(MANIFEST, excluded=[{"path": "p/" + "x" * 240, "reason": "budget"}] * 60)
         body = review.compose({"result": "x" * 70000 + "\nCOVERAGE: complete"},
-                              manifest, sha=SHA, provider="opencode-go")
+                              manifest, head_sha=SHA, provider="opencode-go")
         self.assertLess(len(body), 65536)
         self.assertIn("_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_", body)
         self.assertIn("  - … y 20 más", body)
@@ -650,7 +650,7 @@ class MaxTurns(unittest.TestCase):
         manifest = dict(MANIFEST, max_turns=40)
         usage = {"input_tokens": 10, "output_tokens": 5}
         body = review.compose({"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
-                              manifest, sha=SHA, provider="opencode-go")
+                              manifest, head_sha=SHA, provider="opencode-go")
         self.assertIn("- Turnos: 7/40 ·", body)
 
 
@@ -1178,7 +1178,7 @@ class Fallback(unittest.TestCase):
         merged, new_ids = review.merge_findings(None, model, changed_files=["src/app.py"],
                                                 reverted_files=set(), dismiss_ids=set(),
                                                 dismiss_all=False)
-        body = review.compose(result, manifest, sha=SHA, provider="opencode-go",
+        body = review.compose(result, manifest, head_sha=SHA, provider="opencode-go",
                               findings={"merged": merged["findings"], "new_ids": new_ids,
                                         "block": review.serialize_findings(merged)})
         self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
@@ -1200,7 +1200,7 @@ class Fallback(unittest.TestCase):
 
     def test_empty_state_uses_legacy_body(self):
         result = {"result": "**Veredicto:** 1 High.\n\nDetalle.\nCOVERAGE: complete"}
-        body = review.compose(result, MANIFEST, sha=SHA, provider="opencode-go",
+        body = review.compose(result, MANIFEST, head_sha=SHA, provider="opencode-go",
                               findings={"merged": [], "new_ids": [],
                                         "block": review.serialize_findings({"findings": [], "next": 1})})
         self.assertIn("**Veredicto:** 1 High.", body)
@@ -1223,7 +1223,7 @@ class VerdictSections(unittest.TestCase):
         merged = [make_finding("F1"), make_finding("F2"), make_finding("F3", state="resolved"),
                   make_finding("F4", state="dismissed")]
         body = review.compose({"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"}, MANIFEST,
-                              sha=SHA, provider="opencode-go",
+                              head_sha=SHA, provider="opencode-go",
                               findings={"merged": merged, "new_ids": ["F2"],
                                         "block": review.serialize_findings({"findings": merged, "next": 5})})
         nuevos = body.index("## Nuevos en este push")
@@ -1237,7 +1237,7 @@ class VerdictSections(unittest.TestCase):
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
         body = review.compose({"result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"},
-                              MANIFEST, sha=SHA, provider="opencode-go",
+                              MANIFEST, head_sha=SHA, provider="opencode-go",
                               findings={"merged": merged, "new_ids": ["F1"],
                                         "block": review.serialize_findings({"findings": merged, "next": 2})})
         self.assertEqual(body.count("**Veredicto:**"), 1)
@@ -1246,7 +1246,7 @@ class VerdictSections(unittest.TestCase):
     def test_block_right_after_sha_and_within_budgets(self):
         merged = [make_finding("F1")]
         body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
-                              MANIFEST, sha=SHA, provider="opencode-go",
+                              MANIFEST, head_sha=SHA, provider="opencode-go",
                               findings={"merged": merged, "new_ids": ["F1"],
                                         "block": review.serialize_findings({"findings": merged, "next": 2})})
         lines = body.split("\n")
@@ -1259,7 +1259,7 @@ class VerdictSections(unittest.TestCase):
     def test_oversized_block_never_eats_the_scope_section(self):
         merged = [make_finding("F1")]
         body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
-                              MANIFEST, sha=SHA, provider="opencode-go",
+                              MANIFEST, head_sha=SHA, provider="opencode-go",
                               findings={"merged": merged, "new_ids": ["F1"],
                                         "block": "B" * (review.COMMENT_LIMIT + 10000)})
         self.assertIn("recortada por el límite", body)
@@ -1660,7 +1660,7 @@ class BlockingFixes(unittest.TestCase):
     def test_missing_model_block_is_announced(self):
         findings = {"merged": [make_finding("F1")], "new_ids": [], "model_ok": False,
                     "block": review.serialize_findings({"findings": [make_finding("F1")], "next": 2})}
-        body = review.compose({"result": "texto\nCOVERAGE: complete"}, MANIFEST, sha=SHA,
+        body = review.compose({"result": "texto\nCOVERAGE: complete"}, MANIFEST, head_sha=SHA,
                               provider="opencode-go", findings=findings)
         self.assertIn("el revisor no entregó su bloque de hallazgos", body)
 
@@ -1668,7 +1668,7 @@ class BlockingFixes(unittest.TestCase):
         manifest = dict(MANIFEST, reviewed=[], mode="incremental", prev_sha="f" * 40)
         findings = {"merged": [make_finding("F1")], "new_ids": [], "model_ok": False,
                     "block": review.serialize_findings({"findings": [make_finding("F1")], "next": 2})}
-        body = review.compose({"result": "", "subtype": "success"}, manifest, sha=SHA,
+        body = review.compose({"result": "", "subtype": "success"}, manifest, head_sha=SHA,
                               provider="opencode-go", findings=findings)
         self.assertNotIn("Revisión incompleta", body)
         self.assertIn("No hubo archivos revisables en este push", body)
@@ -1677,7 +1677,7 @@ class BlockingFixes(unittest.TestCase):
         many = [make_finding(f"F{i}", file="d/" + "x" * 190, title="t" * 160) for i in range(1, 61)]
         findings = {"merged": many, "new_ids": [], "model_ok": True,
                     "block": review.serialize_findings({"findings": many, "next": 61})}
-        body = review.compose({"result": "y" * 70000 + "\nCOVERAGE: complete"}, MANIFEST, sha=SHA,
+        body = review.compose({"result": "y" * 70000 + "\nCOVERAGE: complete"}, MANIFEST, head_sha=SHA,
                               provider="opencode-go", findings=findings)
         self.assertLess(len(body), 65000)
         self.assertTrue(body.endswith("</details>"))
