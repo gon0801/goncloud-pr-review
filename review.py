@@ -397,8 +397,8 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             state = entry["state"]
             # Only files registered before this pass unlock "resolved": a file the model adds
             # now counts from the next push, so it can't resolve a finding by naming any change.
-            if state == RESOLVED and not changed.intersection(registered):
-                state = OPEN
+            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(registered):
+                state = OPEN  # the lock guards the open -> resolved flip; already resolved stays resolved
             if old["file"] in reverted:
                 state = RESOLVED
             merged.append({"id": fid, "file": entry["file"], "files": files, "line": entry["line"],
@@ -499,9 +499,11 @@ def collect_dismissals(repo, pr, bot_login, comments, after=0):
         found, wants_all = parse_dismiss_command(comment.get("body"))
         if not found and not wants_all:
             continue
-        last = max(last, cid)
         if user not in checked:
             checked[user] = collaborator_permission(repo, user)
+        if checked[user] is None:
+            break  # permission unknown (API failure): this and later commands wait for the next push
+        last = max(last, cid)
         if checked[user] in WRITE_PERMISSIONS:
             ids |= found
             all_open = all_open or wants_all

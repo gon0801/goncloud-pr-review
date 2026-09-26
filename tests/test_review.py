@@ -1033,7 +1033,7 @@ class DismissCommands(unittest.TestCase):
         with mock.patch.object(review, "collaborator_permission",
                                side_effect=lambda repo, user: perms[user]) as perm:
             self.assertEqual(review.collect_dismissals("o/r", "7", "github-actions[bot]", comments),
-                             ({"F1", "F2"}, False, 14))
+                             ({"F1", "F2"}, False, 13), "ghost (permiso desconocido) se reintenta: no avanza seen")
             self.assertEqual(perm.call_count, 3, "el permiso se revisa una vez por autor")
 
     def test_maintain_and_admin_count_as_writer(self):
@@ -1443,6 +1443,28 @@ class GatePrev(unittest.TestCase):
         self.assertEqual([(f["id"], f["state"]) for f in prev["state"]["findings"]],
                          [("F1", "dismissed"), ("F2", "open")])
 
+    def test_gate_ignores_dismiss_comments_already_applied(self):
+        state = {"findings": [make_finding("F1")], "next": 2, "seen": 10}
+        block = review.serialize_findings(state)
+        comments = [{"id": 9, "user": "github-actions[bot]",
+                     "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext"},
+                    {"id": 10, "user": "owner", "body": "ai-review: descartar todo"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "gh").write_text(FAKE_GH_WRITER)
+            (bindir / "gh").chmod(0o755)
+            (tmp / "comments.json").write_text(json.dumps(comments))
+            work = tmp / "work"
+            env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_GH_LOG=str(tmp / "log"),
+                       FAKE_GH_COMMENTS=str(tmp / "comments.json"), GITHUB_OUTPUT=str(tmp / "out"),
+                       REPO="o/r", PR_NUMBER="7", HEAD_SHA=SHA, RUN_ATTEMPT="1")
+            subprocess.run([sys.executable, str(ROOT / "review.py"), "gate", "--work", str(work)],
+                           env=env, check=True, capture_output=True)
+            prev = json.loads((work / "prev.json").read_text())
+        self.assertEqual([(f["id"], f["state"]) for f in prev["state"]["findings"]], [("F1", "open")])
+
     def test_gate_without_sticky_persists_empty_prev(self):
         output, prev = self.run_gate([])
         self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None}))
@@ -1763,6 +1785,39 @@ class BlockingFixes(unittest.TestCase):
 
     def test_html5_comment_close_is_neutralized(self):
         self.assertNotIn("--!>", review.one_line("a --!> b", 50))
+
+    def test_already_resolved_stays_resolved_when_repeated(self):
+        merged, _ = merge([make_finding("F1", state="resolved")], [make_finding("F1", state="resolved")],
+                          changed_files=["other.py"])
+        self.assertEqual(merged["findings"][0]["state"], "resolved")
+
+    def test_rerun_keeps_resolved_findings_resolved(self):
+        prev_block = review.serialize_findings({"findings": [make_finding("F1", state="resolved"),
+                                                             make_finding("F2", file="b.py")], "next": 3})
+        sticky = {"id": 9, "user": "github-actions[bot]",
+                  "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold"}
+        result = {"result": block_of(make_finding("F1", state="resolved"), make_finding("F2", file="b.py", state="resolved"))
+                  + "\nCOVERAGE: complete"}
+        manifest = dict(MANIFEST, mode="full", reason="same-sha", reviewed=["src/app.py", "b.py"])
+        findings = review.build_findings(result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky])
+        self.assertEqual([(f["id"], f["state"]) for f in findings["merged"]], [("F1", "resolved"), ("F2", "open")])
+
+    def test_unverified_dismiss_is_retried_on_the_next_push(self):
+        comments = [{"id": 100, "user": "owner", "body": "ai-review: descartar F1"},
+                    {"id": 101, "user": "otro", "body": "ai-review: descartar F2"}]
+        with mock.patch.object(review, "collaborator_permission", return_value=None):
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), (set(), False, 0))
+        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), ({"F1", "F2"}, False, 101))
+
+    def test_non_writer_dismiss_is_marked_seen(self):
+        comments = [{"id": 100, "user": "lector", "body": "ai-review: descartar F1"}]
+        with mock.patch.object(review, "collaborator_permission", return_value="read"):
+            self.assertEqual(review.collect_dismissals("o/r", "7", "bot", comments, 0), (set(), False, 100))
+
+    def test_apply_dismissals_keeps_seen(self):
+        state = review.apply_dismissals({"findings": [make_finding("F1")], "next": 2, "seen": 100}, {"F1"}, False)
+        self.assertEqual((state["seen"], state["findings"][0]["state"]), (100, "dismissed"))
 
     def test_html_in_titles_is_neutralized(self):
         line = review.finding_line(make_finding("F1", title="rompe </details> y <!-- esto"))
