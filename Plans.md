@@ -72,6 +72,7 @@ El usuario autorizó escribir el diseño y el plan, no implementar. Todos los bl
 
 | Tarea | Contenido | Criterio de cierre | Depende de | Estado |
 |---|---|---|---|---|
+| B0 | Plan y candados: versionar plan/diseno/Plans, quality-kit y hooks; ruff format + lint sin cambio de conducta. | pre-commit 8/8 verde, unittest 191 OK, AST identico salvo renombres lint | Ninguna | cc:done (PR #24, merge 749a6f5; bootstrap autopilot PR #25, merge 1f4488b; evidencia docs/evidence/reviewer/B0.md) |
 | Q0 | Validación por bloques y particiones de CI. | Unión de particiones idéntica al descubrimiento completo, sin duplicados. | Ninguna | cc:TODO |
 | P0 | Regresión del recorrido del proveedor, seguimiento #23. | Subproceso real prueba recuperación, límites y aislamiento de credenciales. | Q0 | cc:TODO |
 | E0 | Comparador reproducible de revisiones. | Rechaza pares de SHA distintos y reporta denominadores y datos ausentes. | Q0 | cc:TODO |
