@@ -55,11 +55,33 @@ DISMISS_ALL_WORD = "todo"
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 
 DEFAULT_EXCLUDES = [
-    "*.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
-    "*.min.js", "*.min.css", "*.map", "*.snap",
-    "dist/**", "build/**", "vendor/**", "**/node_modules/**", "**/__snapshots__/**",
-    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf",
-    "*.woff", "*.woff2", "*.ttf", "*.zip", "*.gz", "*.tgz",
+    "*.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "go.sum",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*.snap",
+    "dist/**",
+    "build/**",
+    "vendor/**",
+    "**/node_modules/**",
+    "**/__snapshots__/**",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.webp",
+    "*.ico",
+    "*.pdf",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.zip",
+    "*.gz",
+    "*.tgz",
 ]
 
 PRIORITY = [
@@ -101,7 +123,8 @@ CONVENTIONS_MAX_BYTES = 8000
 CONVENTION_FILES = ("CLAUDE.md", "AGENTS.md")
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
-STOPWORDS = frozenset("""
+STOPWORDS = frozenset(
+    """
 def class return import from pass none true false null nil self this new delete
 const let var function func fn struct enum interface type package range go chan
 for while if elif else elseif unless switch case match break continue do done
@@ -114,7 +137,8 @@ then when what which who how why code file files test tests should must may
 que del los las una uno unos unas para por con como mas pero sus este esta estos
 estas entre sin sobre hasta desde donde porque cuando muy mucho tambien solo
 cada dos son esta estan hay ser fue eran ello esto eso aqui alli ahora antes
-""".split())
+""".split()
+)
 
 # Time budget (A4). Real reviews took 5-13 s per turn (Orbit: 48 turns in 492 s), so an
 # attempt gets SECONDS_PER_TURN per allowed turn instead of a flat cap that cuts long
@@ -156,14 +180,16 @@ def reviewed_sha(body):
     if start < 0:
         return None
     end = body.find(" -->", start)
-    return body[start + len(SHA_PREFIX):end] if end > 0 else None
+    return body[start + len(SHA_PREFIX) : end] if end > 0 else None
 
 
 def reviewed_completion(body):
     lines = body.splitlines()
     if len(lines) < 3 or lines[0] != MARKER or body.count(COMPLETION_PREFIX) != 1:
         return None
-    match = re.fullmatch(r"<!-- ai-review:completion=([0-9a-f]{40}):(complete|partial) -->", lines[2])
+    match = re.fullmatch(
+        r"<!-- ai-review:completion=([0-9a-f]{40}):(complete|partial) -->", lines[2]
+    )
     if not match or lines[1] != f"{SHA_PREFIX}{match[1]} -->":
         return None
     return match[2]
@@ -224,14 +250,22 @@ def sanitize_finding(entry, *, allow_dismissed):
     except (TypeError, ValueError):
         line = 0
     state = str(entry.get("state") or OPEN).strip().lower()
-    if state not in (OPEN, RESOLVED, DISMISSED) or (state == DISMISSED and not allow_dismissed):
+    if state not in (OPEN, RESOLVED, DISMISSED) or (
+        state == DISMISSED and not allow_dismissed
+    ):
         state = OPEN
     fid = str(entry.get("id") or "").strip().upper()
     raw_files = entry.get("files") if isinstance(entry.get("files"), list) else []
     files = unique_paths([path] + [one_line(item, 200) for item in raw_files])
-    return {"id": fid if finding_number(fid) else None, "file": path, "files": files,
-            "line": max(line, 0), "severity": normalize_severity(entry.get("severity")),
-            "title": title, "state": state}
+    return {
+        "id": fid if finding_number(fid) else None,
+        "file": path,
+        "files": files,
+        "line": max(line, 0),
+        "severity": normalize_severity(entry.get("severity")),
+        "title": title,
+        "state": state,
+    }
 
 
 def unique_paths(paths):
@@ -261,7 +295,7 @@ def find_findings_block(text, *, last=False):
     while pos >= 0:
         starts.append(pos)
         pos = text.find(FINDINGS_PREFIX, pos + 1)
-    for start in (reversed(starts) if last else starts):
+    for start in reversed(starts) if last else starts:
         body = start + len(FINDINGS_PREFIX)
         end = text.find(FINDINGS_SUFFIX, body)
         while end >= 0:
@@ -282,13 +316,19 @@ def parse_findings_block(text, *, last=False):
     if found is None:
         return None
     data = found[2]
-    findings = [f for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"]) if f]
+    findings = [
+        f
+        for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"])
+        if f
+    ]
     claimed = data.get("next")
     minimum = derive_next(findings)
     seen = data.get("seen")
-    return {"findings": findings,
-            "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum,
-            "seen": seen if isinstance(seen, int) and seen > 0 else 0}
+    return {
+        "findings": findings,
+        "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum,
+        "seen": seen if isinstance(seen, int) and seen > 0 else 0,
+    }
 
 
 def parse_model_findings(text):
@@ -319,24 +359,40 @@ def serialize_findings(state):
     findings = sorted(state["findings"], key=lambda f: finding_number(f["id"]) or 0)
     if len(findings) > FINDINGS_MAX_COUNT:
         open_only = [f for f in findings if f["state"] == OPEN]
-        rest = sorted((f for f in findings if f["state"] != OPEN),
-                      key=lambda f: finding_number(f["id"]) or 0, reverse=True)
-        findings = sorted(open_only + rest[:max(0, FINDINGS_MAX_COUNT - len(open_only))],
-                          key=lambda f: finding_number(f["id"]) or 0)
+        rest = sorted(
+            (f for f in findings if f["state"] != OPEN),
+            key=lambda f: finding_number(f["id"]) or 0,
+            reverse=True,
+        )
+        findings = sorted(
+            open_only + rest[: max(0, FINDINGS_MAX_COUNT - len(open_only))],
+            key=lambda f: finding_number(f["id"]) or 0,
+        )
     entries = []
     for f in findings:
-        entry = {"id": f["id"], "file": one_line(f["file"], 200), "line": f["line"],
-                 "severity": f["severity"], "title": one_line(f["title"], FINDINGS_TITLE_MAX),
-                 "state": f["state"]}
+        entry = {
+            "id": f["id"],
+            "file": one_line(f["file"], 200),
+            "line": f["line"],
+            "severity": f["severity"],
+            "title": one_line(f["title"], FINDINGS_TITLE_MAX),
+            "state": f["state"],
+        }
         related = [one_line(path, 200) for path in f.get("files", [])[1:]]
         if related:
             entry["files"] = related
         entries.append(entry)
 
     def build(items):
-        blob = json.dumps({"findings": items, "next": state["next"],
-                           **({"seen": state["seen"]} if state.get("seen") else {})},
-                          separators=(",", ":"), ensure_ascii=False)
+        blob = json.dumps(
+            {
+                "findings": items,
+                "next": state["next"],
+                **({"seen": state["seen"]} if state.get("seen") else {}),
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
         return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
 
     title_limit, path_limit = FINDINGS_TITLE_MAX, 200
@@ -347,10 +403,19 @@ def serialize_findings(state):
         if title_limit > 20 or path_limit > 25:
             title_limit = max(20, title_limit // 2)
             path_limit = max(25, path_limit // 2)
-            entries = [dict(e, file=one_line(e["file"], path_limit),
-                            title=one_line(e["title"], title_limit),
-                            **({"files": [one_line(x, path_limit) for x in e["files"]]} if "files" in e else {}))
-                       for e in entries]
+            entries = [
+                dict(
+                    e,
+                    file=one_line(e["file"], path_limit),
+                    title=one_line(e["title"], title_limit),
+                    **(
+                        {"files": [one_line(x, path_limit) for x in e["files"]]}
+                        if "files" in e
+                        else {}
+                    ),
+                )
+                for e in entries
+            ]
             continue
         if any("files" in e for e in entries):
             entries = [{k: v for k, v in e.items() if k != "files"} for e in entries]
@@ -364,7 +429,9 @@ def same_issue(a, b):
     return a["file"] == b["file"] and a["title"].casefold() == b["title"].casefold()
 
 
-def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, dismiss_all):
+def merge_findings(
+    prev, model, *, changed_files, reverted_files, dismiss_ids, dismiss_all
+):
     """Join previous state with what the model reported. Pure; git stays outside.
 
     - Ids from prev are stable, but only for the same primary file: a prev id the
@@ -389,13 +456,22 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
 
     merged, new_ids, seen = [], [], set()
     counter = (prev or {}).get("next") or derive_next(prev_list)
-    for entry in ((model or {}).get("findings", []) if model else []):
+    for entry in (model or {}).get("findings", []) if model else []:
         fid = entry.get("id")
         old = prev_by_id.get(fid) if fid else None
         if old is None or old["file"] != entry["file"]:
             # The model repeated a previous issue without its id (e.g. as F-new on a full review).
-            old = next((f for f in prev_list if f.get("id") and f["id"] not in seen
-                        and f["state"] != DISMISSED and same_issue(entry, f)), None)
+            old = next(
+                (
+                    f
+                    for f in prev_list
+                    if f.get("id")
+                    and f["id"] not in seen
+                    and f["state"] != DISMISSED
+                    and same_issue(entry, f)
+                ),
+                None,
+            )
             fid = old["id"] if old else fid
         if old is not None and old["file"] == entry["file"]:
             if fid in seen:
@@ -404,29 +480,56 @@ def merge_findings(prev, model, *, changed_files, reverted_files, dismiss_ids, d
             if old["state"] == DISMISSED:
                 merged.append(dict(old))
                 continue
-            others = [path for path in old.get("files", [old["file"]]) + entry.get("files", [])
-                      if path != old["file"]]
-            files = unique_paths([old["file"]] + [path for path in others if path in changed]
-                                 + [path for path in others if path not in changed])
+            others = [
+                path
+                for path in old.get("files", [old["file"]]) + entry.get("files", [])
+                if path != old["file"]
+            ]
+            files = unique_paths(
+                [old["file"]]
+                + [path for path in others if path in changed]
+                + [path for path in others if path not in changed]
+            )
             state = entry["state"]
             # The lock guards the open -> resolved flip: one of the finding's files (registered
             # before, or named now as where the fix landed) must have changed in this pass. Changed
             # files are stored first, so the cap never drops the one that unlocks it.
-            if state == RESOLVED and old["state"] != RESOLVED and not changed.intersection(files):
+            if (
+                state == RESOLVED
+                and old["state"] != RESOLVED
+                and not changed.intersection(files)
+            ):
                 state = OPEN
             if old["file"] in reverted:
                 state = RESOLVED
-            merged.append({"id": fid, "file": entry["file"], "files": files, "line": entry["line"],
-                           "severity": entry["severity"], "title": entry["title"], "state": state})
+            merged.append(
+                {
+                    "id": fid,
+                    "file": entry["file"],
+                    "files": files,
+                    "line": entry["line"],
+                    "severity": entry["severity"],
+                    "title": entry["title"],
+                    "state": state,
+                }
+            )
             continue
         if entry["state"] == RESOLVED or any(same_issue(entry, g) for g in gone):
             continue  # a brand-new finding can't already be fixed, nor revive a dismissed one
         fid = f"F{counter}"
         counter += 1
         new_ids.append(fid)
-        merged.append({"id": fid, "file": entry["file"], "files": entry.get("files", [entry["file"]]),
-                       "line": entry["line"], "severity": entry["severity"], "title": entry["title"],
-                       "state": OPEN})
+        merged.append(
+            {
+                "id": fid,
+                "file": entry["file"],
+                "files": entry.get("files", [entry["file"]]),
+                "line": entry["line"],
+                "severity": entry["severity"],
+                "title": entry["title"],
+                "state": OPEN,
+            }
+        )
     for old in prev_list:
         if old.get("id") in seen or not old.get("id"):
             continue
@@ -450,8 +553,14 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
         return state
     findings = []
     for finding in state["findings"]:
-        wanted = finding["id"] in dismiss_ids or (dismiss_all and finding["state"] == OPEN)
-        findings.append(dict(finding, state=DISMISSED) if wanted and finding.get("id") else dict(finding))
+        wanted = finding["id"] in dismiss_ids or (
+            dismiss_all and finding["state"] == OPEN
+        )
+        findings.append(
+            dict(finding, state=DISMISSED)
+            if wanted and finding.get("id")
+            else dict(finding)
+        )
     return dict(state, findings=findings)
 
 
@@ -462,8 +571,11 @@ def dismiss_wants_all(rest):
     tmp = re.sub(r"F\d+", " ", rest, flags=re.IGNORECASE)
     tmp = re.sub(r"\b(?:y|e|o)\b", " ", tmp, flags=re.IGNORECASE)
     tmp = tmp.replace(",", " ").strip()
-    return bool(re.fullmatch(DISMISS_ALL_WORD + r"(\s+lo\s+dem[áa]s)?[\s.,;:!¡?¿]*",
-                             tmp, re.IGNORECASE))
+    return bool(
+        re.fullmatch(
+            DISMISS_ALL_WORD + r"(\s+lo\s+dem[áa]s)?[\s.,;:!¡?¿]*", tmp, re.IGNORECASE
+        )
+    )
 
 
 def parse_dismiss_command(body):
@@ -482,22 +594,36 @@ def collaborator_permission(repo, user):
     """Push access of a comment author, or None. A failed query is logged to
     stderr (never silent: without it B4 would die quietly); no-write is not."""
     try:
-        proc = sh("gh", "api", f"repos/{repo}/collaborators/{user}/permission",
-                  "--jq", ".permission", check=False)
+        proc = sh(
+            "gh",
+            "api",
+            f"repos/{repo}/collaborators/{user}/permission",
+            "--jq",
+            ".permission",
+            check=False,
+        )
     except OSError as exc:
-        print(f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
-              f"su descarte se ignora", file=sys.stderr)
+        print(
+            f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
+            f"su descarte se ignora",
+            file=sys.stderr,
+        )
         return None
     if proc.returncode != 0 and "HTTP 404" in (proc.stderr or ""):
         # A login that no longer exists: a definitive "no", not a failure to retry.
-        print(f"ai-review: {user} no existe para este repo (HTTP 404); su descarte se ignora", file=sys.stderr)
+        print(
+            f"ai-review: {user} no existe para este repo (HTTP 404); su descarte se ignora",
+            file=sys.stderr,
+        )
         return "none"
     if proc.returncode != 0:
         tail = (proc.stderr or "").strip().splitlines()
         detail = f": {tail[-1][:200]}" if tail else ""
-        print(f"ai-review: no se pudo verificar el permiso de {user} "
-              f"(gh api salió {proc.returncode}{detail}); su descarte se ignora",
-              file=sys.stderr)
+        print(
+            f"ai-review: no se pudo verificar el permiso de {user} "
+            f"(gh api salió {proc.returncode}{detail}); su descarte se ignora",
+            file=sys.stderr,
+        )
         return None
     return proc.stdout.strip() or None
 
@@ -540,19 +666,31 @@ def verdict_for(merged):
     if not open_findings:
         head = "sin problemas abiertos"
     else:
-        counts = [(s, sum(1 for f in open_findings if f["severity"] == s)) for s in SEVERITIES]
-        head = ", ".join(f"{n} {s}" for s, n in counts if n) + (" abierto" if len(open_findings) == 1 else " abiertos")
-    tail = ", ".join([plural(resolved, "resuelto")] * bool(resolved)
-                     + [plural(dismissed, "descartado")] * bool(dismissed))
+        counts = [
+            (s, sum(1 for f in open_findings if f["severity"] == s)) for s in SEVERITIES
+        ]
+        head = ", ".join(f"{n} {s}" for s, n in counts if n) + (
+            " abierto" if len(open_findings) == 1 else " abiertos"
+        )
+    tail = ", ".join(
+        [plural(resolved, "resuelto")] * bool(resolved)
+        + [plural(dismissed, "descartado")] * bool(dismissed)
+    )
     return f"**Veredicto:** {head}" + (f" ({tail})." if tail else ".")
 
 
 def finding_line(finding):
-    where = finding["file"] if not finding["line"] else f"{finding['file']}:{finding['line']}"
+    where = (
+        finding["file"]
+        if not finding["line"]
+        else f"{finding['file']}:{finding['line']}"
+    )
     where = where.replace("`", "'")
     title = html.escape(finding["title"], quote=False)
-    return (f"- {SEVERITY_EMOJI[finding['severity']]} {finding['severity']} · `{where}` · "
-            f"{title} · {finding['id']}")
+    return (
+        f"- {SEVERITY_EMOJI[finding['severity']]} {finding['severity']} · `{where}` · "
+        f"{title} · {finding['id']}"
+    )
 
 
 def sections_for(merged, new_ids):
@@ -592,8 +730,11 @@ def strip_model_verdict(text):
                 fenced.update(range(opened, i + 1))
                 opened = None
     # An unclosed fence counts as plain text: it can't hide a verdict to strip.
-    return "\n".join(line for i, line in enumerate(lines)
-                     if i in fenced or not VERDICT_RE.match(line)).strip()
+    return "\n".join(
+        line
+        for i, line in enumerate(lines)
+        if i in fenced or not VERDICT_RE.match(line)
+    ).strip()
 
 
 def estimate_cost(prices, usage):
@@ -617,7 +758,11 @@ def scope_lines(result, manifest, provider):
     if usage:
         cost = estimate_cost(provider["prices"], usage)
         cap = manifest.get("max_turns")
-        turns = f"{(result or {}).get('num_turns', '?')}/{cap}" if cap else f"{(result or {}).get('num_turns', '?')}"
+        turns = (
+            f"{(result or {}).get('num_turns', '?')}/{cap}"
+            if cap
+            else f"{(result or {}).get('num_turns', '?')}"
+        )
         scope.append(
             f"- Turnos: {turns} · tokens entrada "
             f"{usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0):,}"
@@ -640,50 +785,100 @@ def compose(result, manifest, *, sha, provider, findings=None):
     if coverage is None and reviewed_any:
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
-        warnings.append("el revisor no alcanzó a revisar todo" + (f": {detail}" if detail else ""))
+        warnings.append(
+            "el revisor no alcanzó a revisar todo" + (f": {detail}" if detail else "")
+        )
     if budget_cut:
-        warnings.append(f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff")
+        warnings.append(
+            f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff"
+        )
     if findings is not None and not findings.get("model_ok", True) and reviewed_any:
-        warnings.append("el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores")
+        warnings.append(
+            "el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores"
+        )
 
     if findings is not None and findings.get("merged"):
-        return compose_with_findings(result, manifest, sha=sha, provider=provider,
-                                     findings=findings, review=review, warnings=warnings)
+        return compose_with_findings(
+            result,
+            manifest,
+            sha=sha,
+            provider=provider,
+            findings=findings,
+            review=review,
+            warnings=warnings,
+        )
     if findings is not None:
         review = strip_findings_block(review, last=True)
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
-             f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->"]
+    parts = [
+        MARKER,
+        f"{SHA_PREFIX}{sha} -->",
+        f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->",
+    ]
     if findings is not None:
         parts.append(findings["block"])
     parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
     if warnings:
-        parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
+        parts += [
+            "> [!WARNING]",
+            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            "",
+        ]
     if not manifest["reviewed"]:
-        review = review or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
+        review = (
+            review
+            or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
+        )
     if len(review) > COMMENT_LIMIT:
-        review = review[:COMMENT_LIMIT] + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        review = (
+            review[:COMMENT_LIMIT]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
     parts += [review or "_El revisor no devolvió texto._", ""]
 
-    parts += ["<details><summary>Alcance de la revisión</summary>", "",
-              *scope_lines(result, manifest, provider), "", "</details>"]
+    parts += [
+        "<details><summary>Alcance de la revisión</summary>",
+        "",
+        *scope_lines(result, manifest, provider),
+        "",
+        "</details>",
+    ]
 
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
 
-def compose_with_findings(result, manifest, *, sha, provider, findings, review, warnings):
-    merged, new_ids, block = findings["merged"], findings.get("new_ids", []), findings["block"]
+def compose_with_findings(
+    result, manifest, *, sha, provider, findings, review, warnings
+):
+    merged, new_ids, block = (
+        findings["merged"],
+        findings.get("new_ids", []),
+        findings["block"],
+    )
     review = strip_model_verdict(strip_findings_block(review, last=True))
     sections = sections_for(merged, new_ids)
     budget = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget:
-        review = review[:budget] + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        review = (
+            review[:budget]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
-             f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->", block, title, ""]
+    parts = [
+        MARKER,
+        f"{SHA_PREFIX}{sha} -->",
+        f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->",
+        block,
+        title,
+        "",
+    ]
     if warnings:
-        parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
+        parts += [
+            "> [!WARNING]",
+            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            "",
+        ]
     parts += [verdict_for(merged), ""]
     parts += sections
     if not review:
@@ -696,9 +891,18 @@ def compose_with_findings(result, manifest, *, sha, provider, findings, review, 
     parts += ["", "## Detalle del revisor", "", review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
-        scope.insert(0, f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
-                        f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)")
-    parts += ["<details><summary>Alcance de la revisión</summary>", "", *scope, "", "</details>"]
+        scope.insert(
+            0,
+            f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
+            f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
+        )
+    parts += [
+        "<details><summary>Alcance de la revisión</summary>",
+        "",
+        *scope,
+        "",
+        "</details>",
+    ]
 
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
@@ -709,8 +913,10 @@ CAUTION_MARK = "> [!CAUTION]"
 def caution_banner(reason, head, has_previous):
     banner = f"{CAUTION_MARK}\n> **No se pudo revisar el commit {head[:7]}:** {reason}."
     if has_previous:
-        banner += (" Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
-                   'push o con "Re-run jobs".')
+        banner += (
+            " Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
+            'push o con "Re-run jobs".'
+        )
     return banner
 
 
@@ -774,21 +980,33 @@ def set_output(key, value):
 
 
 def fetch_all_comments(repo, pr):
-    out = sh("gh", "api", "--paginate", f"repos/{repo}/issues/{pr}/comments?per_page=100",
-             "--jq", ".[] | {id: .id, user: .user.login, body: .body} | tojson").stdout
+    out = sh(
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{repo}/issues/{pr}/comments?per_page=100",
+        "--jq",
+        ".[] | {id: .id, user: .user.login, body: .body} | tojson",
+    ).stdout
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
 def sticky_from_comments(comments, login):
     """Latest sticky among fetched comments. A missing user only happens with test
     doubles (the real API always sends user.login); those still count as sticky."""
-    found = [c for c in comments or []
-             if MARKER in (c.get("body") or "") and c.get("user", login) == login]
+    found = [
+        c
+        for c in comments or []
+        if MARKER in (c.get("body") or "") and c.get("user", login) == login
+    ]
     return found[-1] if found else None
 
 
 def is_ancestor(prev_sha, head):
-    return sh("git", "merge-base", "--is-ancestor", prev_sha, head, check=False).returncode == 0
+    return (
+        sh("git", "merge-base", "--is-ancestor", prev_sha, head, check=False).returncode
+        == 0
+    )
 
 
 def decide_mode(prev_sha, head):
@@ -811,7 +1029,10 @@ def files_matching_base(paths, base, head):
     """Files whose blob is identical at base and head: the PR no longer changes them."""
     same = set()
     for path in paths:
-        if sh("git", "diff", "--quiet", base, head, "--", path, check=False).returncode == 0:
+        if (
+            sh("git", "diff", "--quiet", base, head, "--", path, check=False).returncode
+            == 0
+        ):
             same.add(path)
     return same
 
@@ -822,20 +1043,34 @@ def prev_findings_markdown(state):
         return "# Sin hallazgos previos en este PR.\n"
 
     def line(finding):
-        where = finding["file"] if not finding["line"] else f"{finding['file']}:{finding['line']}"
+        where = (
+            finding["file"]
+            if not finding["line"]
+            else f"{finding['file']}:{finding['line']}"
+        )
         also = [path for path in finding.get("files", [])[1:]]
         extra = f" (archivos relacionados: {', '.join(also)})" if also else ""
         return f"- {finding['id']} {finding['severity']} · `{where}` · {finding['title']}{extra}"
 
     lines = ["# Hallazgos anteriores de este PR", ""]
-    groups = [(OPEN, "## Abiertos: verifícalos contra el diff y repítelos con su mismo id"),
-              (RESOLVED, "## Resueltos: repítelos con su mismo id; no los describas de nuevo salvo que hayan vuelto"),
-              (DISMISSED, "## Descartados por una persona: NO los reportes, NO los repitas en el bloque y NO los describas en el texto")]
+    groups = [
+        (OPEN, "## Abiertos: verifícalos contra el diff y repítelos con su mismo id"),
+        (
+            RESOLVED,
+            "## Resueltos: repítelos con su mismo id; no los describas de nuevo salvo que hayan vuelto",
+        ),
+        (
+            DISMISSED,
+            "## Descartados por una persona: NO los reportes, NO los repitas en el bloque y NO los describas en el texto",
+        ),
+    ]
     for state_name, header in groups:
         group = [f for f in findings if f["state"] == state_name]
         if group:
             lines += [header, "", *[line(f) for f in group], ""]
-    lines += ['Los hallazgos nuevos llevan `"id": "F-new"`. Nunca emitas "dismissed": solo una persona descarta.']
+    lines += [
+        'Los hallazgos nuevos llevan `"id": "F-new"`. Nunca emitas "dismissed": solo una persona descarta.'
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -850,15 +1085,25 @@ def cmd_gate(args):
     state = parse_findings_block(sticky["body"]) if sticky else None
     if state:
         try:
-            dismiss_ids, dismiss_all, _ = collect_dismissals(repo, pr, login, comments, state.get("seen", 0))
+            dismiss_ids, dismiss_all, _ = collect_dismissals(
+                repo, pr, login, comments, state.get("seen", 0)
+            )
             state = apply_dismissals(state, dismiss_ids, dismiss_all)
         except Exception as exc:
-            print(f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar", file=sys.stderr)
-    prev = {"sha": reviewed_sha(sticky["body"]) if sticky else None, "state": state,
-            "completion": reviewed_completion(sticky["body"]) if sticky else None}
+            print(
+                f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar",
+                file=sys.stderr,
+            )
+    prev = {
+        "sha": reviewed_sha(sticky["body"]) if sticky else None,
+        "state": state,
+        "completion": reviewed_completion(sticky["body"]) if sticky else None,
+    }
     (work / "prev.json").write_text(json.dumps(prev))
     if sticky and prev["sha"] == head and not rerun:
-        print(f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite.")
+        print(
+            f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite."
+        )
         set_output("skip", "true")
     else:
         set_output("skip", "false")
@@ -881,17 +1126,28 @@ def grep_files(patterns, limit):
     """Files at HEAD mentioning any of the patterns (fixed strings, OR)."""
     if not patterns:
         return []
-    out = sh("git", "grep", "-l", "--fixed-strings", *[a for p in patterns for a in ("-e", p)],
-             check=False).stdout
-    return out.splitlines()[:limit + 1]
+    out = sh(
+        "git",
+        "grep",
+        "-l",
+        "--fixed-strings",
+        *[a for p in patterns for a in ("-e", p)],
+        check=False,
+    ).stdout
+    return out.splitlines()[: limit + 1]
 
 
 def build_callers(reviewed, chunks):
-    lines = ["# Dónde aparece cada símbolo cambiado (búsqueda de texto con git grep: es una pista, no una prueba;",
-             "# no ve usos dinámicos, por reflexión o armados con strings)", ""]
+    lines = [
+        "# Dónde aparece cada símbolo cambiado (búsqueda de texto con git grep: es una pista, no una prueba;",
+        "# no ve usos dinámicos, por reflexión o armados con strings)",
+        "",
+    ]
     total = 0
     for path in reviewed[:CALLERS_MAX_FILES]:
-        symbols = changed_symbols(chunks.get(path, "")) if total < CALLERS_MAX_SYMBOLS else []
+        symbols = (
+            changed_symbols(chunks.get(path, "")) if total < CALLERS_MAX_SYMBOLS else []
+        )
         if not symbols:
             continue
         lines.append(f"## {path}")
@@ -902,11 +1158,15 @@ def build_callers(reviewed, chunks):
             matches = grep_files([symbol], CALLERS_MAX_MATCHES)
             lines.append(f"### `{symbol}`")
             if not matches:
-                lines.append("- (git grep no encontró el texto en otro archivo; puede haber usos dinámicos)")
+                lines.append(
+                    "- (git grep no encontró el texto en otro archivo; puede haber usos dinámicos)"
+                )
             else:
                 lines += [f"- {m}" for m in matches[:CALLERS_MAX_MATCHES]]
                 if len(matches) > CALLERS_MAX_MATCHES:
-                    lines.append(f"- … y más (símbolo muy común, acota con Grep si lo necesitas)")
+                    lines.append(
+                        "- … y más (símbolo muy común, acota con Grep si lo necesitas)"
+                    )
         lines.append("")
     if total == 0:
         return "(El diff no trae símbolos identificables; explora con Grep.)\n"
@@ -916,8 +1176,19 @@ def build_callers(reviewed, chunks):
     return text
 
 
-TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs", "testing",
-                       "test_utils", "test-utils", "testutils"})
+TEST_DIRS = frozenset(
+    {
+        "test",
+        "tests",
+        "__tests__",
+        "spec",
+        "specs",
+        "testing",
+        "test_utils",
+        "test-utils",
+        "testutils",
+    }
+)
 TEST_NAME_RE = re.compile(r"^(test|spec)s?([_.-]|$)|[_.-](test|spec)s?$")
 TEST_CAMEL_RE = re.compile(r"^Tests?[A-Z_]|[a-z0-9]Tests?$")
 
@@ -927,15 +1198,21 @@ def looks_like_test(path):
     name = parts[-1]
     stem = name.split(".", 1)[0]
     dirs = [p.lower() for p in parts[:-1]]
-    return (any(d in TEST_DIRS or d.endswith((".tests", ".test")) for d in dirs)
-            or name.lower() == "conftest.py"
-            or bool(TEST_NAME_RE.search(stem.lower()))
-            or ".test." in name.lower() or ".spec." in name.lower()
-            or bool(TEST_CAMEL_RE.search(stem)))
+    return (
+        any(d in TEST_DIRS or d.endswith((".tests", ".test")) for d in dirs)
+        or name.lower() == "conftest.py"
+        or bool(TEST_NAME_RE.search(stem.lower()))
+        or ".test." in name.lower()
+        or ".spec." in name.lower()
+        or bool(TEST_CAMEL_RE.search(stem))
+    )
 
 
 def build_tests(reviewed):
-    lines = ["# Pruebas que mencionan archivos del diff (precalculado con git grep)", ""]
+    lines = [
+        "# Pruebas que mencionan archivos del diff (precalculado con git grep)",
+        "",
+    ]
     seen = set()
     for path in reviewed[:TESTS_MAX_FILES]:
         name = path.rsplit("/", 1)[-1]
@@ -999,8 +1276,11 @@ def resolve_max_turns(manifest, work):
         patch = work / "diff.patch"
         diff_bytes = len(patch.read_bytes()) if patch.exists() else 0
     n_files = len(manifest["reviewed"])
-    if (manifest.get("mode") == "incremental" and diff_bytes <= INCREMENTAL_SMALL_BYTES
-            and n_files <= INCREMENTAL_SMALL_FILES):
+    if (
+        manifest.get("mode") == "incremental"
+        and diff_bytes <= INCREMENTAL_SMALL_BYTES
+        and n_files <= INCREMENTAL_SMALL_FILES
+    ):
         return INCREMENTAL_MAX_TURNS
     return max_turns_for_diff(diff_bytes, n_files)
 
@@ -1011,13 +1291,26 @@ def cmd_prepare(args):
     head = env("HEAD_SHA")
     base = env("BASE_SHA")
     merge_base = sh("git", "merge-base", base, head).stdout.strip()
-    patterns = DEFAULT_EXCLUDES + [p.strip() for p in os.environ.get("EXTRA_EXCLUDES", "").splitlines() if p.strip()]
+    patterns = DEFAULT_EXCLUDES + [
+        p.strip()
+        for p in os.environ.get("EXTRA_EXCLUDES", "").splitlines()
+        if p.strip()
+    ]
 
     prev_file = work / "prev.json"
-    prev = json.loads(prev_file.read_text()) if prev_file.exists() else {"sha": None, "state": None}
+    prev = (
+        json.loads(prev_file.read_text())
+        if prev_file.exists()
+        else {"sha": None, "state": None}
+    )
     prev_sha = prev.get("sha")
     if prev_sha:
-        have = sh("git", "cat-file", "-e", f"{prev_sha}^{{commit}}", check=False).returncode == 0
+        have = (
+            sh(
+                "git", "cat-file", "-e", f"{prev_sha}^{{commit}}", check=False
+            ).returncode
+            == 0
+        )
         if not have:
             sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
     try:
@@ -1030,9 +1323,15 @@ def cmd_prepare(args):
         mode, reason = "full", "no-state"
     if mode == "incremental" and prev.get("completion") != "complete":
         mode, reason = "full", "incomplete-prev"
-    changed = changed_since(prev_sha, head) if mode == "incremental" or reason == "incomplete-prev" else []
+    changed = (
+        changed_since(prev_sha, head)
+        if mode == "incremental" or reason == "incomplete-prev"
+        else []
+    )
 
-    numstat = sh("git", "diff", "--numstat", "-z", "--no-renames", merge_base, head).stdout
+    numstat = sh(
+        "git", "diff", "--numstat", "-z", "--no-renames", merge_base, head
+    ).stdout
     files, binary = [], set()
     for rec in filter(None, numstat.split("\0")):
         added, deleted, path = rec.split("\t", 2)
@@ -1056,7 +1355,17 @@ def cmd_prepare(args):
     budget = int(os.environ.get("MAX_DIFF_BYTES", "1500000"))
     reviewed, chunks, used = [], {}, 0
     for path in sorted(candidates, key=lambda p: (priority(p), p)):
-        chunk = sh("git", "diff", "--no-color", "--no-renames", "-U10", merge_base, head, "--", path).stdout
+        chunk = sh(
+            "git",
+            "diff",
+            "--no-color",
+            "--no-renames",
+            "-U10",
+            merge_base,
+            head,
+            "--",
+            path,
+        ).stdout
         if used + len(chunk) > budget and reviewed:
             excluded.append({"path": path, "reason": "budget"})
             continue
@@ -1065,10 +1374,18 @@ def cmd_prepare(args):
         used += len(chunk)
 
     (work / "diff.patch").write_text("".join(chunks[p] for p in reviewed))
-    manifest = {"base": merge_base, "head": head, "reviewed": reviewed, "excluded": excluded,
-                "diff_bytes": used, "mode": mode, "prev_sha": prev_sha,
-                "changed_files": changed, "reason": reason,
-                "has_prev_findings": bool((prev.get("state") or {}).get("findings"))}
+    manifest = {
+        "base": merge_base,
+        "head": head,
+        "reviewed": reviewed,
+        "excluded": excluded,
+        "diff_bytes": used,
+        "mode": mode,
+        "prev_sha": prev_sha,
+        "changed_files": changed,
+        "reason": reason,
+        "has_prev_findings": bool((prev.get("state") or {}).get("findings")),
+    }
     (work / "manifest.json").write_text(json.dumps(manifest, indent=2))
     (work / "prev_findings.md").write_text(prev_findings_markdown(prev.get("state")))
 
@@ -1083,11 +1400,16 @@ def cmd_prepare(args):
     rules = sh("git", "show", f"{base}:.github/ai-review.md", check=False)
     system = Path(args.prompt).read_text()
     if rules.returncode == 0 and rules.stdout.strip():
-        system += "\n\n## Repository-specific rules (from the base branch, trusted)\n\n" + rules.stdout
+        system += (
+            "\n\n## Repository-specific rules (from the base branch, trusted)\n\n"
+            + rules.stdout
+        )
     (work / "system.md").write_text(system)
 
-    print(f"ai-review: {len(reviewed)} archivo(s) a revisar, {len(excluded)} excluido(s), "
-          f"diff {used:,} bytes ({mode}{f'/{reason}' if reason else ''})")
+    print(
+        f"ai-review: {len(reviewed)} archivo(s) a revisar, {len(excluded)} excluido(s), "
+        f"diff {used:,} bytes ({mode}{f'/{reason}' if reason else ''})"
+    )
     for e in excluded:
         print(f"  excluido: {e['path']} ({e['reason']})")
 
@@ -1095,22 +1417,32 @@ def cmd_prepare(args):
 def get_provider():
     name = os.environ.get("PROVIDER") or "opencode-go"
     if name not in PROVIDERS:
-        sys.exit(f"ai-review: proveedor '{name}' no permitido; usa uno de: {', '.join(PROVIDERS)}")
+        sys.exit(
+            f"ai-review: proveedor '{name}' no permitido; usa uno de: {', '.join(PROVIDERS)}"
+        )
     return name, PROVIDERS[name]
 
 
 def litellm_config(provider, session):
     return {
-        "model_list": [{
-            "model_name": provider["model"],
-            "litellm_params": {
-                "model": f"openai/{provider['model']}",
-                "api_base": provider["upstream"],
-                "api_key": "os.environ/UPSTREAM_API_KEY",
-                "extra_headers": {"User-Agent": "goncloud-pr-review/1.0", "x-opencode-session": session},
-            },
-        }],
-        "litellm_settings": {"drop_params": True, "use_chat_completions_url_for_anthropic_messages": True},
+        "model_list": [
+            {
+                "model_name": provider["model"],
+                "litellm_params": {
+                    "model": f"openai/{provider['model']}",
+                    "api_base": provider["upstream"],
+                    "api_key": "os.environ/UPSTREAM_API_KEY",
+                    "extra_headers": {
+                        "User-Agent": "goncloud-pr-review/1.0",
+                        "x-opencode-session": session,
+                    },
+                },
+            }
+        ],
+        "litellm_settings": {
+            "drop_params": True,
+            "use_chat_completions_url_for_anthropic_messages": True,
+        },
         "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY"},
     }
 
@@ -1124,15 +1456,32 @@ def start_proxy(work, provider, key, session):
     with open(work / "litellm.log", "w") as log:
         try:
             proc = subprocess.Popen(
-                [os.environ.get("LITELLM_BIN", "litellm"), "--config", str(config), "--host", "127.0.0.1", "--port", port],
-                stdout=log, stderr=subprocess.STDOUT,
-                env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
-                     "UPSTREAM_API_KEY": key, "LITELLM_MASTER_KEY": master, "LITELLM_TELEMETRY": "False"})
+                [
+                    os.environ.get("LITELLM_BIN", "litellm"),
+                    "--config",
+                    str(config),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    port,
+                ],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env={
+                    "PATH": os.environ["PATH"],
+                    "HOME": os.environ.get("HOME", "/tmp"),
+                    "UPSTREAM_API_KEY": key,
+                    "LITELLM_MASTER_KEY": master,
+                    "LITELLM_TELEMETRY": "False",
+                },
+            )
         except FileNotFoundError:
             print("ai-review: no se encontró el binario de litellm", file=sys.stderr)
             return None
     base_url = f"http://127.0.0.1:{port}"
-    deadline = time.time() + int(os.environ.get("PROXY_START_TIMEOUT", PROXY_START_TIMEOUT))
+    deadline = time.time() + int(
+        os.environ.get("PROXY_START_TIMEOUT", PROXY_START_TIMEOUT)
+    )
     while time.time() < deadline:
         if proc.poll() is not None:
             break
@@ -1142,7 +1491,10 @@ def start_proxy(work, provider, key, session):
         except OSError:
             time.sleep(1)
     proc.kill()
-    print(f"ai-review: el proxy LiteLLM no arrancó\n{(work / 'litellm.log').read_text()[-3000:]}", file=sys.stderr)
+    print(
+        f"ai-review: el proxy LiteLLM no arrancó\n{(work / 'litellm.log').read_text()[-3000:]}",
+        file=sys.stderr,
+    )
     return None
 
 
@@ -1166,8 +1518,11 @@ def venv_ready(venv):
     if not marker.exists() or marker.read_text().strip() != venv_stamp():
         return False
     try:
-        probe = subprocess.run([str(venv / "bin" / "python"), "-c", "import litellm"],
-                               capture_output=True, timeout=120)
+        probe = subprocess.run(
+            [str(venv / "bin" / "python"), "-c", "import litellm"],
+            capture_output=True,
+            timeout=120,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return probe.returncode == 0
@@ -1175,14 +1530,24 @@ def venv_ready(venv):
 
 def build_litellm_venv(venv):
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-    subprocess.run([str(venv / "bin/pip"), "install", "--quiet", "--disable-pip-version-check",
-                    f"litellm[proxy]=={LITELLM_VERSION}"], check=True)
+    subprocess.run(
+        [
+            str(venv / "bin/pip"),
+            "install",
+            "--quiet",
+            "--disable-pip-version-check",
+            f"litellm[proxy]=={LITELLM_VERSION}",
+        ],
+        check=True,
+    )
 
 
 def ensure_litellm_venv(venv, build=None):
     """Reuse a cached venv only if it was built for this litellm AND this Python, and imports."""
     if venv_ready(venv):
-        print(f"ai-review: litellm {LITELLM_VERSION} ya instalado (caché); se omite pip")
+        print(
+            f"ai-review: litellm {LITELLM_VERSION} ya instalado (caché); se omite pip"
+        )
         return
     if venv.exists():
         print("ai-review: la caché de litellm no sirve con este Python; se reconstruye")
@@ -1215,10 +1580,23 @@ def cmd_install(args):
     try:
         prefix = claude_prefix()
         if claude_version_ok(prefix / "bin" / "claude"):
-            print(f"ai-review: claude-code {CLAUDE_CODE_VERSION} ya instalado (caché); se omite npm")
+            print(
+                f"ai-review: claude-code {CLAUDE_CODE_VERSION} ya instalado (caché); se omite npm"
+            )
         else:
-            subprocess.run(["npm", "install", "-g", "--prefix", str(prefix), "--no-fund", "--no-audit",
-                            f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"], check=True)
+            subprocess.run(
+                [
+                    "npm",
+                    "install",
+                    "-g",
+                    "--prefix",
+                    str(prefix),
+                    "--no-fund",
+                    "--no-audit",
+                    f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}",
+                ],
+                check=True,
+            )
         with open(os.environ["GITHUB_PATH"], "a") as fh:
             fh.write(f"{prefix / 'bin'}\n")
         if provider["via_proxy"]:
@@ -1257,7 +1635,7 @@ def build_prompt(manifest, work, max_turns):
     if manifest.get("mode") != "incremental" and manifest.get("has_prev_findings"):
         prompt += (
             f"\n- This PR already has findings from an earlier review: {work}/prev_findings.md. "
-            f"Report the same issues with their same ids, use \"F-new\" for new ones, and never report "
+            f'Report the same issues with their same ids, use "F-new" for new ones, and never report '
             f"or describe the dismissed ones."
         )
     if manifest.get("mode") == "incremental":
@@ -1276,7 +1654,9 @@ def build_prompt(manifest, work, max_turns):
 
 
 def cmd_run(args):
-    deadline = time.monotonic() + int(os.environ.get("REVIEW_BUDGET_SECONDS", REVIEW_BUDGET_SECONDS))
+    deadline = time.monotonic() + int(
+        os.environ.get("REVIEW_BUDGET_SECONDS", REVIEW_BUDGET_SECONDS)
+    )
     work = Path(args.work)
     name, provider = get_provider()
     model = provider["model"]
@@ -1284,7 +1664,9 @@ def cmd_run(args):
     result_path = work / "result.json"
     install_error = work / "install_error.txt"
     if install_error.exists():
-        soft_fail(result_path, install_error.read_text().strip() or "falló la instalación")
+        soft_fail(
+            result_path, install_error.read_text().strip() or "falló la instalación"
+        )
         return
     max_turns = resolve_max_turns(manifest, work)
     manifest["max_turns"] = max_turns
@@ -1295,18 +1677,31 @@ def cmd_run(args):
 
     prompt = build_prompt(manifest, work, max_turns)
     cmd = [
-        "claude", "-p", prompt,
-        "--model", model,
-        "--append-system-prompt-file", str(work / "system.md"),
-        "--restricted", "--safe-mode", "--strict-mcp-config",
-        "--tools", "Read,Grep,Glob",
-        "--allowedTools", "Read,Grep,Glob",
-        "--permission-mode", "dontAsk",
-        "--add-dir", str(work),
-        "--max-turns", str(max_turns),
-        "--effort", os.environ.get("EFFORT", "high"),
+        "claude",
+        "-p",
+        prompt,
+        "--model",
+        model,
+        "--append-system-prompt-file",
+        str(work / "system.md"),
+        "--restricted",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--tools",
+        "Read,Grep,Glob",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--permission-mode",
+        "dontAsk",
+        "--add-dir",
+        str(work),
+        "--max-turns",
+        str(max_turns),
+        "--effort",
+        os.environ.get("EFFORT", "high"),
         "--no-session-persistence",
-        "--output-format", "json",
+        "--output-format",
+        "json",
     ]
     key = os.environ.get("API_KEY", "")
     if not key:
@@ -1325,22 +1720,36 @@ def cmd_run(args):
     else:
         base_url, auth = provider["upstream"], {"ANTHROPIC_API_KEY": key}
 
-    child_env = {k: v for k, v in os.environ.items()
-                 if k not in ("GH_TOKEN", "GITHUB_TOKEN", "API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")}
+    child_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        )
+    }
     child_env.update(auth)
-    child_env.update({
-        "ANTHROPIC_BASE_URL": base_url,
-        "ANTHROPIC_MODEL": model,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": model.split("[", 1)[0],
-        "CLAUDE_CODE_SUBAGENT_MODEL": model.split("[", 1)[0],
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "DISABLE_AUTOUPDATER": "1",
-    })
+    child_env.update(
+        {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model.split("[", 1)[0],
+            "CLAUDE_CODE_SUBAGENT_MODEL": model.split("[", 1)[0],
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "DISABLE_AUTOUPDATER": "1",
+        }
+    )
 
     try:
-        attempt_timeout = int(os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns))
+        attempt_timeout = int(
+            os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
+        )
         run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
     finally:
         if proxy:
@@ -1351,8 +1760,10 @@ def cmd_run(args):
 def print_proxy_log(work):
     log = work / "litellm.log"
     if log.exists():
-        print(f"ai-review: últimas líneas del proxy LiteLLM:\n{log.read_text(errors='replace')[-3000:]}",
-              file=sys.stderr)
+        print(
+            f"ai-review: últimas líneas del proxy LiteLLM:\n{log.read_text(errors='replace')[-3000:]}",
+            file=sys.stderr,
+        )
 
 
 def as_text(value):
@@ -1367,12 +1778,21 @@ def run_in_group(cmd, env, timeout):
     stdout/stderr keeps the pipes open and communicate() waits for it, up to the
     job's own timeout (red). A new session lets us kill every descendant.
     """
-    proc = subprocess.Popen(cmd, env=env, text=True, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        finished = proc.poll() is not None  # the agent ended; only a descendant held the pipes
+        finished = (
+            proc.poll() is not None
+        )  # the agent ended; only a descendant held the pipes
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -1397,49 +1817,83 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
         if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
-            print(f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)", file=sys.stderr)
+            print(
+                f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)",
+                file=sys.stderr,
+            )
             break
         timeout = max(1, min(attempt_timeout, remaining - 30))
-        print(f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)", flush=True)
+        print(
+            f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)",
+            flush=True,
+        )
         try:
             proc = run_in_group(cmd, child_env, timeout)
         except FileNotFoundError:
-            soft_fail(result_path, "no se encontró el binario de claude (falló la instalación)")
+            soft_fail(
+                result_path,
+                "no se encontró el binario de claude (falló la instalación)",
+            )
             return
         except subprocess.TimeoutExpired as exc:
-            print(f"ai-review: el intento excedió el tiempo límite\n{as_text(exc.stderr)[-4000:]}", file=sys.stderr)
+            print(
+                f"ai-review: el intento excedió el tiempo límite\n{as_text(exc.stderr)[-4000:]}",
+                file=sys.stderr,
+            )
             print_proxy_log(result_path.parent)
-            soft_fail(result_path, f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo")
+            soft_fail(
+                result_path,
+                f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo",
+            )
             return
         failure_reason = None
         sys.stderr.write(proc.stderr[-4000:])
         try:
             result = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            print(f"ai-review: salida no-JSON (exit {proc.returncode}): {proc.stdout[-2000:]}", file=sys.stderr)
+            print(
+                f"ai-review: salida no-JSON (exit {proc.returncode}): {proc.stdout[-2000:]}",
+                file=sys.stderr,
+            )
             result = None
-        if result and (not result.get("is_error") or result.get("subtype") == "error_max_turns"):
+        if result and (
+            not result.get("is_error") or result.get("subtype") == "error_max_turns"
+        ):
             result_path.write_text(json.dumps(result))
-            print(f"ai-review: terminado ({result.get('subtype')}, {result.get('num_turns')} turnos)")
+            print(
+                f"ai-review: terminado ({result.get('subtype')}, {result.get('num_turns')} turnos)"
+            )
             return
         if result:
-            print(f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
-                  file=sys.stderr)
+            print(
+                f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
+                file=sys.stderr,
+            )
             print_proxy_log(result_path.parent)
             reasoning_replay_error = (
-                name == "opencode-go" and result.get("api_error_status") == 400
+                name == "opencode-go"
+                and result.get("api_error_status") == 400
                 and "The `reasoning_content` in the thinking mode must be passed back to the API."
                 in (result.get("result") or "")
             )
             if reasoning_replay_error:
-                failure_reason = ("el proveedor rechazó el historial de razonamiento de la conversación "
-                                  "(reasoning_content); no se pudo completar la revisión")
+                failure_reason = (
+                    "el proveedor rechazó el historial de razonamiento de la conversación "
+                    "(reasoning_content); no se pudo completar la revisión"
+                )
             elif result.get("api_error_status") in (400, 401, 403, 404):
-                soft_fail(result_path, "error permanente del proveedor (llave, modelo o endpoint inválidos)")
+                soft_fail(
+                    result_path,
+                    "error permanente del proveedor (llave, modelo o endpoint inválidos)",
+                )
                 return
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", RETRY_DELAY)))
-    soft_fail(result_path, failure_reason or "la revisión falló en todos los intentos (proveedor no disponible por ahora)")
+    soft_fail(
+        result_path,
+        failure_reason
+        or "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
+    )
 
 
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
@@ -1447,36 +1901,62 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
     prev = parse_findings_block(sticky["body"]) if sticky else None
     model = parse_model_findings((result or {}).get("result") or "")
     try:
-        dismiss_ids, dismiss_all, last_seen = collect_dismissals(repo, pr, login, comments,
-                                                                (prev or {}).get("seen", 0))
+        dismiss_ids, dismiss_all, last_seen = collect_dismissals(
+            repo, pr, login, comments, (prev or {}).get("seen", 0)
+        )
     except Exception as exc:
-        print(f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
-              file=sys.stderr)
+        print(
+            f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
+            file=sys.stderr,
+        )
         dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
-    has_previous_changes = manifest.get("mode") == "incremental" or manifest.get("reason") == "incomplete-prev"
+    has_previous_changes = (
+        manifest.get("mode") == "incremental"
+        or manifest.get("reason") == "incomplete-prev"
+    )
     if has_previous_changes:
         changed = manifest.get("changed_files", [])
     elif manifest.get("reason") == "same-sha":
         changed = []  # a re-run of the same commit: nothing changed, nothing can be resolved
     else:
         changed = manifest.get("reviewed", [])
-    watched = {f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN}
+    watched = {
+        f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN
+    }
     candidates = sorted(watched & set(changed)) if has_previous_changes else []
     base, head = manifest.get("base"), manifest.get("head")
     try:
-        reverted = files_matching_base(candidates, base, head) if candidates and base and head else set()
+        reverted = (
+            files_matching_base(candidates, base, head)
+            if candidates and base and head
+            else set()
+        )
     except Exception:
         reverted = set()
-    merged, new_ids = merge_findings(prev, model, changed_files=changed, reverted_files=reverted,
-                                     dismiss_ids=dismiss_ids, dismiss_all=dismiss_all)
+    merged, new_ids = merge_findings(
+        prev,
+        model,
+        changed_files=changed,
+        reverted_files=reverted,
+        dismiss_ids=dismiss_ids,
+        dismiss_all=dismiss_all,
+    )
     merged["seen"] = last_seen
-    return {"merged": merged["findings"], "new_ids": new_ids,
-            "block": serialize_findings(merged), "model_ok": model is not None}
+    return {
+        "merged": merged["findings"],
+        "new_ids": new_ids,
+        "block": serialize_findings(merged),
+        "model_ok": model is not None,
+    }
 
 
 def summary_of(body):
-    return "\n".join(line for line in body.split("\n")
-                     if line != MARKER and not line.startswith((SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX)))
+    return "\n".join(
+        line
+        for line in body.split("\n")
+        if line != MARKER
+        and not line.startswith((SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX))
+    )
 
 
 def cmd_publish(args):
@@ -1494,23 +1974,49 @@ def cmd_publish(args):
         reason = result[ERROR_KEY]
         has_previous = bool(sticky and reviewed_sha(sticky.get("body") or ""))
         banner = caution_banner(reason, head, has_previous=has_previous)
-        body = insert_caution_banner(sticky["body"], banner) if sticky else f"{MARKER}\n{banner}"
-        body = redact(body, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
-        summary_text = redact(banner, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
+        body = (
+            insert_caution_banner(sticky["body"], banner)
+            if sticky
+            else f"{MARKER}\n{banner}"
+        )
+        body = redact(
+            body, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")]
+        )
+        summary_text = redact(
+            banner, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")]
+        )
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
-        body = redact(compose(result, manifest, sha=head, provider=name, findings=findings),
-                      [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")])
+        body = redact(
+            compose(result, manifest, sha=head, provider=name, findings=findings),
+            [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")],
+        )
         summary_text = summary_of(body)
 
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
 
     if sticky:
-        sh("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{sticky['id']}", "--input", str(payload))
+        sh(
+            "gh",
+            "api",
+            "-X",
+            "PATCH",
+            f"repos/{repo}/issues/comments/{sticky['id']}",
+            "--input",
+            str(payload),
+        )
         print(f"ai-review: comentario {sticky['id']} actualizado")
     else:
-        sh("gh", "api", "-X", "POST", f"repos/{repo}/issues/{pr}/comments", "--input", str(payload))
+        sh(
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/issues/{pr}/comments",
+            "--input",
+            str(payload),
+        )
         print("ai-review: comentario creado")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -1521,12 +2027,22 @@ def cmd_publish(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["gate", "prepare", "install", "run", "publish"])
-    parser.add_argument("--work", default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"))
+    parser.add_argument(
+        "command", choices=["gate", "prepare", "install", "run", "publish"]
+    )
+    parser.add_argument(
+        "--work",
+        default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"),
+    )
     parser.add_argument("--prompt", default=str(Path(__file__).with_name("prompt.md")))
     args = parser.parse_args()
-    {"gate": cmd_gate, "prepare": cmd_prepare, "install": cmd_install, "run": cmd_run,
-     "publish": cmd_publish}[args.command](args)
+    {
+        "gate": cmd_gate,
+        "prepare": cmd_prepare,
+        "install": cmd_install,
+        "run": cmd_run,
+        "publish": cmd_publish,
+    }[args.command](args)
 
 
 if __name__ == "__main__":
