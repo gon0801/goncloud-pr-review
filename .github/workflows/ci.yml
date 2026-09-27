@@ -12,9 +12,27 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    name: test (shard ${{ matrix.shard }}/2)
     steps:
       - uses: actions/checkout@v7
-      - run: python3 -m unittest discover -s tests -v
+      - run: python3 scripts/run_test_shard.py --shard ${{ matrix.shard }}/2
+
+  verify-partition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 scripts/run_test_shard.py --verify-partition 2
+
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
       - name: actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
