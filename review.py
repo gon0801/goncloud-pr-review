@@ -1393,6 +1393,7 @@ def run_in_group(cmd, env, timeout):
 
 def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
     attempts = int(os.environ.get("ATTEMPTS", "2"))
+    failure_reason = None
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
         if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
@@ -1410,6 +1411,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
             print_proxy_log(result_path.parent)
             soft_fail(result_path, f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo")
             return
+        failure_reason = None
         sys.stderr.write(proc.stderr[-4000:])
         try:
             result = json.loads(proc.stdout)
@@ -1424,12 +1426,20 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
             print(f"ai-review: error del modelo: {result.get('result')!r} (HTTP {result.get('api_error_status')})",
                   file=sys.stderr)
             print_proxy_log(result_path.parent)
-            if result.get("api_error_status") in (400, 401, 403, 404):
+            reasoning_replay_error = (
+                name == "opencode-go" and result.get("api_error_status") == 400
+                and "The `reasoning_content` in the thinking mode must be passed back to the API."
+                in (result.get("result") or "")
+            )
+            if reasoning_replay_error:
+                failure_reason = ("el proveedor rechazó el historial de razonamiento de la conversación "
+                                  "(reasoning_content); no se pudo completar la revisión")
+            elif result.get("api_error_status") in (400, 401, 403, 404):
                 soft_fail(result_path, "error permanente del proveedor (llave, modelo o endpoint inválidos)")
                 return
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", RETRY_DELAY)))
-    soft_fail(result_path, "la revisión falló en todos los intentos (proveedor no disponible por ahora)")
+    soft_fail(result_path, failure_reason or "la revisión falló en todos los intentos (proveedor no disponible por ahora)")
 
 
 def build_findings(result, manifest, sticky, repo, pr, login, comments):

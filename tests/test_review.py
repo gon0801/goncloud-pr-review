@@ -379,6 +379,65 @@ FAKE_LITELLM_CRASH = textwrap.dedent("""\
 """)
 
 
+class ReasoningReplayRecovery(unittest.TestCase):
+    replay_error = {
+        "result": "API Error: 400 litellm.BadRequestError: The `reasoning_content` in the thinking mode "
+                  "must be passed back to the API.",
+        "is_error": True,
+        "api_error_status": 400,
+    }
+    warning = "el proveedor rechazó el historial de razonamiento de la conversación (reasoning_content); no se pudo completar la revisión"
+
+    def run_replies(self, replies, provider="opencode-go", remaining=900):
+        cmd = ["claude", "-p", "review this diff", "--output-format", "json"]
+        child_env = {"ANTHROPIC_AUTH_TOKEN": "local-proxy-token"}
+        completed = [subprocess.CompletedProcess(cmd, 1 if r.get("is_error") else 0, json.dumps(r), "")
+                     for r in replies]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"ATTEMPTS": "2", "RETRY_DELAY": "0"}), \
+                mock.patch.object(review, "run_in_group", side_effect=completed) as runner, \
+                mock.patch.object(review.time, "monotonic", return_value=0), \
+                mock.patch.object(review.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result_path = Path(tmp) / "result.json"
+            try:
+                review.run_agent(cmd, child_env, result_path, provider, 600, remaining)
+            except SystemExit as exc:
+                self.assertEqual(exc.code, 0)
+            result = json.loads(result_path.read_text())
+        return result, runner.call_args_list, cmd, child_env
+
+    def test_replay_failure_starts_a_new_attempt_and_preserves_success(self):
+        success = {"result": "review complete\nCOVERAGE: complete", "subtype": "success", "num_turns": 12}
+        result, calls, cmd, child_env = self.run_replies([self.replay_error, success])
+        self.assertEqual(result, success)
+        self.assertEqual(calls, [mock.call(cmd, child_env, 600), mock.call(cmd, child_env, 600)])
+
+    def test_persistent_replay_failure_is_bounded_and_explained(self):
+        result, calls, _, _ = self.run_replies([self.replay_error, self.replay_error])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result, {review.ERROR_KEY: self.warning})
+
+    def test_replay_failure_does_not_retry_without_enough_budget(self):
+        result, calls, _, _ = self.run_replies([self.replay_error], remaining=320)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result, {review.ERROR_KEY: self.warning})
+
+    def test_other_bad_requests_and_auth_errors_are_not_retried(self):
+        for status, message in [(400, "invalid model"), (401, self.replay_error["result"]),
+                                (403, "forbidden"), (404, "not found")]:
+            with self.subTest(status=status):
+                result, calls, _, _ = self.run_replies([
+                    {"result": message, "is_error": True, "api_error_status": status}])
+                self.assertEqual(len(calls), 1)
+                self.assertIn("error permanente", result[review.ERROR_KEY])
+
+    def test_exception_does_not_apply_to_direct_deepseek_provider(self):
+        result, calls, _, _ = self.run_replies([self.replay_error], provider="deepseek")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("error permanente", result[review.ERROR_KEY])
+
+
 class RunAgent(unittest.TestCase):
     def run_agent(self, reply, provider="deepseek", api_key="sk-go-key-123", litellm_script=None, **extra_env):
         with tempfile.TemporaryDirectory() as tmp:
