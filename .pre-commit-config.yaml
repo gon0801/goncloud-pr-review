@@ -1,0 +1,34 @@
+# Generado y mantenido por quality-kit (init-repo.ps1) -- QUALITY-KIT MANAGED.
+# Si este archivo es EXACTAMENTE igual a lo que init-repo.ps1 generaria hoy
+# para el stack detectado, es seguro de volver a generar cada vez que
+# corre. Si le agregaste algo propio directo aca (una linea "exclude:", un
+# comentario explicandola, un hook nuevo, args editados), init-repo.ps1 lo
+# va a detectar y va a dejar el archivo tal cual esta, avisando -- nunca
+# se pisa una personalizacion en silencio. Para sumar algo propio de forma
+# permanente, agregalo directo en este archivo (no hace falta un archivo
+# aparte: pre-commit no fusiona varios archivos de config de todas formas).
+#
+# Este bloque base (pre-commit-hooks) se incluye SIEMPRE, sin importar el
+# stack detectado -- son chequeos genericos de higiene de archivo que
+# tienen sentido en cualquier repo.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-yaml
+# Fragmento Python -- se agrega solo si init-repo.ps1 detecta pyproject.toml,
+# requirements.txt, o archivos *.py en el repo. Usa ruff porque cubre lint Y
+# formato con una sola herramienta ya estandar en el ecosistema Python
+# (capability-first: no se suma un linter y un formateador separados si uno
+# solo ya cubre ambos).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

@@ -61,3 +61,29 @@ El modelo (DeepSeek V4.1 Flash vía OpenCode Go), un solo comentario por PR, dra
 ## Fuera de alcance por ahora
 
 Comentarios en la línea exacta del diff, responderle al revisor en el PR, y repos privados en runner propio (goncloud).
+
+## Propuesta siguiente — pendiente de ejecución
+
+La exclusión de conversación e inline anterior corresponde a PR A y PR B. La propuesta siguiente los estudia por separado; no cambia el alcance ya entregado.
+
+Diseño: [Mejoras del revisor](docs/reviewer-improvements-design.md). Plan detallado: [Implementación por bloques](docs/reviewer-improvements-plan.md).
+
+El usuario autorizó escribir el diseño y el plan, no implementar. Todos los bloques siguientes permanecen sin iniciar. Los IDs son etiquetas del plan, no números de PR. Autorización de David (2026-09-27): ejecutar el plan completo (B0 a U1, y luego X0 y X1), E1 sin mantenedor humano, merges por claw con la herramienta de saikit, y revisiones pagadas con DeepSeek V4.1 Flash avisando por Telegram al empezar cada tanda.
+
+| Tarea | Contenido | Criterio de cierre | Depende de | Estado |
+|---|---|---|---|---|
+| Q0 | Validación por bloques y particiones de CI. | Unión de particiones idéntica al descubrimiento completo, sin duplicados. | Ninguna | cc:TODO |
+| P0 | Regresión del recorrido del proveedor, seguimiento #23. | Subproceso real prueba recuperación, límites y aislamiento de credenciales. | Q0 | cc:TODO |
+| E0 | Comparador reproducible de revisiones. | Rechaza pares de SHA distintos y reporta denominadores y datos ausentes. | Q0 | cc:TODO |
+| E1 | Corpus y medición inicial. | 30 PRs, al menos diez pares de pushes, salidas congeladas y adjudicación. | E0 | cc:TODO |
+| M0 | Dominio y lector compatible de memoria. | Legacy y v2 conservan IDs, descartes y cursor; corrupción no equivale a vacío. | Q0 | cc:TODO |
+| M1 | Persistencia sin pérdida silenciosa. | Desborde no avanza SHA ni pierde estado; retorno a lector compatible probado. | M0 | cc:TODO |
+| F0 | Identidad y evidencia de hallazgos. | IDs estables en movimientos comprobados; ambigüedad no fusiona bugs. | M1 | cc:TODO |
+| D0 | Experimento de delta real. | Cumple los criterios de calidad y ahorro del plan, o queda desactivado. | F0, E1 | cc:TODO |
+| C0 | Experimento de contexto selectivo. | Mejora un caso confirmado entre archivos sin degradar calidad, o queda desactivado. | F0, E1 | cc:TODO |
+| C1 | Reglas por carpeta. | Precedencia y límites comprobados; reglas leídas de la base confiable. | C0 | cc:TODO |
+| C2 | Evidencia de CI. | Checks del SHA exacto y degradación explícita ante permisos insuficientes. | C0 | cc:TODO |
+| U0 | Publicación serializada. | Carreras reproducibles no pierden decisiones confirmadas. | M1, F0 | cc:TODO |
+| U1 | Comandos en comentarios. | Explicar, descartar y revisar funcionan sin push y respetan permisos e idempotencia. | U0 | cc:TODO |
+| X0 | Decidir continuación por archivos. | Medición del umbral y decisión o subplan, sin implementación automática. | E1 y medición posterior | Condicionado |
+| X1 | Decidir comentarios inline. | Evidencia de necesidad y aceptación del cambio de contrato visible. | U1 y evaluación de uso | Condicionado |
