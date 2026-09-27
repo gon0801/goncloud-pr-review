@@ -1361,7 +1361,7 @@ class VerdictSections(unittest.TestCase):
         self.assertEqual(body.count("**Veredicto:**"), 1)
         self.assertIn("**Veredicto:** 1 High abierto.", body)
 
-    def test_block_right_after_sha_and_within_budgets(self):
+    def test_metadata_precedes_review_and_stays_within_budgets(self):
         merged = [make_finding("F1")]
         body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
                               MANIFEST, sha=SHA, provider="opencode-go",
@@ -1370,7 +1370,8 @@ class VerdictSections(unittest.TestCase):
         lines = body.split("\n")
         self.assertEqual(lines[0], review.MARKER)
         self.assertTrue(lines[1].startswith(review.SHA_PREFIX))
-        self.assertTrue(lines[2].startswith(review.FINDINGS_PREFIX))
+        self.assertTrue(lines[2].startswith(review.COMPLETION_PREFIX))
+        self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
         self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
 
@@ -1475,7 +1476,8 @@ class IncrementalPrepare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(repo, work, base, head,
-                                        {"sha": prev, "state": {"findings": [make_finding("F1")], "next": 2}})
+                                        {"sha": prev, "completion": "complete",
+                                         "state": {"findings": [make_finding("F1")], "next": 2}})
             self.assertEqual(manifest["mode"], "incremental")
             self.assertEqual(manifest["changed_files"], ["other.py"])
             self.assertEqual(manifest["reviewed"], ["other.py"])
@@ -1502,9 +1504,12 @@ class IncrementalPrepare(unittest.TestCase):
         # Stickies written before PR B have a sha but no findings block.
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
-            manifest = self.run_prepare(repo, work, base, head, {"sha": prev, "state": None})
-            self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-state"))
-            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
+            for completion in [None, "complete"]:
+                with self.subTest(completion=completion):
+                    manifest = self.run_prepare(repo, work, base, head,
+                                                {"sha": prev, "state": None, "completion": completion})
+                    self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-state"))
+                    self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
 
     def test_first_push_is_full(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1731,7 +1736,7 @@ class GatePrev(unittest.TestCase):
 
     def test_gate_without_sticky_persists_empty_prev(self):
         output, prev = self.run_gate([])
-        self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None}))
+        self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None, "completion": None}))
 
 
 class IncrementalRun(unittest.TestCase):

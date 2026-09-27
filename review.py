@@ -18,6 +18,7 @@ from pathlib import Path
 
 MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
+COMPLETION_PREFIX = "<!-- ai-review:completion="
 COMMENT_LIMIT = 50000
 GITHUB_COMMENT_MAX = 65000
 
@@ -156,6 +157,16 @@ def reviewed_sha(body):
         return None
     end = body.find(" -->", start)
     return body[start + len(SHA_PREFIX):end] if end > 0 else None
+
+
+def reviewed_completion(body):
+    lines = body.splitlines()
+    if len(lines) < 3 or lines[0] != MARKER or body.count(COMPLETION_PREFIX) != 1:
+        return None
+    match = re.fullmatch(r"<!-- ai-review:completion=([0-9a-f]{40}):(complete|partial) -->", lines[2])
+    if not match or lines[1] != f"{SHA_PREFIX}{match[1]} -->":
+        return None
+    return match[2]
 
 
 def split_coverage(text):
@@ -640,7 +651,8 @@ def compose(result, manifest, *, sha, provider, findings=None):
                                      findings=findings, review=review, warnings=warnings)
     if findings is not None:
         review = strip_findings_block(review, last=True)
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->"]
+    parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
+             f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->"]
     if findings is not None:
         parts.append(findings["block"])
     parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
@@ -668,7 +680,8 @@ def compose_with_findings(result, manifest, *, sha, provider, findings, review, 
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
-    parts = [MARKER, f"{SHA_PREFIX}{sha} -->", block, title, ""]
+    parts = [MARKER, f"{SHA_PREFIX}{sha} -->",
+             f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->", block, title, ""]
     if warnings:
         parts += ["> [!WARNING]", "> **Revisión incompleta:** " + "; ".join(warnings) + ".", ""]
     parts += [verdict_for(merged), ""]
@@ -715,12 +728,14 @@ def strip_caution_banner(text):
 
 
 def insert_caution_banner(sticky_body, banner):
-    """Insert the banner right after the two marker lines, keeping the sha marker unchanged."""
+    """Replace the banner after the header, preserving the previous review metadata."""
     lines = sticky_body.split("\n")
     idx = 0
     if idx < len(lines) and lines[idx] == MARKER:
         idx += 1
     if idx < len(lines) and lines[idx].startswith(SHA_PREFIX):
+        idx += 1
+    if idx < len(lines) and lines[idx].startswith(COMPLETION_PREFIX):
         idx += 1
     prefix = lines[:idx]
     rest = strip_caution_banner("\n".join(lines[idx:]))
@@ -840,7 +855,8 @@ def cmd_gate(args):
             state = apply_dismissals(state, dismiss_ids, dismiss_all)
         except Exception as exc:
             print(f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar", file=sys.stderr)
-    prev = {"sha": reviewed_sha(sticky["body"]) if sticky else None, "state": state}
+    prev = {"sha": reviewed_sha(sticky["body"]) if sticky else None, "state": state,
+            "completion": reviewed_completion(sticky["body"]) if sticky else None}
     (work / "prev.json").write_text(json.dumps(prev))
     if sticky and prev["sha"] == head and not rerun:
         print(f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite.")
@@ -1013,6 +1029,8 @@ def cmd_prepare(args):
         # A sticky from before findings memory existed: without the previous findings an
         # incremental pass would drop them, so review the whole PR once to rebuild state.
         mode, reason = "full", "no-state"
+    if mode == "incremental" and prev.get("completion") != "complete":
+        mode, reason = "full", "incomplete-prev"
     changed = changed_since(prev_sha, head) if mode == "incremental" else []
 
     numstat = sh("git", "diff", "--numstat", "-z", "--no-renames", merge_base, head).stdout
@@ -1451,7 +1469,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
 
 def summary_of(body):
     return "\n".join(line for line in body.split("\n")
-                     if line != MARKER and not line.startswith((SHA_PREFIX, FINDINGS_PREFIX)))
+                     if line != MARKER and not line.startswith((SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX)))
 
 
 def cmd_publish(args):
