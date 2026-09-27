@@ -1519,15 +1519,22 @@ class IncrementalPrepare(unittest.TestCase):
 
 
 class ReviewContinuity(unittest.TestCase):
-    def publish(self, work, head, manifest, result, body=None):
+    def publish(self, work, head, manifest, result, body=None, repo=None):
         work.mkdir(parents=True, exist_ok=True)
         (work / "manifest.json").write_text(json.dumps(manifest))
         (work / "result.json").write_text(json.dumps(result))
         comments = [{"id": 1, "user": "github-actions[bot]", "body": body}] if body else []
+        real_sh = review.sh
+
+        def run_command(*args, **kwargs):
+            if args[0] == "git":
+                return real_sh(*args, cwd=repo, **kwargs)
+            return mock.Mock(returncode=0)
+
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": head,
                                           "GITHUB_STEP_SUMMARY": ""}), \
                 mock.patch.object(review, "fetch_all_comments", return_value=comments), \
-                mock.patch.object(review, "sh"), contextlib.redirect_stdout(io.StringIO()):
+                mock.patch.object(review, "sh", side_effect=run_command), contextlib.redirect_stdout(io.StringIO()):
             review.cmd_publish(argparse.Namespace(work=str(work)))
         return json.loads((work / "comment.json").read_text())["body"]
 
@@ -1566,6 +1573,33 @@ class ReviewContinuity(unittest.TestCase):
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(prepared["mode"], "incremental")
             self.assertEqual(prepared["reviewed"], ["other.py"])
+
+    def test_recovery_resolves_only_actual_changes_and_detects_reverts(self):
+        fixture = IncrementalPrepare()
+        cases = [(None, "open", ["other.py"], ["app.py", "other.py"]),
+                 ("v3\n", "resolved", ["app.py", "other.py"], ["app.py", "other.py"]),
+                 ("v1\n", "resolved", ["app.py", "other.py"], ["other.py"])]
+        for app_content, expected_state, expected_changed, expected_scope in cases:
+            with self.subTest(app_content=app_content), tempfile.TemporaryDirectory() as tmp:
+                repo, work, base, prev, head = fixture.make_repo(tmp)
+                if app_content is not None:
+                    (repo / "app.py").write_text(app_content)
+                    git(repo, "commit", "-qam", "change app")
+                    head = git(repo, "rev-parse", "HEAD")
+                manifest = {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []}
+                finding = make_finding(file="app.py")
+                body = self.publish(work, prev, manifest,
+                                    {"result": f"{block_of(finding)}\nCOVERAGE: partial"}, repo=repo)
+                previous, _ = self.gate(work, head, body)
+                prepared = fixture.run_prepare(repo, work, base, head, previous)
+                self.assertEqual((prepared["mode"], prepared["reason"]), ("full", "incomplete-prev"))
+                self.assertEqual(sorted(prepared["reviewed"]), expected_scope)
+                model = block_of() if app_content == "v1\n" else block_of(dict(finding, state="resolved"))
+                body = self.publish(work, head, prepared, {"result": f"{model}\nCOVERAGE: complete"},
+                                    body, repo=repo)
+                final = review.parse_findings_block(body)["findings"]
+                self.assertEqual([(f["id"], f["state"]) for f in final], [("F1", expected_state)])
+                self.assertEqual(sorted(prepared["changed_files"]), expected_changed)
 
     def test_incomplete_results_force_full_scope(self):
         cases = [

@@ -27,6 +27,8 @@ El publicador guarda un marcador de cobertura asociado al SHA del intento. Su va
 
 `gate` lee esa metadata y la entrega en `prev.json` junto con el SHA y los hallazgos. `prepare` solo permite revisión incremental cuando la cobertura anterior es completa y la memoria es válida. Las comprobaciones existentes de rebase y re-run siguen vigentes.
 
+En la recuperación completa se conserva la lista real de archivos cambiados desde el intento anterior. Esa lista controla si un hallazgo puede pasar a resuelto y si su archivo volvió al contenido base. El alcance completo de la revisión no cuenta como evidencia de que un archivo haya cambiado.
+
 La cobertura y los hallazgos son independientes. Una revisión parcial puede encontrar problemas útiles; esos hallazgos se conservan. Una falla del proveedor no cambia el estado de la revisión anterior.
 
 ## Decisión de diseño
@@ -51,7 +53,7 @@ El estado completo refleja el protocolo de cobertura del revisor. No demuestra q
 ## Pruebas de aceptación
 
 1. Publicar una revisión parcial y preparar el siguiente push incluye el archivo que quedó pendiente aunque no cambie.
-2. Conservar los IDs y descartes durante esa recuperación.
+2. Conservar los IDs y descartes durante esa recuperación. Un hallazgo en un archivo sin cambios sigue abierto aunque el modelo lo declare resuelto. Un archivo revertido al contenido base resuelve su hallazgo anterior.
 3. Una revisión completa posterior restablece el modo incremental.
 4. Cortes por turnos, tamaño, cobertura ausente o memoria del modelo inválida impiden habilitar incremental.
 5. Metadata histórica o inválida lleva a revisión completa.

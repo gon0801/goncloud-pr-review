@@ -728,7 +728,6 @@ def strip_caution_banner(text):
 
 
 def insert_caution_banner(sticky_body, banner):
-    """Replace the banner after the header, preserving the previous review metadata."""
     lines = sticky_body.split("\n")
     idx = 0
     if idx < len(lines) and lines[idx] == MARKER:
@@ -1031,7 +1030,7 @@ def cmd_prepare(args):
         mode, reason = "full", "no-state"
     if mode == "incremental" and prev.get("completion") != "complete":
         mode, reason = "full", "incomplete-prev"
-    changed = changed_since(prev_sha, head) if mode == "incremental" else []
+    changed = changed_since(prev_sha, head) if mode == "incremental" or reason == "incomplete-prev" else []
 
     numstat = sh("git", "diff", "--numstat", "-z", "--no-renames", merge_base, head).stdout
     files, binary = [], set()
@@ -1444,17 +1443,15 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         print(f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
               file=sys.stderr)
         dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
-    incremental = manifest.get("mode") == "incremental"
-    if incremental:
+    has_previous_changes = manifest.get("mode") == "incremental" or manifest.get("reason") == "incomplete-prev"
+    if has_previous_changes:
         changed = manifest.get("changed_files", [])
     elif manifest.get("reason") == "same-sha":
         changed = []  # a re-run of the same commit: nothing changed, nothing can be resolved
     else:
         changed = manifest.get("reviewed", [])
-    # Revert detection needs to know what changed since the last review, so it only runs on
-    # incremental passes, and only for prev findings whose own file changed in this push.
     watched = {f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN}
-    candidates = sorted(watched & set(changed)) if incremental else []
+    candidates = sorted(watched & set(changed)) if has_previous_changes else []
     base, head = manifest.get("base"), manifest.get("head")
     try:
         reverted = files_matching_base(candidates, base, head) if candidates and base and head else set()
