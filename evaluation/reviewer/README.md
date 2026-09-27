@@ -49,7 +49,11 @@ recuperación que calcular.
 - Precisión: válidos sobre (válidos + falsos positivos + duplicados). Los
   `unresolved` salen del denominador y el informe dice cuántos excluyó.
 - Defectos conocidos: detectados y omitidos, con recuperación sólo cuando el
-  conjunto existe; si no existe, el informe dice `desconocido`.
+  conjunto existe; si no existe, el informe dice `desconocido`. Los IDs de
+  defecto son por caso: se acreditan y comparan como pares `caso/defecto`, y
+  los omitidos se listan así. Un `defecto` acreditado fuera del conjunto de su
+  propio caso rechaza la corrida con salida 2 en vez de cruzar crédito entre
+  casos.
 - Falsos resueltos: hallazgos que la observación marca `resuelto` y cuya fila
   declara `resuelto_real: false`.
 - Cobertura declarada: la que cada observación declaró. Una declaración

@@ -192,5 +192,81 @@ class Comparador(unittest.TestCase):
         self.assertIn("veredicto", r.stderr)
 
 
+def caso_simple(c):
+    return {
+        "caso": c,
+        "repo": "o/r",
+        "base": BASE,
+        "head": HEAD,
+        "producto": "revisor local",
+        "configuracion": "v1",
+        "intento": 1,
+    }
+
+
+def obs_simple(c, hallazgo):
+    return {
+        "caso": c,
+        "repo": "o/r",
+        "base": BASE,
+        "head": HEAD,
+        "producto": "revisor local",
+        "configuracion": "v1",
+        "intento": 1,
+        "resultado": "success",
+        "cobertura": "complete",
+        "duracion_s": 10.0,
+        "turnos": 2,
+        "costo_usd": None,
+        "hallazgos": [
+            {"id": hallazgo, "titulo": "t", "ruta": "x.py", "resuelto": False}
+        ],
+    }
+
+
+class DefectosPorCaso(unittest.TestCase):
+    def test_ids_repetidos_entre_casos_no_se_fusionan(self):
+        corpus = {"casos": [caso_simple("c1"), caso_simple("c2")]}
+        obs = {"observaciones": [obs_simple("c1", "F1"), obs_simple("c2", "G1")]}
+        judg = {
+            "adjudicaciones": [
+                {
+                    "caso": "c1",
+                    "hallazgo": "F1",
+                    "veredicto": "valid",
+                    "defecto": "D1",
+                },
+                {"caso": "c2", "hallazgo": "G1", "veredicto": "false_positive"},
+            ],
+            "defectos": {"c1": ["D1"], "c2": ["D1"]},
+        }
+        r, informe = correr(corpus, obs, judg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(informe["defectos_conocidos"]["conocidos"], 2)
+        self.assertEqual(informe["defectos_conocidos"]["detectados"], 1)
+        self.assertEqual(informe["defectos_conocidos"]["omitidos"], ["c2/D1"])
+        self.assertEqual(informe["defectos_conocidos"]["recuperacion"], 0.5)
+
+    def test_defecto_acreditado_fuera_de_su_caso_se_rechaza(self):
+        corpus = {"casos": [caso_simple("c1"), caso_simple("c2")]}
+        obs = {"observaciones": [obs_simple("c1", "F1"), obs_simple("c2", "G1")]}
+        judg = {
+            "adjudicaciones": [
+                {"caso": "c1", "hallazgo": "F1", "veredicto": "false_positive"},
+                {
+                    "caso": "c2",
+                    "hallazgo": "G1",
+                    "veredicto": "valid",
+                    "defecto": "D9",
+                },
+            ],
+            "defectos": {"c1": ["D9"], "c2": ["D2"]},
+        }
+        r, _ = correr(corpus, obs, judg)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("D9", r.stderr)
+        self.assertIn("c2", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

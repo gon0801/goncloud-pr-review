@@ -106,6 +106,7 @@ def main():
             hallazgos[h["id"]] = h
         vistas[ident] = {"obs": obs, "hallazgos": hallazgos}
 
+    conocidos_por_caso = {c: set(d) for c, d in defectos.items() if c in vistas}
     vistos = set()
     conteo = {"valid": 0, "false_positive": 0, "duplicate": 0, "unresolved": 0}
     detectados = set()
@@ -127,8 +128,15 @@ def main():
             )
         vistos.add(llave)
         conteo[veredicto] += 1
-        if veredicto == "valid" and fila.get("defecto"):
-            detectados.add(fila["defecto"])
+        defecto = fila.get("defecto")
+        if defecto:
+            if defecto not in conocidos_por_caso.get(ident, set()):
+                falla(
+                    f"defecto {defecto!r} acreditado en {ident} no está entre los "
+                    "conocidos de ese caso; los IDs de defecto son por caso"
+                )
+            if veredicto == "valid":
+                detectados.add((ident, defecto))
         if veredicto == "duplicate":
             original = fila.get("duplicado_de")
             if original not in vistas[ident]["hallazgos"]:
@@ -147,15 +155,14 @@ def main():
     total_hallazgos = sum(len(v["hallazgos"]) for v in vistas.values())
     sin_adjudicar = total_hallazgos - len(vistos)
 
-    conjunto = {c: set(d) for c, d in defectos.items() if c in vistas}
-    if conjunto:
-        conocidos = set().union(*conjunto.values())
-        omitidos = sorted(conocidos - detectados)
-        recuperacion = round(len(detectados & conocidos) / len(conocidos), 4)
+    conocidos = {(c, d) for c, ds in conocidos_por_caso.items() for d in ds}
+    if conocidos:
+        omitidos = sorted(f"{c}/{d}" for c, d in conocidos - detectados)
+        recuperacion = round(len(detectados) / len(conocidos), 4)
         defectos_informe = {
             "conjunto_presente": True,
             "conocidos": len(conocidos),
-            "detectados": len(detectados & conocidos),
+            "detectados": len(detectados),
             "omitidos": omitidos,
             "recuperacion": recuperacion,
         }
