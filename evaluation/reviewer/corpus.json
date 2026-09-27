@@ -1,0 +1,339 @@
+{
+  "meta": {
+    "congelado": "2026-09-27",
+    "completo": false,
+    "regla_particion": "ordenado por número de PR; reservada en los índices i % 3 == 0 (determinística; todos los commits de un PR quedan en una sola partición)",
+    "versiones": {
+      "claude_code": "2.1.282",
+      "litellm": "1.102.1",
+      "modelo": "deepseek-v4.1-flash",
+      "proveedor": "opencode-go"
+    },
+    "reglas": {
+      "prompt": "prompt.md del repo en el SHA base",
+      "reglas_repo": ".github/ai-review.md de la base (si existe)",
+      "exclusiones": "DEFAULT_EXCLUDES de review.py"
+    },
+    "configuracion": {
+      "attempts": 2,
+      "presupuesto_s": 1320,
+      "transporte": "Sólo GitHub Actions de este repo; el secreto del repo nunca se lee fuera del workflow"
+    },
+    "clave_observacion": "(caso, producto, configuracion, intento)",
+    "pendientes": [
+      "corpus parcial: 20 de 30 PRs (el repo tenía 26 PRs, 20 merged, al congelar)",
+      "caso de renombre: sin PR merged con rename detectable al congelar",
+      "caso de reversión: sin PR identificado al congelar",
+      "salidas del revisor sin capturar (tanda pagada pendiente de autorización)",
+      "comentarios existentes de CodeRabbit sin capturar",
+      "adjudicación ciega vacía hasta contar con salidas"
+    ]
+  },
+  "casos": [
+    {
+      "caso": "pr2",
+      "pr": 2,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+      "head": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+      "pushes": 7,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "action",
+        "raiz",
+        "scripts",
+        "templates",
+        "tests",
+        "workflows"
+      ],
+      "particion": "reservada",
+      "titulo": "feat: DeepSeek V4.1 Flash reviewer via OpenCode Go + review round 1 fixes (#2)"
+    },
+    {
+      "caso": "pr4",
+      "pr": 4,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+      "head": "6aefffa98bd685524bd01b095e003066b43e79f5",
+      "pushes": 3,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "action",
+        "raiz",
+        "templates",
+        "tests",
+        "workflows"
+      ],
+      "particion": "ajuste",
+      "titulo": "fix: revisión a prueba de fallas de infraestructura (#4)"
+    },
+    {
+      "caso": "pr6",
+      "pr": 6,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "6aefffa98bd685524bd01b095e003066b43e79f5",
+      "head": "c17077dde15800b8267ecf3e2cda6c31274b6cb2",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "chore: cierre del rastro saikit del despliegue del revisor (#6)"
+    },
+    {
+      "caso": "pr8",
+      "pr": 8,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "c17077dde15800b8267ecf3e2cda6c31274b6cb2",
+      "head": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "reservada",
+      "titulo": "docs: plan de mejoras del revisor (más rápido y sin repetir hallazgos) (#8)"
+    },
+    {
+      "caso": "pr9",
+      "pr": 9,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "c811c736b6a6b97c805610fbe84dd747d9889f0b",
+      "pushes": 8,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "action",
+        "raiz",
+        "templates",
+        "tests",
+        "workflows"
+      ],
+      "particion": "ajuste",
+      "titulo": "feat: PR A — revisión más rápida + cierre del issue #5 (#9)"
+    },
+    {
+      "caso": "pr10",
+      "pr": 10,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "c811c736b6a6b97c805610fbe84dd747d9889f0b",
+      "head": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "chore: rastro saikit del PR A (decisiones + blast) (#10)"
+    },
+    {
+      "caso": "pr13",
+      "pr": 13,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "9e7d4f72dcfddbef1744c4a8d13eb2b3f90f7ae8",
+      "pushes": 13,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "action",
+        "raiz",
+        "tests"
+      ],
+      "particion": "reservada",
+      "titulo": "feat: PR B — revisiones incrementales sin repetir hallazgos (#13)"
+    },
+    {
+      "caso": "pr14",
+      "pr": 14,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "9e7d4f72dcfddbef1744c4a8d13eb2b3f90f7ae8",
+      "head": "b805a5756903df24b2154845472095ffe80aa422",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "chore: rastro saikit del PR B (decisiones + blast) (#14)"
+    },
+    {
+      "caso": "pr18",
+      "pr": 18,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "b805a5756903df24b2154845472095ffe80aa422",
+      "head": "3623c9932af3997bcba57f5309b5c53213a4f143",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "chore: ignorar out/ (página de progreso que regenera el plugin de harness) (#18)"
+    },
+    {
+      "caso": "pr19",
+      "pr": 19,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "3623c9932af3997bcba57f5309b5c53213a4f143",
+      "head": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+      "pushes": 3,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "raiz",
+        "tests"
+      ],
+      "particion": "reservada",
+      "titulo": "fix: cierra los issues #12 y #17 (pulido de PR A y PR B) (#19)"
+    },
+    {
+      "caso": "pr20",
+      "pr": 20,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+      "head": "42a0d98e656fcae3ca1beb7f1f6642618b8e8d61",
+      "pushes": 3,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "raiz",
+        "tests"
+      ],
+      "particion": "ajuste",
+      "titulo": "fix(review): recover full scope after incomplete reviews (#20)"
+    },
+    {
+      "caso": "pr22",
+      "pr": 22,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "42a0d98e656fcae3ca1beb7f1f6642618b8e8d61",
+      "head": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "raiz",
+        "tests"
+      ],
+      "particion": "ajuste",
+      "titulo": "fix(review): retry rejected reasoning conversations (#22)"
+    },
+    {
+      "caso": "pr24",
+      "pr": 24,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+      "head": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+      "pushes": 5,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "raiz",
+        "tests",
+        "workflows"
+      ],
+      "particion": "reservada",
+      "titulo": "docs+style: B0 plan y candados"
+    },
+    {
+      "caso": "pr25",
+      "pr": 25,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+      "head": "1f4488bfc64c7a9c966f813e47fffadc626ee673",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "chore: bootstrap .saikit/autopilot.json"
+    },
+    {
+      "caso": "pr26",
+      "pr": 26,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+      "head": "21780a27503967dd0f7327ac5e128c565310f958",
+      "pushes": 2,
+      "corte_anterior": true,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "ajuste",
+      "titulo": "docs: ledger F1 (filas B0 + residuales, enlaces CI/PR) (#26)"
+    },
+    {
+      "caso": "pr27",
+      "pr": 27,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "1f4488bfc64c7a9c966f813e47fffadc626ee673",
+      "head": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "reservada",
+      "titulo": "chore: autopilot merge automatico (orden David 17:26)"
+    },
+    {
+      "caso": "pr28",
+      "pr": 28,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "21780a27503967dd0f7327ac5e128c565310f958",
+      "head": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+      "pushes": 3,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "scripts",
+        "tests",
+        "workflows"
+      ],
+      "particion": "ajuste",
+      "titulo": "ci: Q0 particiona la bateria en dos shards con candado (#28)"
+    },
+    {
+      "caso": "pr29",
+      "pr": 29,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+      "head": "09f7da43d6ccc56569b5a123509226b9342fb272",
+      "pushes": 2,
+      "corte_anterior": true,
+      "categoria": "estandar",
+      "modulos_codigo": [
+        "tests"
+      ],
+      "particion": "ajuste",
+      "titulo": "P0: recorrido del error del proveedor con corrida real del CLI (#29)"
+    },
+    {
+      "caso": "pr30",
+      "pr": 30,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "09f7da43d6ccc56569b5a123509226b9342fb272",
+      "head": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+      "pushes": 1,
+      "corte_anterior": false,
+      "categoria": "limpio",
+      "modulos_codigo": [],
+      "particion": "reservada",
+      "titulo": "docs: ledger post-P0 cierra filas Q0 y P0 con residuales (#30)"
+    },
+    {
+      "caso": "pr31",
+      "pr": 31,
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+      "head": "7e2dfac9d3c42c42853734e5f6d0ec01445c71e4",
+      "pushes": 5,
+      "corte_anterior": true,
+      "categoria": "entre_modulos",
+      "modulos_codigo": [
+        "scripts",
+        "tests"
+      ],
+      "particion": "ajuste",
+      "titulo": "feat: E0 comparador reproducible de revisiones (#31)"
+    }
+  ]
+}
