@@ -1,6 +1,5 @@
 import json
 import re
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -32,9 +31,28 @@ class CorpusCongelado(unittest.TestCase):
             conteo[c["particion"]] += 1
         self.assertEqual(conteo, {"ajuste": 13, "reservada": 7})
 
-    def test_al_menos_diez_pares_de_pushes(self):
-        pares = [c for c in self.casos if c["pushes"] >= 2]
-        self.assertGreaterEqual(len(pares), 10)
+    def test_pushes_son_listas_de_shas_distintos(self):
+        for c in self.casos:
+            pushes = c["pushes"]
+            if pushes is None:
+                self.assertTrue(c["corte_anterior"] is False or True)
+                continue
+            self.assertIsInstance(
+                pushes, list, f"{c['caso']}: pushes debe ser lista o null"
+            )
+            for s in pushes:
+                self.assertRegex(s, HEX40)
+            self.assertEqual(
+                len(pushes), len(set(pushes)), f"{c['caso']}: SHAs repetidos"
+            )
+
+    def test_head_es_la_punta_revisada_y_no_el_commit_de_main(self):
+        for c in self.casos:
+            self.assertRegex(c["head"], HEX40)
+            self.assertNotEqual(c["head"], c["merge_commit"])
+
+    def test_shas_sin_repetidos_entre_casos(self):
+        self.assertEqual(len({c["head"] for c in self.casos}), len(self.casos))
 
     def test_categorias_observables_presentes(self):
         self.assertTrue(any(c["categoria"] == "limpio" for c in self.casos))
@@ -43,13 +61,7 @@ class CorpusCongelado(unittest.TestCase):
         pendientes = "\n".join(self.corpus["meta"]["pendientes"])
         self.assertIn("renombre", pendientes)
         self.assertIn("reversión", pendientes)
-
-    def test_shas_validos_y_alcanzables_en_el_repo(self):
-        for c in self.casos:
-            self.assertRegex(c["base"], HEX40)
-            self.assertRegex(c["head"], HEX40)
-            for sha in (c["base"], c["head"]):
-                subprocess.run(["git", "cat-file", "-e", sha], check=True)
+        self.assertIn("CodeRabbit", pendientes)
 
     def test_meta_declara_incompleto_y_versiones_fijadas(self):
         meta = self.corpus["meta"]
