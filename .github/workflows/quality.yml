@@ -98,9 +98,8 @@ jobs:
           R_QUALITY: ${{ needs.quality.result }}
         run: |
           rc=0
-          for par in "quality=$R_QUALITY"; do
-            printf '%s\n' "$par"
-            case "$par" in *=success) ;; *) rc=1 ;; esac
-          done
+          par="quality=$R_QUALITY"
+          printf '%s\n' "$par"
+          case "$par" in *=success) ;; *) rc=1 ;; esac
           [ "$rc" -eq 0 ] || { echo "gate: algun job de calidad NO quedo en success" >&2; exit 1; }
           echo "gate: OK -- todos en success"
