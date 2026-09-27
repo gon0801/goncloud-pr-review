@@ -506,13 +506,24 @@ class GitHubGlue(unittest.TestCase):
 
 FAKE_CLAUDE = textwrap.dedent("""\
     #!/usr/bin/env python3
-    import json, os, time
+    import json, os, sys, time
     time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
-    with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
-        fh.write(json.dumps({k: os.environ.get(k) for k in
-                 ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
-                  "GH_TOKEN", "API_KEY")}) + "\\n")
-    print(os.environ["FAKE_CLAUDE_REPLY"])
+    log = os.environ["FAKE_CLAUDE_LOG"]
+    previas = sum(1 for _ in open(log)) if os.path.exists(log) else 0
+    registro = {k: os.environ.get(k) for k in
+                ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+                 "GH_TOKEN", "API_KEY")}
+    registro["argv"] = sys.argv
+    registro["env"] = dict(os.environ)
+    with open(log, "a") as fh:
+        fh.write(json.dumps(registro) + "\\n")
+    lista = os.environ.get("FAKE_CLAUDE_REPLIES")
+    if lista:
+        respuesta = json.loads(lista)[previas]
+    else:
+        respuesta = json.loads(os.environ["FAKE_CLAUDE_REPLY"])
+    print(json.dumps(respuesta) if isinstance(respuesta, dict) else respuesta)
+    sys.exit(1 if isinstance(respuesta, dict) and respuesta.get("is_error") else 0)
 """)
 
 FAKE_LITELLM = textwrap.dedent("""\
@@ -759,21 +770,83 @@ class RunAgent(unittest.TestCase):
     def test_deepseek_api_gets_the_key_directly_and_github_token_is_withheld(self):
         proc, calls, result, proxy, _ = self.run_agent(OK_REPLY, provider="deepseek")
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
         self.assertEqual(
-            calls,
-            [
-                {
-                    "ANTHROPIC_API_KEY": "sk-go-key-123",
-                    "ANTHROPIC_AUTH_TOKEN": None,
-                    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-                    "ANTHROPIC_MODEL": "deepseek-flash[1m]",
-                    "GH_TOKEN": None,
-                    "API_KEY": None,
-                }
-            ],
+            {
+                k: calls[0][k]
+                for k in (
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "ANTHROPIC_BASE_URL",
+                    "ANTHROPIC_MODEL",
+                    "GH_TOKEN",
+                    "API_KEY",
+                )
+            },
+            {
+                "ANTHROPIC_API_KEY": "sk-go-key-123",
+                "ANTHROPIC_AUTH_TOKEN": None,
+                "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                "ANTHROPIC_MODEL": "deepseek-flash[1m]",
+                "GH_TOKEN": None,
+                "API_KEY": None,
+            },
         )
         self.assertIsNone(proxy)
         self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+
+    def test_opencode_replay_error_restarts_cli(self):
+        exitoso = {
+            "result": "ok\nCOVERAGE: complete",
+            "subtype": "success",
+            "num_turns": 12,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="opencode-go",
+            FAKE_CLAUDE_REPLIES=json.dumps(
+                [ReasoningReplayRecovery.replay_error, exitoso]
+            ),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(result, exitoso)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual({c["ANTHROPIC_MODEL"] for c in calls}, {"deepseek-v4.1-flash"})
+        for llamada in calls:
+            argv = llamada["argv"]
+            self.assertIn("--no-session-persistence", argv)
+            for bandera in ("--resume", "--continue", "-r", "-c"):
+                self.assertNotIn(bandera, argv)
+            entorno = llamada["env"]
+            self.assertNotIn("sk-go-key-123", json.dumps(entorno))
+            self.assertNotIn("ghs_tok", json.dumps(entorno))
+            for clave in ("API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY"):
+                self.assertNotIn(clave, entorno)
+            self.assertNotEqual(entorno["ANTHROPIC_AUTH_TOKEN"], "sk-go-key-123")
+
+    def test_opencode_replay_error_persistent_is_bounded_and_explained(self):
+        error = ReasoningReplayRecovery.replay_error
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="opencode-go",
+            FAKE_CLAUDE_REPLIES=json.dumps([error, error]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
+
+    def test_opencode_replay_error_is_not_retried_without_budget(self):
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="opencode-go",
+            FAKE_CLAUDE_REPLIES=json.dumps(
+                [ReasoningReplayRecovery.replay_error, OK_REPLY]
+            ),
+            REVIEW_BUDGET_SECONDS="320",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
 
     def test_opencode_go_runs_deepseek_through_a_local_proxy_that_alone_holds_the_key(
         self,
