@@ -1361,7 +1361,7 @@ class VerdictSections(unittest.TestCase):
         self.assertEqual(body.count("**Veredicto:**"), 1)
         self.assertIn("**Veredicto:** 1 High abierto.", body)
 
-    def test_block_right_after_sha_and_within_budgets(self):
+    def test_metadata_precedes_review_and_stays_within_budgets(self):
         merged = [make_finding("F1")]
         body = review.compose({"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
                               MANIFEST, sha=SHA, provider="opencode-go",
@@ -1370,7 +1370,8 @@ class VerdictSections(unittest.TestCase):
         lines = body.split("\n")
         self.assertEqual(lines[0], review.MARKER)
         self.assertTrue(lines[1].startswith(review.SHA_PREFIX))
-        self.assertTrue(lines[2].startswith(review.FINDINGS_PREFIX))
+        self.assertTrue(lines[2].startswith(review.COMPLETION_PREFIX))
+        self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
         self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
 
@@ -1475,7 +1476,8 @@ class IncrementalPrepare(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(repo, work, base, head,
-                                        {"sha": prev, "state": {"findings": [make_finding("F1")], "next": 2}})
+                                        {"sha": prev, "completion": "complete",
+                                         "state": {"findings": [make_finding("F1")], "next": 2}})
             self.assertEqual(manifest["mode"], "incremental")
             self.assertEqual(manifest["changed_files"], ["other.py"])
             self.assertEqual(manifest["reviewed"], ["other.py"])
@@ -1502,15 +1504,199 @@ class IncrementalPrepare(unittest.TestCase):
         # Stickies written before PR B have a sha but no findings block.
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
-            manifest = self.run_prepare(repo, work, base, head, {"sha": prev, "state": None})
-            self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-state"))
-            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
+            for completion in [None, "complete"]:
+                with self.subTest(completion=completion):
+                    manifest = self.run_prepare(repo, work, base, head,
+                                                {"sha": prev, "state": None, "completion": completion})
+                    self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-state"))
+                    self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
 
     def test_first_push_is_full(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(repo, work, base, head, {"sha": None, "state": None})
             self.assertEqual((manifest["mode"], manifest["reason"]), ("full", "no-prev"))
+
+
+class ReviewContinuity(unittest.TestCase):
+    def publish(self, work, head, manifest, result, body=None, repo=None):
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "manifest.json").write_text(json.dumps(manifest))
+        (work / "result.json").write_text(json.dumps(result))
+        comments = [{"id": 1, "user": "github-actions[bot]", "body": body}] if body else []
+        real_sh = review.sh
+
+        def run_command(*args, **kwargs):
+            if args[0] == "git":
+                return real_sh(*args, cwd=repo, **kwargs)
+            return mock.Mock(returncode=0)
+
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": head,
+                                          "GITHUB_STEP_SUMMARY": ""}), \
+                mock.patch.object(review, "fetch_all_comments", return_value=comments), \
+                mock.patch.object(review, "sh", side_effect=run_command), contextlib.redirect_stdout(io.StringIO()):
+            review.cmd_publish(argparse.Namespace(work=str(work)))
+        return json.loads((work / "comment.json").read_text())["body"]
+
+    def gate(self, work, head, body, attempt="1"):
+        comments = [{"id": 1, "user": "github-actions[bot]", "body": body}]
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": head,
+                                          "RUN_ATTEMPT": attempt}), \
+                mock.patch.object(review, "fetch_all_comments", return_value=comments), \
+                mock.patch.object(review, "set_output") as output, \
+                contextlib.redirect_stdout(io.StringIO()):
+            review.cmd_gate(argparse.Namespace(work=str(work)))
+        return json.loads((work / "prev.json").read_text()), output.call_args.args
+
+    def test_partial_publish_recovers_full_scope_then_returns_to_incremental(self):
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            dismissed = make_finding(file="app.py", state="dismissed")
+            old = f"{review.MARKER}\n{review.SHA_PREFIX}{base} -->\n{block_of(dismissed)}"
+            manifest = {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []}
+            body = self.publish(work, prev, manifest,
+                                {"result": f"{block_of()}\nCOVERAGE: partial | app.py"}, old)
+            previous, _ = self.gate(work, head, body)
+            prepared = fixture.run_prepare(repo, work, base, head, previous)
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+            self.assertEqual((prepared["mode"], prepared["reason"]), ("full", "incomplete-prev"))
+            self.assertIn("F1", (work / "prev_findings.md").read_text())
+            body = self.publish(work, head, prepared,
+                                {"result": f"{block_of()}\nCOVERAGE: complete"}, body)
+            self.assertEqual([(f["id"], f["state"]) for f in review.parse_findings_block(body)["findings"]],
+                             [("F1", "dismissed")])
+            (repo / "other.py").write_text("v3\n")
+            git(repo, "commit", "-qam", "next push")
+            next_head = git(repo, "rev-parse", "HEAD")
+            previous, _ = self.gate(work, next_head, body)
+            prepared = fixture.run_prepare(repo, work, base, next_head, previous)
+            self.assertEqual(prepared["mode"], "incremental")
+            self.assertEqual(prepared["reviewed"], ["other.py"])
+
+    def test_recovery_resolves_only_actual_changes_and_detects_reverts(self):
+        fixture = IncrementalPrepare()
+        cases = [(None, "open", ["other.py"], ["app.py", "other.py"]),
+                 ("v3\n", "resolved", ["app.py", "other.py"], ["app.py", "other.py"]),
+                 ("v1\n", "resolved", ["app.py", "other.py"], ["other.py"])]
+        for app_content, expected_state, expected_changed, expected_scope in cases:
+            with self.subTest(app_content=app_content), tempfile.TemporaryDirectory() as tmp:
+                repo, work, base, prev, head = fixture.make_repo(tmp)
+                if app_content is not None:
+                    (repo / "app.py").write_text(app_content)
+                    git(repo, "commit", "-qam", "change app")
+                    head = git(repo, "rev-parse", "HEAD")
+                manifest = {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []}
+                finding = make_finding(file="app.py")
+                body = self.publish(work, prev, manifest,
+                                    {"result": f"{block_of(finding)}\nCOVERAGE: partial"}, repo=repo)
+                previous, _ = self.gate(work, head, body)
+                prepared = fixture.run_prepare(repo, work, base, head, previous)
+                self.assertEqual((prepared["mode"], prepared["reason"]), ("full", "incomplete-prev"))
+                self.assertEqual(sorted(prepared["reviewed"]), expected_scope)
+                model = block_of() if app_content == "v1\n" else block_of(dict(finding, state="resolved"))
+                body = self.publish(work, head, prepared, {"result": f"{model}\nCOVERAGE: complete"},
+                                    body, repo=repo)
+                final = review.parse_findings_block(body)["findings"]
+                self.assertEqual([(f["id"], f["state"]) for f in final], [("F1", expected_state)])
+                self.assertEqual(sorted(prepared["changed_files"]), expected_changed)
+
+    def test_incomplete_results_force_full_scope(self):
+        cases = [
+            ({"result": f"{block_of()}\nCOVERAGE: partial | app.py"}, []),
+            ({"result": block_of()}, []),
+            ({"result": f"{block_of()}\nCOVERAGE: unknown"}, []),
+            ({"result": f"{block_of()}\nCOVERAGE: complete", "subtype": "error_max_turns"}, []),
+            ({"result": f"{block_of()}\nCOVERAGE: complete"}, [{"path": "large.py", "reason": "budget"}]),
+            ({"result": "COVERAGE: complete"}, []),
+            ({"result": "<!-- ai-review:findings=broken -->\nCOVERAGE: complete"}, []),
+        ]
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            for result, excluded in cases:
+                with self.subTest(result=result, excluded=excluded):
+                    manifest = {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": excluded}
+                    body = self.publish(work, prev, manifest, result)
+                    self.assertIn("Revisión incompleta", body)
+                    previous, _ = self.gate(work, head, body)
+                    prepared = fixture.run_prepare(repo, work, base, head, previous)
+                    self.assertEqual(prepared["mode"], "full")
+                    self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+
+    def test_unknown_legacy_and_malformed_completion_force_full_scope(self):
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            header = f"{review.MARKER}\n{review.SHA_PREFIX}{prev} -->\n"
+            complete = f"<!-- ai-review:completion={prev}:complete -->"
+            statuses = ["", f"<!-- ai-review:completion={prev}:unknown -->",
+                        f"<!-- ai-review:completion={head}:complete -->", complete + "extra",
+                        complete + "\n" + complete,
+                        complete + f"\n<!-- ai-review:completion={prev}:partial -->",
+                        "review prose\n" + complete]
+            for status in statuses:
+                with self.subTest(status=status):
+                    body = header + status + "\n" + block_of()
+                    previous, _ = self.gate(work, head, body)
+                    prepared = fixture.run_prepare(repo, work, base, head, previous)
+                    self.assertEqual(prepared["mode"], "full")
+                    self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+            prepared = fixture.run_prepare(repo, work, base, head,
+                                           {"sha": prev, "state": {"findings": [], "next": 1}})
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+
+    def test_same_sha_skip_and_rerun_preserved_after_partial(self):
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            body = self.publish(work, head, dict(MANIFEST, head=head),
+                                {"result": f"{block_of()}\nCOVERAGE: partial"})
+            _, output = self.gate(work, head, body)
+            self.assertEqual(output, ("skip", "true"))
+            previous, output = self.gate(work, head, body, attempt="2")
+            self.assertEqual(output, ("skip", "false"))
+            prepared = fixture.run_prepare(repo, work, base, head, previous)
+            self.assertEqual((prepared["mode"], prepared["reason"]), ("full", "same-sha"))
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+
+    def test_filtered_empty_scope_can_complete_but_budget_cannot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            for reason, expected in [("filtro *.lock", "complete"), ("binario", "complete"),
+                                     ("budget", "partial")]:
+                with self.subTest(reason=reason):
+                    manifest = dict(MANIFEST, reviewed=[], excluded=[{"path": "a.lock", "reason": reason}])
+                    body = self.publish(work, SHA, manifest, {"result": ""})
+                    previous, _ = self.gate(work, "b" * 40, body)
+                    self.assertEqual(previous.get("completion"), expected)
+
+    def test_infra_failures_preserve_completion_and_replace_banner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            for status in ["partial", "complete"]:
+                with self.subTest(status=status):
+                    body = self.publish(work, SHA, MANIFEST,
+                                        {"result": f"{block_of()}\nCOVERAGE: {status}"})
+                    for reason in ["first failure", "second failure"]:
+                        body = self.publish(work, "b" * 40, MANIFEST, {review.ERROR_KEY: reason}, body)
+                    self.assertEqual(body.count(review.CAUTION_MARK), 1)
+                    self.assertNotIn("first failure", body)
+                    previous, _ = self.gate(work, "b" * 40, body)
+                    self.assertEqual(previous["sha"], SHA)
+                    self.assertEqual(previous.get("completion"), status)
+                    self.assertNotIn("ai-review:completion", review.summary_of(body))
+
+    def test_completion_survives_truncation_in_both_render_paths(self):
+        for merged in [[], [make_finding()]]:
+            with self.subTest(merged=merged):
+                findings = {"merged": merged, "block": block_of(*merged), "model_ok": True}
+                body = review.compose({"result": "x" * 100_000 + "\nCOVERAGE: complete"}, MANIFEST,
+                                      sha=SHA, provider="opencode-go", findings=findings)
+                with tempfile.TemporaryDirectory() as tmp:
+                    previous, _ = self.gate(Path(tmp), "b" * 40, body)
+                self.assertEqual(previous.get("completion"), "complete")
+                self.assertNotIn("ai-review:completion", review.summary_of(body))
 
 
 class GatePrev(unittest.TestCase):
@@ -1584,7 +1770,7 @@ class GatePrev(unittest.TestCase):
 
     def test_gate_without_sticky_persists_empty_prev(self):
         output, prev = self.run_gate([])
-        self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None}))
+        self.assertEqual((output, prev), ("skip=false\n", {"sha": None, "state": None, "completion": None}))
 
 
 class IncrementalRun(unittest.TestCase):
