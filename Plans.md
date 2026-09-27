@@ -73,8 +73,8 @@ El usuario autorizó escribir el diseño y el plan, no implementar. Todos los bl
 | Tarea | Contenido | Criterio de cierre | Depende de | Estado |
 |---|---|---|---|---|
 | B0 | Plan y candados: versionar plan/diseno/Plans, quality-kit y hooks; ruff format + lint sin cambio de conducta. | pre-commit 8/8 verde, unittest 191 OK, AST identico salvo renombres lint | Ninguna | cc:done (PR #24, merge 749a6f5; bootstrap autopilot PR #25, merge 1f4488b; evidencia docs/evidence/reviewer/B0.md) |
-| Q0 | Validación por bloques y particiones de CI. | Unión de particiones idéntica al descubrimiento completo, sin duplicados. | Ninguna | cc:TODO |
-| P0 | Regresión del recorrido del proveedor, seguimiento #23. | Subproceso real prueba recuperación, límites y aislamiento de credenciales. | Q0 | cc:TODO |
+| Q0 | Validación por bloques y particiones de CI. | Unión de particiones idéntica al descubrimiento completo, sin duplicados. | Ninguna | cc:done (PR #28, merge 2a0e7d8; evidencia docs/evidence/reviewer/Q0.md) |
+| P0 | Regresión del recorrido del proveedor, seguimiento #23. | Subproceso real prueba recuperación, límites y aislamiento de credenciales. | Q0 | cc:done (PR #29, merge 09f7da4; evidencia docs/evidence/reviewer/P0.md) |
 | E0 | Comparador reproducible de revisiones. | Rechaza pares de SHA distintos y reporta denominadores y datos ausentes. | Q0 | cc:TODO |
 | E1 | Corpus y medición inicial. | 30 PRs, al menos diez pares de pushes, salidas congeladas y adjudicación. | E0 | cc:TODO |
 | M0 | Dominio y lector compatible de memoria. | Legacy y v2 conservan IDs, descartes y cursor; corrupción no equivale a vacío. | Q0 | cc:TODO |
