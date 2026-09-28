@@ -1,0 +1,27 @@
+{
+  "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+  "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+  "reviewed": [
+    "review.py",
+    "tests/test_review.py",
+    ".claude-code-harness.config.yaml",
+    ".github/workflows/quality.yml",
+    ".pre-commit-config.yaml",
+    ".saikit/findings/blast-pr-a.json",
+    ".saikit/findings/blast-pr-b.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "Plans.md",
+    "docs/evidence/reviewer/B0.md",
+    "docs/reviewer-improvements-design.md",
+    "docs/reviewer-improvements-plan.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 363637,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 80
+}

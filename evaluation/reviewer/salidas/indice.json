@@ -1,0 +1,250 @@
+{
+  "meta": {
+    "que_es": "índice de procedencia de las salidas retenidas del revisor (20 útiles; una por caso del corpus)",
+    "retencion": "copia íntegra en evaluation/reviewer/salidas/ según lo documentado por E1 (repo público, retención perpetua)",
+    "par_medido": "base y head son el par congelado del corpus, verificado contra el manifest de cada salida retenida (enmienda E1-ADJ-HOJA: bases de pr10/pr14 corregidas al merge-base realmente medido)",
+    "secreto": "ningún valor de secreto fue leído, impreso, copiado ni transmitido"
+  },
+  "salidas": [
+    {
+      "caso": "pr10",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "a398079ef5103bb54fbd8d3fd4c153ede936460d",
+      "procedencia": "run 36374370549",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr10/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr10/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr13",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+      "procedencia": "run 36374583653",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr13/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr13/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr14",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "a1930e695587b1d776b5baf301aee908c442c30e",
+      "procedencia": "run 36374607020",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr14/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr14/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr18",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "b805a5756903df24b2154845472095ffe80aa422",
+      "head": "8bf6bd89be5c4e14a6517c8d2ad6415f523e2153",
+      "procedencia": "original-conservada",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr18/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr18/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr19",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "3623c9932af3997bcba57f5309b5c53213a4f143",
+      "head": "14cfbf7d2d907e54ee68be2e1fa415ede2b2b3cd",
+      "procedencia": "run 36374630332",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr19/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr19/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr2",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+      "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+      "procedencia": "run 36373925421",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr2/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr2/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr20",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+      "head": "191ae4560a8f386b7a3f02f9ca3e363ce247003f",
+      "procedencia": "run 36374653444",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr20/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr20/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr22",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "42a0d98e656fcae3ca1beb7f1f6642618b8e8d61",
+      "head": "ecd04b102e88c8732c2c1a23d5fb5f73d318f9bb",
+      "procedencia": "run 36374878301",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr22/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr22/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr24",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+      "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+      "procedencia": "run 36374928480",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr24/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr24/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr25",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+      "head": "a628351f3b17cdd36b4f959cbb054ea7151b8b11",
+      "procedencia": "original-conservada",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr25/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr25/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr26",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+      "head": "f0dcf5728aeff6889376edf3b93f7b6781b26ccc",
+      "procedencia": "original-conservada",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr26/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr26/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr27",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "1f4488bfc64c7a9c966f813e47fffadc626ee673",
+      "head": "b48ca62ce390c1e91bf32530e00e4eca10877f2f",
+      "procedencia": "original-conservada",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr27/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr27/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr28",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "21780a27503967dd0f7327ac5e128c565310f958",
+      "head": "164fc79b56dacbd7a93fa8f049f4a72fcba16b8d",
+      "procedencia": "run 36374993883",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr28/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr28/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr29",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+      "head": "9bf2c3d18724c021bd53ff8df223b58273b2a027",
+      "procedencia": "run 36375014298",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr29/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr29/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr30",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "09f7da43d6ccc56569b5a123509226b9342fb272",
+      "head": "e4e4746a49ec2682a58126e3ff2d3a87c1270e34",
+      "procedencia": "run 36375033109",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr30/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr30/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr31",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+      "head": "af485362302d140e7f5a36de05a6d891e8d51a27",
+      "procedencia": "run 36375108760",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr31/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr31/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr4",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+      "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+      "procedencia": "run 36374294882",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr4/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr4/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr6",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "6aefffa98bd685524bd01b095e003066b43e79f5",
+      "head": "ee4e1ed32243194f0ce13f38ca0f2a17a6f5a3fd",
+      "procedencia": "original-conservada",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr6/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr6/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr8",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "c17077dde15800b8267ecf3e2cda6c31274b6cb2",
+      "head": "b7e2d4791ef2039ba5e5c1d00d0e851567d4490b",
+      "procedencia": "run 36374321749",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr8/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr8/intento-1/manifest.json"
+      }
+    },
+    {
+      "caso": "pr9",
+      "producto": "revisor",
+      "intento": 1,
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+      "procedencia": "run 36374343611",
+      "archivos": {
+        "result": "evaluation/reviewer/salidas/revisor/pr9/intento-1/result.json",
+        "manifest": "evaluation/reviewer/salidas/revisor/pr9/intento-1/manifest.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "base": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+  "head": "191ae4560a8f386b7a3f02f9ca3e363ce247003f",
+  "reviewed": [
+    "review.py",
+    "tests/test_review.py",
+    "README.md",
+    "docs/incomplete-review-design.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 42910,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

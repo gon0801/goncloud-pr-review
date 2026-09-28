@@ -1,0 +1,1079 @@
+{
+  "meta": {
+    "que_es": "observaciones normalizadas para scripts/compare_reviews.py",
+    "clave_observacion": "(caso, producto, configuracion, intento)",
+    "convencion": "costo_usd, duracion_s y turnos en null = desconocido (nunca cero); resuelto sólo se marca si la propia salida lo declara",
+    "pendiente_e0": "E0 hoy rechaza una segunda observación del mismo caso; alinearla con la clave completa es el pendiente anotado en E1, no se cambió E0 en este bloque",
+    "redaccion_ciega": "en los detalles de CodeRabbit se quitaron únicamente metadatos de la herramienta (comentarios HTML, bloque Prompt to fix, línea Addressed -> campo resuelto); el resto queda íntegro"
+  },
+  "observaciones": [
+    {
+      "caso": "pr10",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "a398079ef5103bb54fbd8d3fd4c153ede936460d",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 116.04,
+      "turnos": 40,
+      "costo_usd": 0.877133,
+      "hallazgos": [
+        {
+          "id": "pr10-R01",
+          "titulo": "El rastro certifica PR A antes de que PR A esté en el repositorio",
+          "ruta": ".saikit/decisiones/pr-a.tsv",
+          "linea": 6,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El rastro certifica PR A antes de que PR A esté en el repositorio"
+        },
+        {
+          "id": "pr10-R02",
+          "titulo": "Regla 4 citada con el sentido contrario al del rastro anterior",
+          "ruta": ".saikit/decisiones/pr-a.tsv",
+          "linea": 5,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Regla 4 citada con el sentido contrario al del rastro anterior"
+        }
+      ]
+    },
+    {
+      "caso": "pr13",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 312.161,
+      "turnos": 35,
+      "costo_usd": 2.9625599999999994,
+      "hallazgos": [
+        {
+          "id": "pr13-R01",
+          "titulo": "Reabrir un hallazgo resuelto no tiene candado y el prompt lo sugiere",
+          "ruta": "prompt.md",
+          "linea": 95,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "Reabrir un hallazgo resuelto no tiene candado y el prompt lo sugiere"
+        },
+        {
+          "id": "pr13-R02",
+          "titulo": "Bloque de hallazgos obligatorio contra 'output only the verdict line': aviso falso de revision incompleta",
+          "ruta": "prompt.md",
+          "linea": 74,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "Bloque de hallazgos obligatorio contra 'output only the verdict line': aviso falso de revision incompleta"
+        },
+        {
+          "id": "pr13-R03",
+          "titulo": "B2 dice tope 20 turnos y el codigo usa 30",
+          "ruta": "Plans.md",
+          "linea": 41,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "B2 dice tope 20 turnos y el codigo usa 30"
+        }
+      ]
+    },
+    {
+      "caso": "pr14",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "a1930e695587b1d776b5baf301aee908c442c30e",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 175.256,
+      "turnos": 45,
+      "costo_usd": 1.2352920000000003,
+      "hallazgos": [
+        {
+          "id": "pr14-R01",
+          "titulo": "El rastro certifica PR B (B1-B7 verificado y aprobado) sobre una base que aún lo declara pendiente",
+          "ruta": ".saikit/decisiones/pr-b.tsv",
+          "linea": 4,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El rastro certifica PR B (B1-B7 verificado y aprobado) sobre una base que aún lo declara pendiente"
+        }
+      ]
+    },
+    {
+      "caso": "pr18",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "b805a5756903df24b2154845472095ffe80aa422",
+      "head": "8bf6bd89be5c4e14a6517c8d2ad6415f523e2153",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía opencode-go (tanda original; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 20.045,
+      "turnos": 12,
+      "costo_usd": 0.06698399999999999,
+      "hallazgos": []
+    },
+    {
+      "caso": "pr19",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "3623c9932af3997bcba57f5309b5c53213a4f143",
+      "head": "14cfbf7d2d907e54ee68be2e1fa415ede2b2b3cd",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 250.751,
+      "turnos": 41,
+      "costo_usd": 2.323855,
+      "hallazgos": [
+        {
+          "id": "pr19-R01",
+          "titulo": "El emparejado de vallas no exige cierre del mismo largo: una cita anidada pierde su linea de veredicto",
+          "ruta": "review.py",
+          "linea": 577,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El emparejado de vallas no exige cierre del mismo largo: una cita anidada pierde su linea de veredicto"
+        },
+        {
+          "id": "pr19-R02",
+          "titulo": "killpg sobre un pid ya recolectado por poll() puede matar un grupo ajeno",
+          "ruta": "review.py",
+          "linea": 1360,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "killpg sobre un pid ya recolectado por poll() puede matar un grupo ajeno"
+        }
+      ]
+    },
+    {
+      "caso": "pr2",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+      "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 255.071,
+      "turnos": 20,
+      "costo_usd": 1.815774,
+      "hallazgos": [
+        {
+          "id": "pr2-R01",
+          "titulo": "El renombrado de inputs rompe los repos ya instalados",
+          "ruta": "action.yml",
+          "linea": 5,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "- 🟡 Medium · `action.yml:5` · El renombrado de inputs rompe los repos ya instalados — `deepseek_api_key` pasó a ser `api_key` (required) y se eliminaron `model` y `claude_code_version`, pero los repos donde `scripts/install.sh` ya corrió siguen con un workflow que pasa `deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}` y llama a `@main`; en su próximo PR la action recibe `api_key` vacío y muere en \"Check inputs\" con \"Falta el secret AI_REVIEW_API_KEY\", un mensaje que apunta al secret cuando la causa real es el nombre del input. Arreglo: agrega una nota de migración en `README.md` (sección *Instalación en un repo*) indicando que los repos ya instalados deben correr otra vez `set-secret.sh` + `install.sh`, y menciona en ese error que el input viejo `deepseek_api_key` ya no existe."
+        },
+        {
+          "id": "pr2-R02",
+          "titulo": "dist/ y build/ anidados dejan de excluirse",
+          "ruta": "review.py",
+          "linea": 23,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "dist/ y build/ anidados dejan de excluirse"
+        },
+        {
+          "id": "pr2-R03",
+          "titulo": "402 no se trata como error permanente",
+          "ruta": "review.py",
+          "linea": 404,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "- ⚪ Low · `review.py:404` · 402 no se trata como error permanente — la tupla es `(400, 401, 403, 404)` y el propio README (`README.md:60`) documenta 401 y 402 juntos como \"key inválida o sin saldo\"; un 402 (sin saldo) se reintenta una vez, gastando cuota de OpenCode Go y 60 s de espera antes de fallar igual. Arreglo: incluir 402 en la tupla."
+        },
+        {
+          "id": "pr2-R04",
+          "titulo": "proxy.wait(timeout=10) puede ocultar una revisión ya hecha",
+          "ruta": "review.py",
+          "linea": 378,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "proxy.wait(timeout=10) puede ocultar una revisión ya hecha"
+        },
+        {
+          "id": "pr2-R05",
+          "titulo": "cmd_install no tiene ninguna prueba",
+          "ruta": "review.py",
+          "linea": 305,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "cmd_install no tiene ninguna prueba"
+        }
+      ]
+    },
+    {
+      "caso": "pr20",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+      "head": "191ae4560a8f386b7a3f02f9ca3e363ce247003f",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 233.82,
+      "turnos": 37,
+      "costo_usd": 2.0744949999999998,
+      "hallazgos": [
+        {
+          "id": "pr20-R01",
+          "titulo": "El conteo de marcadores sobre todo el cuerpo convierte una cita del modelo en cobertura desconocida",
+          "ruta": "review.py",
+          "linea": 164,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El conteo de marcadores sobre todo el cuerpo convierte una cita del modelo en cobertura desconocida"
+        }
+      ]
+    },
+    {
+      "caso": "pr22",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "42a0d98e656fcae3ca1beb7f1f6642618b8e8d61",
+      "head": "ecd04b102e88c8732c2c1a23d5fb5f73d318f9bb",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 162.156,
+      "turnos": 30,
+      "costo_usd": 1.314011,
+      "hallazgos": [
+        {
+          "id": "pr22-R01",
+          "titulo": "el reintento por reasoning_content puede lanzarse sin tiempo para terminar y ocultar la causa real",
+          "ruta": "review.py",
+          "linea": 1399,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "el reintento por reasoning_content puede lanzarse sin tiempo para terminar y ocultar la causa real"
+        },
+        {
+          "id": "pr22-R02",
+          "titulo": "failure_reason = None borra la causa cuando el ultimo intento no trae diagnostico propio",
+          "ruta": "review.py",
+          "linea": 1414,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "failure_reason = None borra la causa cuando el ultimo intento no trae diagnostico propio"
+        },
+        {
+          "id": "pr22-R03",
+          "titulo": "la deteccion depende de una cadena exacta con punto final",
+          "ruta": "review.py",
+          "linea": 1431,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "la deteccion depende de una cadena exacta con punto final"
+        }
+      ]
+    },
+    {
+      "caso": "pr24",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+      "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 209.981,
+      "turnos": 33,
+      "costo_usd": 2.610384,
+      "hallazgos": [
+        {
+          "id": "pr24-R01",
+          "titulo": "Autorizacion contradictoria entre diseno, plan y Plans.md",
+          "ruta": "docs/reviewer-improvements-design.md",
+          "linea": 3,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "Autorizacion contradictoria entre diseno, plan y Plans.md"
+        },
+        {
+          "id": "pr24-R02",
+          "titulo": "El paso de pruebas Python nunca corre en este repo",
+          "ruta": ".github/workflows/quality.yml",
+          "linea": 61,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El paso de pruebas Python nunca corre en este repo"
+        },
+        {
+          "id": "pr24-R03",
+          "titulo": "Falta la fila B0 en la tabla del plan",
+          "ruta": "Plans.md",
+          "linea": 73,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Falta la fila B0 en la tabla del plan"
+        },
+        {
+          "id": "pr24-R04",
+          "titulo": "Arreglos de quality.yml sin prueba de regresion",
+          "ruta": ".github/workflows/quality.yml",
+          "linea": 26,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Arreglos de quality.yml sin prueba de regresion"
+        }
+      ]
+    },
+    {
+      "caso": "pr25",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+      "head": "a628351f3b17cdd36b4f959cbb054ea7151b8b11",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía opencode-go (tanda original; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 142.361,
+      "turnos": 26,
+      "costo_usd": 0.598189,
+      "hallazgos": [
+        {
+          "id": "pr25-R01",
+          "titulo": "merge:false contradice la autorizacion registrada de merges por claw con la herramienta de saikit",
+          "ruta": ".saikit/autopilot.json",
+          "linea": 1,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "merge:false contradice la autorizacion registrada de merges por claw con la herramienta de saikit"
+        }
+      ]
+    },
+    {
+      "caso": "pr26",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+      "head": "f0dcf5728aeff6889376edf3b93f7b6781b26ccc",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía opencode-go (tanda original; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 118.623,
+      "turnos": 24,
+      "costo_usd": 0.513494,
+      "hallazgos": [
+        {
+          "id": "pr26-R01",
+          "titulo": "El ledger afirma merge:false en la config activa, pero el head trae merge:true",
+          "ruta": "docs/evidence/reviewer/B0.md",
+          "linea": 89,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "El ledger afirma merge:false en la config activa, pero el head trae merge:true"
+        }
+      ]
+    },
+    {
+      "caso": "pr27",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "1f4488bfc64c7a9c966f813e47fffadc626ee673",
+      "head": "b48ca62ce390c1e91bf32530e00e4eca10877f2f",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía opencode-go (tanda original; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 138.131,
+      "turnos": 36,
+      "costo_usd": 0.566616,
+      "hallazgos": [
+        {
+          "id": "pr27-R01",
+          "titulo": "Activar el merge automático deja la publicación a los 3 repos consumidores sin ninguna barrera que bloquee",
+          "ruta": ".saikit/autopilot.json",
+          "linea": 1,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "Activar el merge automático deja la publicación a los 3 repos consumidores sin ninguna barrera que bloquee"
+        },
+        {
+          "id": "pr27-R02",
+          "titulo": "La autorización del cambio solo vive en el mensaje de commit",
+          "ruta": ".saikit/autopilot.json",
+          "linea": 1,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "- **Arreglo:** antes de dejar `merge:true`, sumar una barrera que sí bloquee: branch protection en `main` con un required check real, o exigir el marcador del comentario de revisión del SHA antes de mergear/publicar. Si el riesgo se acepta a propósito, dejarlo escrito con esa razón. #### ⚪ Low · `.saikit/autopilot.json:1` · La autorización del cambio solo vive en el mensaje de commit"
+        }
+      ]
+    },
+    {
+      "caso": "pr28",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "21780a27503967dd0f7327ac5e128c565310f958",
+      "head": "164fc79b56dacbd7a93fa8f049f4a72fcba16b8d",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 122.589,
+      "turnos": 22,
+      "costo_usd": 0.937511,
+      "hallazgos": [
+        {
+          "id": "pr28-R01",
+          "titulo": "El candado de unión es tautológico y no ata la matriz de CI a N",
+          "ruta": "scripts/run_test_shard.py",
+          "linea": 92,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "El candado de unión es tautológico y no ata la matriz de CI a N"
+        },
+        {
+          "id": "pr28-R02",
+          "titulo": "La evidencia dice 4 clases y hay 3",
+          "ruta": "docs/evidence/reviewer/Q0.md",
+          "linea": 13,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "La evidencia dice 4 clases y hay 3"
+        },
+        {
+          "id": "pr28-R03",
+          "titulo": "La evidencia no queda atada al SHA que se mergea ni al enlace de CI",
+          "ruta": "docs/evidence/reviewer/Q0.md",
+          "linea": 8,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "La evidencia no queda atada al SHA que se mergea ni al enlace de CI"
+        },
+        {
+          "id": "pr28-R04",
+          "titulo": "El runner de CI no agrega la raíz del repo a sys.path y diverge del comando documentado",
+          "ruta": "scripts/run_test_shard.py",
+          "linea": 49,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El runner de CI no agrega la raíz del repo a sys.path y diverge del comando documentado"
+        }
+      ]
+    },
+    {
+      "caso": "pr29",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+      "head": "9bf2c3d18724c021bd53ff8df223b58273b2a027",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 173.067,
+      "turnos": 41,
+      "costo_usd": 1.643289,
+      "hallazgos": [
+        {
+          "id": "pr29-R01",
+          "titulo": "El límite de 180 s del transcript no sale de los ajustes del repo",
+          "ruta": "docs/evidence/reviewer/P0.md",
+          "linea": 35,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "- ⚪ Low · `docs/evidence/reviewer/P0.md:35` · El límite de 180 s del transcript no sale de los ajustes del repo. `run_agent` solo reintenta si `remaining - 30 >= MIN_ATTEMPT_SECONDS` (300) y luego usa `max(1, min(attempt_timeout, remaining - 30))`, con `attempt_timeout_for()` = `max(300, 15*max_turns)` ≥ 300 (`review.py:1814-1825`, `review.py:1502`); un \"límite 180 s\" en el intento 2 solo es posible si el driver forzó `ATTEMPT_TIMEOUT` (`review.py:1750`), algo que el documento no declara y que contradice \"Secuencia de producción completa\". Arreglo: declarar los overrides usados en el run (`ATTEMPT_TIMEOUT`, `REVIEW_BUDGET_SECONDS`, `ATTEMPTS`) o corregir el transcript."
+        },
+        {
+          "id": "pr29-R02",
+          "titulo": "publish sí consume el texto del resultado, no solo los campos de máquina",
+          "ruta": "docs/evidence/reviewer/P0.md",
+          "linea": 38,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "publish sí consume el texto del resultado, no solo los campos de máquina"
+        },
+        {
+          "id": "pr29-R03",
+          "titulo": "FAKE_CLAUDE vuelca el entorno completo en el log de la prueba",
+          "ruta": "tests/test_review.py",
+          "linea": 517,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "FAKE_CLAUDE vuelca el entorno completo en el log de la prueba"
+        }
+      ]
+    },
+    {
+      "caso": "pr30",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "09f7da43d6ccc56569b5a123509226b9342fb272",
+      "head": "e4e4746a49ec2682a58126e3ff2d3a87c1270e34",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 129.264,
+      "turnos": 30,
+      "costo_usd": 1.237997,
+      "hallazgos": [
+        {
+          "id": "pr30-R01",
+          "titulo": "El ledger cierra el PR pero su seccion de comandos sigue hablando en futuro",
+          "ruta": "docs/evidence/reviewer/Q0.md",
+          "linea": 29,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El ledger cierra el PR pero su seccion de comandos sigue hablando en futuro"
+        },
+        {
+          "id": "pr30-R02",
+          "titulo": "Todos los bloques siguientes permanecen sin iniciar contra la tabla de abajo",
+          "ruta": "Plans.md",
+          "linea": 71,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Todos los bloques siguientes permanecen sin iniciar contra la tabla de abajo"
+        },
+        {
+          "id": "pr30-R03",
+          "titulo": "Cita de lineas erronea de run_test_shard.py",
+          "ruta": "docs/evidence/reviewer/Q0.md",
+          "linea": 61,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Cita de lineas erronea de run_test_shard.py"
+        },
+        {
+          "id": "pr30-R04",
+          "titulo": "Dos cierres de ledger de bloques distintos en un mismo PR",
+          "ruta": "Plans.md",
+          "linea": 76,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "- ⚪ Low · `Plans.md:76` · **Dos cierres de ledger de bloques distintos en un mismo PR** — Este cambio cierra a la vez los ledgers de Q0 y P0 (`docs/evidence/reviewer/Q0.md` y `P0.md` más sus dos filas), contra la regla del repo \"Cierres de ledger de un bloque = un PR\" (`CLAUDE.md:20`, `AGENTS.md`). Arreglo: separarlo en dos PRs o registrar la excepción autorizada en el ledger, como se hace con otros desvíos. <!-- "
+        }
+      ]
+    },
+    {
+      "caso": "pr31",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+      "head": "af485362302d140e7f5a36de05a6d891e8d51a27",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 134.457,
+      "turnos": 29,
+      "costo_usd": 1.2652229999999998,
+      "hallazgos": [
+        {
+          "id": "pr31-R01",
+          "titulo": "El conjunto de defectos conocidos se recorta por caso en silencio y los casos sin lista cuentan como cero",
+          "ruta": "scripts/compare_reviews.py",
+          "linea": 109,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "- 🟡 **Medium** · `scripts/compare_reviews.py:109` · El conjunto de defectos conocidos se recorta por caso en silencio y los casos sin lista cuentan como cero.   `conocidos_por_caso` filtra `if c in vistas` y un caso evaluado que no traiga entrada en `defectos` se lee como si tuviera cero defectos conocidos (`conocidos_por_caso.get(ident, set())`, línea 133). Con eso, el informe declara `conjunto_presente: true` y publica `recuperacion` y `omitidos` calculados sólo sobre el subconjunto de casos que sí traían lista; un caso del corpus sin observación se descarta igual, aunque `casos` lo siga contando. Los casos olvidados o dejados pendientes por E1 desaparecen del denominador sin aviso, la recuperación sale más alta y un defecto omitido en ellos no aparece en `omitidos` — justo la métrica con la que D0 y C0 deciden activarse (\"ninguna pérdida nueva de defectos High/Critical conocidos\"). Además contradice la regla de oro del propio `evaluation/reviewer/README.md`: \"Sin evidencia se informa `desconocido`; el comparador no inventa ceros\". **Arreglo:** exigir una entrada por caso evaluado (rechazo con salida 2, como ya se hace con `defecto` fuera de su conjunto) o informar `casos_sin_conjunto: [...]` y no publicar `recuperacion` mientras algún caso evaluado no tenga lista; sumar los dos tests (caso del corpus sin observación, caso sin entrada en `defectos`)."
+        },
+        {
+          "id": "pr31-R02",
+          "titulo": "Formas de entrada sin validar: traceback salida 1 en vez de la salida 2 documentada",
+          "ruta": "scripts/compare_reviews.py",
+          "linea": 104,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "Formas de entrada sin validar: traceback salida 1 en vez de la salida 2 documentada"
+        },
+        {
+          "id": "pr31-R03",
+          "titulo": "La evidencia se certifica contra un head que ya no es el suyo",
+          "ruta": "docs/evidence/reviewer/E0.md",
+          "linea": 8,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "- ⚪ Low · `docs/evidence/reviewer/E0.md:8` · La evidencia se certifica contra un head que ya no es el suyo. Dice `Head: 6df818d` y titula \"Comandos y resultados sobre el head final `6df818d`\", pero el arreglo r2 es `66bb213` y el archivo llega en `af48536`; el mismo archivo afirma `Ran 5 tests` (líneas 15 y 44) cuando su propia enmienda dice `Ran 7 tests`. Ajustar base/head, conteos y el \"Enlace de CI\" (que hoy dice \"no aplica\") como ya hacen los ledgers B0/Q0/P0."
+        },
+        {
+          "id": "pr31-R04",
+          "titulo": "El ledger F2 no identifica destino verificable y los residuales 1-6 no se enumeran",
+          "ruta": "docs/evidence/reviewer/E0.md",
+          "linea": 71,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El ledger F2 no identifica destino verificable y los residuales 1-6 no se enumeran"
+        },
+        {
+          "id": "pr31-R05",
+          "titulo": "judgments.jsonl del plan contra el JSON unico que lee --judgments",
+          "ruta": "evaluation/reviewer/README.md",
+          "linea": 32,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "judgments.jsonl del plan contra el JSON unico que lee --judgments"
+        },
+        {
+          "id": "pr31-R06",
+          "titulo": "Sin dato se codifica como null, como desconocido y como cero",
+          "ruta": "scripts/compare_reviews.py",
+          "linea": 206,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "Sin dato se codifica como null, como desconocido y como cero"
+        }
+      ]
+    },
+    {
+      "caso": "pr4",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+      "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 196.382,
+      "turnos": 19,
+      "costo_usd": 1.448443,
+      "hallazgos": [
+        {
+          "id": "pr4-R01",
+          "titulo": "cmd_publish confunde una falla de infraestructura con la clave 'error' del JSON del CLI",
+          "ruta": "review.py",
+          "linea": 495,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "cmd_publish confunde una falla de infraestructura con la clave 'error' del JSON del CLI"
+        },
+        {
+          "id": "pr4-R02",
+          "titulo": "has_previous promete una revisión anterior que no existe",
+          "ruta": "review.py",
+          "linea": 498,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "has_previous promete una revisión anterior que no existe"
+        },
+        {
+          "id": "pr4-R03",
+          "titulo": "La falta de la llave se detecta despues de Prepare e Install y quema minutos de Actions",
+          "ruta": "review.py",
+          "linea": 406,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "La falta de la llave se detecta despues de Prepare e Install y quema minutos de Actions"
+        },
+        {
+          "id": "pr4-R04",
+          "titulo": "README: el check queda en amarillo y Publish no corre contradicen al resto del README",
+          "ruta": "README.md",
+          "linea": 12,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "README: el check queda en amarillo y Publish no corre contradicen al resto del README"
+        }
+      ]
+    },
+    {
+      "caso": "pr6",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "6aefffa98bd685524bd01b095e003066b43e79f5",
+      "head": "ee4e1ed32243194f0ce13f38ca0f2a17a6f5a3fd",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía opencode-go (tanda original; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 46.654,
+      "turnos": 13,
+      "costo_usd": 0.168851,
+      "hallazgos": []
+    },
+    {
+      "caso": "pr8",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "c17077dde15800b8267ecf3e2cda6c31274b6cb2",
+      "head": "b7e2d4791ef2039ba5e5c1d00d0e851567d4490b",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 94.379,
+      "turnos": 18,
+      "costo_usd": 0.705082,
+      "hallazgos": [
+        {
+          "id": "pr8-R01",
+          "titulo": "El diagnóstico no cuadra con su propio conteo de revisiones cortadas",
+          "ruta": "Plans.md",
+          "linea": 8,
+          "severidad": "Medium",
+          "resuelto": false,
+          "detalle": "- 🟡 Medium · `Plans.md:8` · El diagnóstico no cuadra con su propio conteo de revisiones cortadas. El texto afirma \"cerca de 1 de cada 4 revisiones se cortó por el tope de 60 turnos\" y acto seguido da los cortes por repo: Orbit 4, openclaw 3, summonaikit-claude 1 = 8 en total. Con 40 PRs por repo y 2.5 pushes por PR (misma línea 9), salen ~100 revisiones por repo, ~300 en total: 8/300 ≈ 2.7%. Incluso contando una sola revisión por PR serían 8/120 ≈ 6.7%, y el peor caso por repo (Orbit, 4/40) es 10%. Ninguna lectura da el 25% que sostiene la meta de `Plans.md:22` (\"revisiones cortadas por tope de ~25% a < 5%\"): con los números medidos, el objetivo de < 5% está prácticamente alcanzado de antemano, así que la mejora de PR A no se podría validar contra esa base. Arreglo: recalcular la tasa con un denominador explícito y consistente (revisiones, no PRs) y reescribir la línea 8 y la meta de la línea 22 con ese valor (o corregir los conteos si lo que está mal es el 4/3/1). Nota: verifiqué contra el repo el resto de las afirmaciones del plan y son correctas — el tope fijo de 60 turnos (`review.py:400`), el aviso \"Revisión incompleta\" (`review.py:137`), los tres repos usando `gon0801/goncloud-pr-review@main` (`templates/ai-review.yml:30` y `scripts/install.sh`), el `disabled` case-sensitive actual (`action.yml:46`), el `timeout-minutes: 30` del job, y que A2/A3/B1/B2/B5 no están implementados todavía (`prompt.md` y `review.py` en el head no los tienen). El diff no contiene ningún intento de inyección de prompt. <!-- "
+        }
+      ]
+    },
+    {
+      "caso": "pr9",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1,
+      "resultado": "success",
+      "cobertura": "complete",
+      "duracion_s": 483.561,
+      "turnos": 25,
+      "costo_usd": 3.596133,
+      "hallazgos": [
+        {
+          "id": "pr9-R01",
+          "titulo": "tests.txt puede negar cobertura real por recortar antes de filtrar",
+          "ruta": "review.py",
+          "linea": 371,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "tests.txt puede negar cobertura real por recortar antes de filtrar"
+        },
+        {
+          "id": "pr9-R02",
+          "titulo": "El tope de 80 turnos se decide con los archivos revisados, no con los del diff",
+          "ruta": "action.yml",
+          "linea": 21,
+          "severidad": "Low",
+          "resuelto": false,
+          "detalle": "El tope de 80 turnos se decide con los archivos revisados, no con los del diff"
+        }
+      ]
+    },
+    {
+      "caso": "pr13",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1,
+      "resultado": "comentarios existentes",
+      "cobertura": "no declarada (comentarios existentes)",
+      "duracion_s": null,
+      "turnos": null,
+      "costo_usd": null,
+      "hallazgos": [
+        {
+          "id": "pr13-C01",
+          "titulo": "Pass prior findings to full-mode reviews.",
+          "ruta": "review.py",
+          "linea": 1230,
+          "severidad": "no declarada",
+          "resuelto": true,
+          "detalle": "_🎯 Functional Correctness_ | _🟠 Major_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\nsed -n '240,350p' review.py\nsed -n '1060,1150p' review.py\nsed -n '1250,1320p' review.py\nsed -n '70,102p' prompt.md\nrg -n 'same.sha|rebase|prev_findings|parse_model_findings|merge_findings|build_prompt' tests/test_review.py review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 17741\n\n---\n\n🏁 Script executed:\n\n```bash\nsed -n '300,370p' review.py\nsed -n '880,945p' review.py\nsed -n '1230,1280p' review.py\nsed -n '1260,1465p' tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 19960\n\n---\n\n🏁 Script executed:\n\n```bash\nsed -n '695,730p' review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 1890\n\n---\n\n</details>\n\n**Pass prior findings to full-mode reviews.**\n\nWhen a full review has `prev_sha` from a same-SHA rerun or rebase, `build_prompt` does not expose `prev_findings.md`. If the model reports an existing finding with an unknown ID, `merge_findings` assigns a new ID and retains the previous entry. This can duplicate open findings. A dismissed finding can also reappear as a new open finding.\n\n<details>\n<summary>Suggested fix</summary>\n\n```diff\n-    if manifest.get(\"mode\") == \"incremental\":\n+    if manifest.get(\"prev_sha\") and manifest.get(\"mode\") != \"incremental\":\n+        prompt += (f\"\\n- Previous findings: read {work}/prev_findings.md. Reuse the same id for \"\n+                   f\"any issue you report again; only genuinely new issues use \\\"F-new\\\".\")\n+    if manifest.get(\"mode\") == \"incremental\":\n```\n\n</details>\n\n<details>\n<summary>📝 Committable suggestion</summary>\n\n> ‼️ **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n```suggestion\n    if manifest.get(\"prev_sha\") and manifest.get(\"mode\") != \"incremental\":\n        prompt += (f\"\\n- Previous findings: read {work}/prev_findings.md. Reuse the same id for \"\n                   f\"any issue you report again; only genuinely new issues use \\\"F-new\\\".\")\n    if manifest.get(\"mode\") == \"incremental\":\n        reviewed = manifest.get(\"reviewed\", [])\n        shown = reviewed[:INCREMENTAL_PROMPT_MAX_FILES]\n        listed = \", \".join(f\"`{path}`\" for path in shown)\n        if len(reviewed) > len(shown):\n            listed += f\", … y {len(reviewed) - len(shown)} más\"\n        prompt += (\n            f\"\\n- INCREMENTAL review since {manifest['prev_sha'][:7]}: the rest of the PR is already \"\n            f\"reviewed. Verify each OPEN finding in {work}/prev_findings.md against the new diff and \"\n            f\"look for NEW bugs only in: {listed or '(no files in scope)'}. \"\n            f\"Emit the updated findings block before COVERAGE.\"\n        )\n```\n\n</details>"
+        },
+        {
+          "id": "pr13-C02",
+          "titulo": "Render the canonical serialized findings state.",
+          "ruta": "review.py",
+          "linea": 621,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🗄️ Data Integrity & Integration_ | _🟡 Minor_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\nsed -n '550,644p' review.py\nsed -n '1320,1410p' review.py\nrg -n 'compose_with_findings|MAX_COMMENT|COMMENT_LIMIT|findings_block' tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 12012\n\n---\n\n🏁 Script executed:\n\n```bash\nsed -n '1,180p' review.py\nsed -n '430,550p' review.py\nsed -n '600,675p' review.py\nsed -n '1180,1290p' tests/test_review.py\nsed -n '1520,1605p' tests/test_review.py\nsed -n '1620,1660p' tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 30263\n\n---\n\n🏁 Script executed:\n\n```bash\nsed -n '1,180p' review.py; sed -n '430,550p' review.py; sed -n '600,675p' review.py; sed -n '1180,1290p' tests/test_review.py; sed -n '1520,1605p' tests/test_review.py; sed -n '1620,1660p' tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 30263\n\n---\n\n🏁 Script executed:\n\n```bash\npython3 - <<'PY'\nfrom pathlib import Path\np=Path(\"review.py\")\ns=p.read_text()\nfor needle in (\"GITHUB_COMMENT_MAX\", \"COMMENT_LIMIT\", \"def serialize_findings\", \"def verdict_for\", \"def compose_with_findings\"):\n    i=s.find(needle)\n    print(\"\\n---\", needle, i, \"---\")\n    print(s[max(0,i-250):i+1800])\nPY\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 10594\n\n---\n\n🏁 Script executed:\n\n```bash\nnl -ba review.py | sed -n '480,570p'\nnl -ba review.py | sed -n '350,480p'\nrg -n 'FINDINGS_MAX_COUNT|parse_model_findings|serialize_findings|findings\\]' review.py tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 14375\n\n---\n\n🏁 Script executed:\n\n```bash\nnl -ba review.py | sed -n '260,350p'\nnl -ba tests/test_review.py | sed -n '940,995p'\nnl -ba tests/test_review.py | sed -n '1658,1688p'\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 10665\n\n---\n\n</details>\n\n**Render the canonical serialized findings state.**\n\nWhen `serialize_findings` exceeds its 8,000-byte cap, it drops the oldest open findings. `compose_with_findings` still computes the verdict and sections from the full `merged` list. The comment can therefore display and count open findings that its hidden state does not persist. The next publish reads the shorter block and can lose those findings.\n\n`merge_findings` explicitly states that dropped model findings must remain in prior state, so this also violates the existing persistence contract.\n\n<details>\n<summary>Suggested fix</summary>\n\n```diff\n def compose_with_findings(result, manifest, *, sha, provider, findings, review, warnings):\n     merged, new_ids, block = findings[\"merged\"], findings.get(\"new_ids\", []), findings[\"block\"]\n+    persisted = parse_findings_block(block)\n+    if persisted is not None:\n+        merged = persisted[\"findings\"]\n+        kept_ids = {finding[\"id\"] for finding in merged}\n+        new_ids = [finding_id for finding_id in new_ids if finding_id in kept_ids]\n     review = strip_model_verdict(strip_findings_block(review, last=True))\n```\n\n</details>\n\n✅ Addressed in commits 9867711 to 186fd33"
+        }
+      ],
+      "sha_captura": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a"
+    },
+    {
+      "caso": "pr2",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+      "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1,
+      "resultado": "comentarios existentes",
+      "cobertura": "no declarada (comentarios existentes)",
+      "duracion_s": null,
+      "turnos": null,
+      "costo_usd": null,
+      "hallazgos": [
+        {
+          "id": "pr2-C01",
+          "titulo": "Match the head repository before treating a pull request as existing.",
+          "ruta": "scripts/install.sh",
+          "linea": 33,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🎯 Functional Correctness_ | _🟠 Major_ | _⚡ Quick win_\n\n**Match the head repository before treating a pull request as existing.**\n\nIf a fork has an open pull request from `chore/ai-review`, this branch-name lookup can match that pull request. The installer then reports that its pull request exists and does not create one for the branch it updated. Use a lookup that identifies both the head repository and branch, such as the REST pull-request filter with `head=<repo-owner>:chore/ai-review`. `gh pr list --head` cannot accept an owner-qualified branch. ([cli.github.com](https://cli.github.com/manual/gh_pr_list?utm_source=openai))\n\n---\n\n_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\nsed -n '1,105p' scripts/install.sh\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 1966\n\n---\n\n</details>\n\n**Check the pull-request lookup status before creation.**\n\nIf `gh pr list` exits nonzero with empty output, the `if` test sees an empty string and enters `else`. `set -e` does not stop a failing command inside an `if` condition. The lookup error remains visible on stderr, but the script can still attempt `gh pr create` and produce a second failure.\n\n<details>\n<summary>Suggested fix</summary>\n\n```diff\n-  if [ -n \"$(gh pr list -R \"$repo\" --head \"$branch\" --state open --json number --jq '.[].number')\" ]; then\n+  if ! open_prs=\"$(gh pr list -R \"$repo\" --head \"$branch\" --state open --json number --jq '.[].number')\"; then\n+    exit 1\n+  fi\n+  if [ -n \"$open_prs\" ]; then\n```\n\n</details>\n\n<details>\n<summary>📝 Committable suggestion</summary>\n\n> ‼️ **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n```suggestion\n  if ! open_prs=\"$(gh pr list -R \"$repo\" --head \"$branch\" --state open --json number --jq '.[].number')\"; then\n    exit 1\n  fi\n  if [ -n \"$open_prs\" ]; then\n```\n\n</details>"
+        },
+        {
+          "id": "pr2-C02",
+          "titulo": "Fail immediately on HTTP 413.",
+          "ruta": "review.py",
+          "linea": 404,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_\n\n**Fail immediately on HTTP 413.**\n\nIf the endpoint rejects the request as too large, this branch retries the same request after the configured delay. The second attempt cannot reduce its size. Add 413 to the permanent-error statuses. ([platform.claude.com](https://platform.claude.com/docs/en/api/errors?utm_source=openai))\n\nBased on learnings, HTTP 413 is a non-retryable client error.    \n\n<details>\n<summary>Proposed change</summary>\n\n```diff\n-            if result.get(\"api_error_status\") in (400, 401, 403, 404):\n+            if result.get(\"api_error_status\") in (400, 401, 403, 404, 413):\n```\n</details>\n\n<details>\n<summary>📝 Committable suggestion</summary>\n\n> ‼️ **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n```suggestion\n            if result.get(\"api_error_status\") in (400, 401, 403, 404, 413):\n```\n\n</details>\n\n_Source: Learnings_"
+        },
+        {
+          "id": "pr2-C03",
+          "titulo": "Verify that the health response comes from the new proxy.",
+          "ruta": "review.py",
+          "linea": 298,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🩺 Stability & Availability_ | _🟠 Major_ | _🏗️ Heavy lift_\n\n**Verify that the health response comes from the new proxy.**\n\nIf another service already listens on port 4000, that service can return 200 before the new LiteLLM process reports its bind failure. `start_proxy` then gives Claude Code the other service’s URL. The review can fail, and the other service can receive the review request. Reserve a per-run port and confirm that the started proxy owns the listener before returning its URL.\n\n<details>\n<summary>🧰 Tools</summary>\n\n<details>\n<summary>🪛 Ruff (0.16.6)</summary>\n\n[error] 296-296: Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.\n\n(S310)\n\n</details>\n\n</details>"
+        },
+        {
+          "id": "pr2-C04",
+          "titulo": "Align the completion rule with the required-file condition.",
+          "ruta": "prompt.md",
+          "linea": 71,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🎯 Functional Correctness_ | _🟡 Minor_ | _⚡ Quick win_\n\n**Align the completion rule with the required-file condition.**\n\nThe first sentence ties `partial` to skipped repository files needed to judge the change. The next says never claim `complete` after skipping anything. If the manifest lists unrelated files excluded before review, the reviewer can report `partial` despite reading the full diff and every required file. Change the last sentence to refer to skipped required review inputs."
+        }
+      ],
+      "sha_captura": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5"
+    },
+    {
+      "caso": "pr24",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+      "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1,
+      "resultado": "comentarios existentes",
+      "cobertura": "no declarada (comentarios existentes)",
+      "duracion_s": null,
+      "turnos": null,
+      "costo_usd": null,
+      "hallazgos": [
+        {
+          "id": "pr24-C01",
+          "titulo": "Limit the workflow token to repository read access.",
+          "ruta": ".github/workflows/quality.yml",
+          "linea": 30,
+          "severidad": "no declarada",
+          "resuelto": true,
+          "detalle": "_🔒 Security & Privacy_ | _🟠 Major_ | _⚡ Quick win_\n\n**Limit the workflow token to repository read access.**\n\nBoth jobs run commands from the checked-out repository. Without a `permissions` declaration, they inherit the repository's default `GITHUB_TOKEN` permissions. If those defaults include write access, a push that changes a hook, test, or checker can run that code with a write-capable token. Set `permissions: contents: read` for this workflow or for both jobs. ([github.com](https://github.com/actions/checkout/blob/main/README.md?plain=1&utm_source=openai))\n\n<details>\n<summary>🧰 Tools</summary>\n\n<details>\n<summary>🪛 zizmor (1.30.0)</summary>\n\n[warning] 19-106: overly broad permissions (excessive-permissions): default permissions used due to no permissions: block\n\n(excessive-permissions)\n\n---\n\n[warning] 27-64: overly broad permissions (excessive-permissions): default permissions used due to no permissions: block\n\n(excessive-permissions)\n\n</details>\n\n</details>\n\n_Source: Linters/SAST tools_"
+        }
+      ],
+      "sha_captura": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454"
+    },
+    {
+      "caso": "pr4",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+      "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1,
+      "resultado": "comentarios existentes",
+      "cobertura": "no declarada (comentarios existentes)",
+      "duracion_s": null,
+      "turnos": null,
+      "costo_usd": null,
+      "hallazgos": [
+        {
+          "id": "pr4-C01",
+          "titulo": "Omita `checkout` cuando `AI_REVIEW_DISABLED` sea `true` en ambos workflows.",
+          "ruta": ".github/workflows/ai-review.yml",
+          "linea": 33,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\nsed -n '15,42p' .github/workflows/ai-review.yml\nsed -n '15,42p' templates/ai-review.yml\nsed -n '34,60p' action.yml\nsed -n '34,47p' README.md\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 3673\n\n---\n\n🏁 Script executed:\n\n```bash\nsed -n '1,130p' action.yml\nprintf '\\n--- .github/workflows/ai-review.yml ---\\n'\nsed -n '1,45p' .github/workflows/ai-review.yml\nprintf '\\n--- templates/ai-review.yml ---\\n'\nsed -n '1,45p' templates/ai-review.yml\nprintf '\\n--- disabled documentation ---\\n'\nrg -n -C 5 'AI_REVIEW_DISABLED|desactiv|disabled' README.md\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 7466\n\n---\n\n</details>\n\n**Omita `checkout` cuando `AI_REVIEW_DISABLED` sea `true` en ambos workflows.**\n\nAmbos jobs ejecutan `checkout` antes de que la acción procese `disabled`. Si `checkout` falla, el job queda en rojo aunque la revisión esté desactivada. Esto contradice la documentación, que indica que el job debe finalizar en verde de inmediato.\n\nAñada un aviso inicial y aplique la misma condición a `checkout` y a la acción. Mantenga `checkout` para las ejecuciones activas.\n\n<details>\n<summary>🐛 Corrección sugerida</summary>\n\n```diff\n+      - name: Skip AI review when disabled\n+        if: vars.AI_REVIEW_DISABLED == 'true'\n+        run: echo \"::notice::ai-review desactivado (AI_REVIEW_DISABLED)\"\n       - uses: actions/checkout@v7\n+        if: vars.AI_REVIEW_DISABLED != 'true'\n         with:\n           ref: ${{ github.event.pull_request.head.sha }}\n           fetch-depth: 0\n           persist-credentials: false\n       - uses: ./\n+        if: vars.AI_REVIEW_DISABLED != 'true'\n         with:\n           api_key: ${{ secrets.AI_REVIEW_API_KEY }}\n           disabled: ${{ vars.AI_REVIEW_DISABLED }}\n```\n\nAplique el mismo cambio en `templates/ai-review.yml`, conservando `gon0801/goncloud-pr-review@main` en lugar de `./`.\n\n</details>"
+        },
+        {
+          "id": "pr4-C02",
+          "titulo": "Detect a previous review from its content.",
+          "ruta": "review.py",
+          "linea": 498,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🎯 Functional Correctness_ | _🟡 Minor_ | _⚡ Quick win_\n\n**Detect a previous review from its content.**\n\nIf the first failure created a warning-only comment, `find_sticky` returns that comment on the next failure. `bool(sticky)` then makes the new banner say a previous review appears below, although none exists. Determine `has_previous` from the content left after removing the old banner, and test two failures without a prior review."
+        },
+        {
+          "id": "pr4-C03",
+          "titulo": "Limite el hallazgo a la evidencia disponible.",
+          "ruta": ".saikit/findings/blast-rollout-ai-review.json",
+          "linea": 1,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🗄️ Data Integrity & Integration_ | _🟡 Minor_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\n#!/bin/bash\nset -u\nbase='f6a3897a87de0e6655c916b6c2913a8b27bf6cfa'\nhead='ac1d208fd3378ce343445f19028af06df0342a0a'\n\nprintf '%s\\n' '--- changed files ---'\ngit diff --name-status \"$base\" \"$head\" -- .saikit/findings/blast-rollout-ai-review.json .github .saikit README.md 2>&1\n\nprintf '%s\\n' '--- diff of target file ---'\ngit diff --no-ext-diff --unified=20 \"$base\" \"$head\" -- .saikit/findings/blast-rollout-ai-review.json 2>&1\n\nprintf '%s\\n' '--- target file at head ---'\ngit show \"$head:.saikit/findings/blast-rollout-ai-review.json\" 2>&1\n\nprintf '%s\\n' '--- repository references ---'\nrg -n -i --hidden --glob '!.git' '36092447121|CAUTION|caution|blast-rollout-ai-review|autopilot|saikit' . 2>&1 | head -n 200\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 4570\n\n---\n\n🏁 Script executed:\n\n```bash\n#!/bin/bash\nset -u\nprintf '%s\\n' '--- workflow diff ---'\ngit diff --no-ext-diff --unified=30 f6a3897a87de0e6655c916b6c2913a8b27bf6cfa ac1d208fd3378ce343445f19028af06df0342a0a -- .github/workflows/ai-review.yml\n\nprintf '%s\\n' '--- workflow at head ---'\ncat -n .github/workflows/ai-review.yml\n\nprintf '%s\\n' '--- review.py outline ---'\nast-grep outline review.py 2>&1 | head -n 160\n\nprintf '%s\\n' '--- review.py relevant source ---'\nsed -n '140,215p;450,525p' review.py\n\nprintf '%s\\n' '--- tests for error handling ---'\nsed -n '240,305p' tests/test_review.py\n\nprintf '%s\\n' '--- related README and decision records ---'\nrg -n -A8 -B4 -i 'fail-soft|warning|CAUTION|merge|autopilot|provider|disabled|skipped|success' README.md .saikit/decisiones/rollout-ai-review.tsv\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 26137\n\n---\n\n</details>\n\n**Limite el hallazgo a la evidencia disponible.**\n\nEl comando solo demuestra que la ejecución terminó con `success`. No demuestra que esa ejecución corresponda a una falla del proveedor, que se publicara `CAUTION` ni que los gates de saikit y autopilot acepten esa conclusión. Si no agrega esa evidencia, limite el texto a la conclusión observada.\n\n<details>\n<summary>🛠️ Corrección sugerida</summary>\n\n```diff\n-{\"hecho\":\"Una falla de infraestructura del revisor (proveedor sin respuesta) termina con el check en success y un aviso CAUTION en el comentario, nunca rojo ni skipped, asi que no bloquea la herramienta de merge de saikit ni los carriles del autopilot\",\"comando\":\"gh run view 36092447121 -R gon0801/goncloud-pr-review --json conclusion --jq .conclusion\",\"salida\":\"success\",\"nivel\":5}\n+{\"hecho\":\"La ejecucion 36092447121 termino con conclusion success\",\"comando\":\"gh run view 36092447121 -R gon0801/goncloud-pr-review --json conclusion --jq .conclusion\",\"salida\":\"success\",\"nivel\":5}\n```\n\n</details>\n\n<details>\n<summary>📝 Committable suggestion</summary>\n\n> ‼️ **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n```suggestion\n{\"hecho\":\"La ejecucion 36092447121 termino con conclusion success\",\"comando\":\"gh run view 36092447121 -R gon0801/goncloud-pr-review --json conclusion --jq .conclusion\",\"salida\":\"success\",\"nivel\":5}\n```\n\n</details>"
+        }
+      ],
+      "sha_captura": "ac1d208fd3378ce343445f19028af06df0342a0a"
+    },
+    {
+      "caso": "pr9",
+      "repo": "gon0801/goncloud-pr-review",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1,
+      "resultado": "comentarios existentes",
+      "cobertura": "no declarada (comentarios existentes)",
+      "duracion_s": null,
+      "turnos": null,
+      "costo_usd": null,
+      "hallazgos": [
+        {
+          "id": "pr9-C01",
+          "titulo": "Correct the turn-budget statement for precomputed context.",
+          "ruta": "prompt.md",
+          "linea": 14,
+          "severidad": "no declarada",
+          "resuelto": true,
+          "detalle": "_🎯 Functional Correctness_ | _🟡 Minor_ | _⚡ Quick win_\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n\n🏁 Script executed:\n\n```bash\n#!/bin/bash\nset -euo pipefail\nrg -n -C 4 'max.turns|turns|callers\\.txt|tests\\.txt|conventions\\.md|system\\.md|claude' \\\n  action.yml review.py tests/test_review.py\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 27232\n\n---\n\n🏁 Script executed:\n\n```bash\n#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' '--- prompt.md ---'\ncat -n prompt.md\nprintf '%s\\n' '--- review.py run prompt and command ---'\nsed -n '570,615p' review.py\nprintf '%s\\n' '--- local documentation references ---'\nrg -n -C 3 'max-turns|agent turn|turn budget|same turn|callers\\.txt|tests\\.txt|conventions\\.md|--add-dir|Read,Grep,Glob' \\\n  README.md .github prompt.md review.py action.yml 2>/dev/null || true\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 14993\n\n---\n\n🏁 Script executed:\n\n```bash\n#!/bin/bash\nset -euo pipefail\nprintf '%s\\n' '--- prompt.md ---'\ncat -n prompt.md\nprintf '%s\\n' '--- review.py run prompt and command ---'\nsed -n '570,615p' review.py\nprintf '%s\\n' '--- local documentation references ---'\nrg -n -C 3 'max-turns|agent turn|turn budget|same turn|callers\\.txt|tests\\.txt|conventions\\.md|--add-dir|Read,Grep,Glob' README.md .github prompt.md review.py action.yml 2>/dev/null || true\n```\n\nRepository: gon0801/goncloud-pr-review\n\nLength of output: 14993\n\n---\n\n</details>\n\n**Correct the turn-budget statement for precomputed context.**\n\n`cmd_prepare` creates these files without review turns, but `cmd_run` passes only their paths. The reviewer must read them with `Read`, which uses the configured turn budget. The statement “They cost no turns” is incorrect.\n\n<details>\n<summary>Suggested fix</summary>\n\n```diff\n-They cost no turns; re-deriving them with Grep does.\n+Their preparation costs no review turns, but reading them uses the turn budget. Batch these reads in one turn; use Grep only for gaps.\n```\n\n</details>\n\n<details>\n<summary>📝 Committable suggestion</summary>\n\n> ‼️ **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n```suggestion\n2. Read the precomputed context FIRST, before any exploration: `callers.txt` (who uses each changed symbol), `tests.txt` (tests mentioning the changed files) and `conventions.md` (project conventions, already trimmed). Their preparation costs no review turns, but reading them uses the turn budget. Batch these reads in one turn; use Grep only for gaps.\n```\n\n</details>"
+        },
+        {
+          "id": "pr9-C02",
+          "titulo": "`GITHUB_PATH` is written only on the proxy path, and the write can break a successful install.",
+          "ruta": "review.py",
+          "linea": 624,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_\n\n**`GITHUB_PATH` is written only on the proxy path, and the write can break a successful install.**\n\n`os.environ[\"GITHUB_PATH\"]` raises `KeyError` when the variable is absent. `KeyError` is not in `(subprocess.CalledProcessError, OSError)`, so it escapes the fail-soft handler and turns the step red. This goes against the PR's fail-soft install goal. In Actions the variable is always set, so the practical risk is limited to local runs. Use `os.environ.get(\"GITHUB_PATH\")` and skip the write when the value is empty."
+        },
+        {
+          "id": "pr9-C03",
+          "titulo": "Set an installation timeout for pip.",
+          "ruta": "review.py",
+          "linea": 576,
+          "severidad": "no declarada",
+          "resuelto": false,
+          "detalle": "_🩺 Stability & Availability_ | _🟠 Major_ | _⚡ Quick win_\n\n**Set an installation timeout for pip.**\n\nIf pip stalls, `cmd_install` can run until the job timeout because the review deadline starts only in `cmd_run`. Set timeouts for the pip and npm installation calls, and handle `subprocess.TimeoutExpired` through the existing installation-error path. Based on learnings, process-spawning calls should have a timeout and handle `TimeoutExpired`.\n\n<details>\n<summary>🧰 Tools</summary>\n\n<details>\n<summary>🪛 ast-grep (0.45.3)</summary>\n\n[error] 569-570: Command coming from incoming request\nContext: subprocess.run([str(venv / \"bin/pip\"), \"install\", \"--quiet\", \"--disable-pip-version-check\",\n                    f\"litellm[proxy]=={LITELLM_VERSION}\"], check=True)\nNote: [CWE-78] Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection').\n\n(subprocess-from-request)\n\n</details>\n<details>\n<summary>🪛 Ruff (0.16.6)</summary>\n\n[error] 570-570: `subprocess` call: check for execution of untrusted input\n\n(S603)\n\n</details>\n\n</details>\n\n_Source: Learnings_"
+        }
+      ],
+      "sha_captura": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852"
+    }
+  ],
+  "pendientes_coderabbit": [
+    {
+      "caso": "pr10",
+      "producto": "coderabbit",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+      "head": "a398079ef5103bb54fbd8d3fd4c153ede936460d",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr14",
+      "producto": "coderabbit",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+      "head": "a1930e695587b1d776b5baf301aee908c442c30e",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr18",
+      "producto": "coderabbit",
+      "base": "b805a5756903df24b2154845472095ffe80aa422",
+      "head": "8bf6bd89be5c4e14a6517c8d2ad6415f523e2153",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr19",
+      "producto": "coderabbit",
+      "base": "3623c9932af3997bcba57f5309b5c53213a4f143",
+      "head": "14cfbf7d2d907e54ee68be2e1fa415ede2b2b3cd",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr20",
+      "producto": "coderabbit",
+      "base": "00e5935b0b6a5b5ba685353c90bd1d3355de1543",
+      "head": "191ae4560a8f386b7a3f02f9ca3e363ce247003f",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr22",
+      "producto": "coderabbit",
+      "base": "42a0d98e656fcae3ca1beb7f1f6642618b8e8d61",
+      "head": "ecd04b102e88c8732c2c1a23d5fb5f73d318f9bb",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr25",
+      "producto": "coderabbit",
+      "base": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+      "head": "a628351f3b17cdd36b4f959cbb054ea7151b8b11",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr26",
+      "producto": "coderabbit",
+      "base": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+      "head": "f0dcf5728aeff6889376edf3b93f7b6781b26ccc",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr27",
+      "producto": "coderabbit",
+      "base": "1f4488bfc64c7a9c966f813e47fffadc626ee673",
+      "head": "b48ca62ce390c1e91bf32530e00e4eca10877f2f",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr28",
+      "producto": "coderabbit",
+      "base": "21780a27503967dd0f7327ac5e128c565310f958",
+      "head": "164fc79b56dacbd7a93fa8f049f4a72fcba16b8d",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr29",
+      "producto": "coderabbit",
+      "base": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+      "head": "9bf2c3d18724c021bd53ff8df223b58273b2a027",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr30",
+      "producto": "coderabbit",
+      "base": "09f7da43d6ccc56569b5a123509226b9342fb272",
+      "head": "e4e4746a49ec2682a58126e3ff2d3a87c1270e34",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr31",
+      "producto": "coderabbit",
+      "base": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+      "head": "af485362302d140e7f5a36de05a6d891e8d51a27",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr6",
+      "producto": "coderabbit",
+      "base": "6aefffa98bd685524bd01b095e003066b43e79f5",
+      "head": "ee4e1ed32243194f0ce13f38ca0f2a17a6f5a3fd",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    },
+    {
+      "caso": "pr8",
+      "producto": "coderabbit",
+      "base": "c17077dde15800b8267ecf3e2cda6c31274b6cb2",
+      "head": "b7e2d4791ef2039ba5e5c1d00d0e851567d4490b",
+      "motivo": "sin revisión ni comentarios existentes de CodeRabbit en el head exacto del corpus"
+    }
+  ]
+}

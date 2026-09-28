@@ -1,0 +1,20 @@
+{
+  "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+  "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+  "reviewed": [
+    "review.py",
+    "tests/test_review.py",
+    "action.yml",
+    "Plans.md",
+    "README.md",
+    "prompt.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 133943,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

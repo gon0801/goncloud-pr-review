@@ -66,6 +66,26 @@ class CorpusCongelado(unittest.TestCase):
             self.assertRegex(c["head"], HEX40)
             self.assertNotEqual(c["head"], c["merge_commit"])
 
+    def test_bases_congeladas_son_las_realmente_medidas(self):
+        for c in self.casos:
+            manifest = json.loads(
+                (
+                    ROOT
+                    / "evaluation"
+                    / "reviewer"
+                    / "salidas"
+                    / "revisor"
+                    / c["caso"]
+                    / "intento-1"
+                    / "manifest.json"
+                ).read_text()
+            )
+            self.assertEqual(
+                (manifest["base"], manifest["head"]),
+                (c["base"], c["head"]),
+                f"{c['caso']}: el par congelado no es el que midió la salida retenida",
+            )
+
     def test_shas_sin_repetidos_entre_casos(self):
         self.assertEqual(len({c["head"] for c in self.casos}), len(self.casos))
 

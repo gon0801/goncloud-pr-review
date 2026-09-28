@@ -1,0 +1,510 @@
+{
+  "meta": {
+    "que_es": "consenso ciego final de E1",
+    "hoja_sha256": "22e1eedbb5e38f052478d146476097ec016838c2726f2357d0f44f84a203e5af",
+    "clasificacion_a_sha256": "7bb9cd38dde13f8eaf62f8390317e52b2f85b71e8bf75ee63b8ffffa175cc568",
+    "clasificacion_b_sha256": "c9da7c03e5179cfee56123fca68b032107d9e0213744c831a21e71a3c4c53fde",
+    "desempate_sha256": "7943712114700a371524c2ccba74833e559fae483ed2bdfcea79c14c91fc2f97",
+    "filas": 62,
+    "acuerdos": 40,
+    "desempates": 22
+  },
+  "decisiones": [
+    {
+      "blind_id": "H-001",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 0ace22f el estado de autorizacion se contradice: docs/reviewer-improvements-design.md:3 dice 'No implementado ni autorizado para ejecucion'; docs/reviewer-improvements-plan.md:3 y :10 dicen 'prohibio implementar' y 'no autoriza commits, PRs ... ni merges' junto a la autorizacion de ejecutar todo el plan; Plans.md:71 repite 'autorizo escribir ... no implementar' y luego la autorizacion de ejecutar. En documentos que guian a ejecutores autonomos, la contradiccion es concreta y accionable.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-002",
+      "veredicto": "false_positive",
+      "razon": "En 09c67ab, review.py:618 escribe GITHUB_PATH para todos los proveedores y :623 también para el proxy. La variable está definida por GitHub Actions, único entorno del paso install; el KeyError local alegado no demuestra una falla del flujo de la action.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-003",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En af48536, conocidos_por_caso = {c: set(d) for c, d in defectos.items() if c in vistas} (scripts/compare_reviews.py:109) descarta en silencio los defectos de casos del corpus sin observacion, y un caso observado sin entrada en 'defectos' aporta cero conocidos (:133). Con que un caso tenga lista, el informe publica conjunto_presente: true con recuperacion y omitidos calculados sobre un subconjunto, contra evaluation/reviewer/README.md:71 ('no inventa ceros ni recuperacion').",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-004",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 6eb8cc7, serialize_findings recorta el estado persistido (review.py:307-313 descarta resueltos/descartados por encima de FINDINGS_MAX_COUNT y :346-348 descarta abiertos como ultimo recurso para caber en 8000 bytes), pero compose_with_findings arma veredicto y secciones con findings['merged'] completo (review.py:644-656). El comentario muestra hallazgos que el bloque no guarda; en la siguiente publicacion desaparecen, contra el contrato de merge_findings ('never vanish', review.py:365). Los commits 9867711..186fd33 estan en el head y no cambian esto.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-005",
+      "veredicto": "false_positive",
+      "razon": "En 3166ad5, review.py:386 vuelve a iniciar claude -p con el prompt inicial; no reenvía el estado HTTP ni el historial de la conversación anterior. Un 413 originado por el contexto acumulado no prueba que el nuevo intento tenga el mismo tamaño.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-006",
+      "veredicto": "valid",
+      "razon": "En a628351, .saikit/autopilot.json fija merge:false mientras docs/reviewer-improvements-plan.md:15 y :31 autoriza explícitamente que claw haga merge de todos los bloques mediante saikit. La configuración impide ejecutar esa operación autorizada; el cambio posterior a merge:true confirma la corrección concreta.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-007",
+      "veredicto": "false_positive",
+      "razon": "En ecd04b1, review.py:1399 exige al menos MIN_ATTEMPT_SECONDS antes de repetir y :1402 limita el proceso al presupuesto restante. Si el segundo proceso agota su tiempo, :1412 informa ese fallo real; el rechazo previo ya se imprimió en :1426-1428.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-008",
+      "veredicto": "valid",
+      "razon": "En 3166ad5, scripts/install.sh:33 consulta PRs abiertos sólo por el nombre chore/ai-review, sin identificar el repositorio de origen. Un PR de un fork con ese mismo head puede satisfacer la búsqueda y omitir la creación del PR para la rama que el script acaba de actualizar.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-009",
+      "veredicto": "valid",
+      "razon": "En 3166ad5, review.py:286 arranca un proceso para 127.0.0.1:4000, pero :297-298 acepta cualquier respuesta HTTP exitosa de ese puerto mientras el proceso siga vivo. Si el puerto ya pertenece a otro servicio que responde en /health/liveliness, devuelve la URL ajena antes de verificar que LiteLLM la posea.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-010",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. .saikit/findings/blast-rollout-ai-review.json:1 en ac1d208 afirma con nivel 5 que una falla de infraestructura deja el check en success con aviso CAUTION, nunca rojo ni skipped, y que no bloquea la herramienta de merge ni el autopilot; su comando solo es 'gh run view 36092447121 --json conclusion' con salida 'success', que no prueba la falla del proveedor, el CAUTION ni la conducta de los gates. La evidencia registrada no sostiene el hecho.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-011",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 09c67ab, build_tests llama grep_files(patterns, TESTS_MAX_RESULTS * 5) (review.py:371) y grep_files corta la salida de 'git grep -l' a limit+1 archivos (review.py:316) antes de filtrar con looks_like_test. Con un nombre comun, los primeros ~201 archivos en orden alfabetico pueden no incluir tests/ y tests.txt dice que ninguna prueba menciona el archivo. El arreglo 9fda345 solo subio el tope, no cambio el orden.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-012",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. docs/evidence/reviewer/Q0.md:13 en 164fc79 dice '11 casos en 4 clases' y enumera solo tres; tests/test_test_shards.py tiene exactamente tres clases (RechazoArgumentos, Particiones, CorridaPorShard: 6+3+2 = 11 casos). Dato factual erroneo en la evidencia.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-013",
+      "veredicto": "false_positive",
+      "razon": "En e4e4746, CLAUDE.md:20 dice que los cierres de ledger de un bloque van en un PR. El diff de #30 cierra Q0 y P0 juntos, sin repartir el cierre de ninguno entre varios PRs; el texto no exige exclusividad de un bloque por PR.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-014",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 6eb8cc7, merge_findings solo pone candado a la transicion open->resolved (review.py:400); un hallazgo ya resuelto que el modelo reporta 'open' se reabre sin que cambie ninguno de sus archivos. prompt.md:95 formula en general 'A finding none of whose files changed since the last review stays open', lo que empuja a reabrir resueltos de archivos intactos. El arreglo a5f49ad cubrio solo el caso en que el modelo repite 'resolved'.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-015",
+      "veredicto": "valid",
+      "razon": "En 09c67ab, review.py:573-576 ejecuta venv y pip, y :616 ejecuta npm, sin timeout global de subprocess. El presupuesto de revisión empieza después en cmd_run (:637); un instalador que no termina puede consumir el límite del job antes de que opere la vía de fallo suave.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-016",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. pr-b.tsv:4 registra verificacion sobre la rama feat/pr-b-no-repetir (/tmp/pr-b-verify, bc01955) y la fila 6 cierra con 'pendiente-merge-operador'. Que Plans.md en a1930e6 mantenga B1-B7 en cc:TODO es coherente con PR B aun sin mergear; el rastro no afirma que PR B este en esta base.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-017",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. README.md:15 de evaluation/reviewer promete salida 2 con mensaje si un par es invalido, pero en af48536 las formas no se validan: un caso del corpus sin 'base'/'head' revienta con KeyError en compare_reviews.py:81-84, un hallazgo sin 'id' en :104, una entrada de corpus que no es objeto en :68, y un 'defectos' que no es objeto en :109; todos salen con traceback y exit 1.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-018",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 3166ad5, run_agent solo corta con (400, 401, 403, 404) (review.py:404); un 402 se reintenta tras RETRY_DELAY=60 s aunque README.md:60 documenta 401/402 como llave invalida, sin saldo o cuota agotada, y README.md:12 promete fallo inmediato en errores permanentes. El segundo intento no puede tener exito y gasta 60 s y otra peticion.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-019",
+      "veredicto": "valid",
+      "razon": "En af48536, scripts/compare_reviews.py:169-175 informa conjunto_presente:false pero fija conocidos y detectados en 0. Eso convierte ausencia del conjunto adjudicado en conteos numéricos, contrario al contrato E0 de distinguir datos ausentes y a evaluation/reviewer/README.md:71. Debe representar esos conteos como desconocidos o ausentes.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-020",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. docs/evidence/reviewer/E0.md:71 en af48536 dice que 'los residuales 1-6 de r1 siguen su curso al ledger F2', pero no los enumera en ningun lado y ni Plans.md ni ningun otro archivo del head define un 'ledger F2' ni los registra. La regla del repo exige que lo no bloqueante vaya a una fila del plan; aqui quedan irrecuperables desde el repo.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-021",
+      "veredicto": "valid",
+      "razon": "En el head af48536, docs/reviewer-improvements-plan.md:150 prescribe judgments.jsonl para E1, pero scripts/compare_reviews.py:60-64 exige un único objeto JSON y evaluation/reviewer/README.md:32 documenta judgments.json. Seguir literalmente el nombre y formato JSONL del plan impediría cargar varias filas; hay que unificar el contrato.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-022",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En af48536, docs/evidence/reviewer/E0.md:8 y :42 certifican 'head final 6df818d' con 'Ran 5 tests' (:15, :28-29, :44), pero el arreglo r2 66bb213 llega despues y la propia enmienda (:69) dice 'Ran 7 tests'; tests/test_compare_reviews.py tiene 7 casos. La evidencia queda contradictoria respecto del head que se mergea.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-023",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. README.md:12 en ac1d208 dice que ante fallas de infraestructura 'el check queda en amarillo con un aviso y no se corre Publish', pero soft_fail sale con 0 (check verde, review.py:214-222) y Publish si corre y publica el aviso (review.py:495-500), como dicen README.md:13, :57 y :61. Contradiccion documental real.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-024",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. docs/evidence/reviewer/P0.md:38 en 9bf2c3d justifica el 'result' vacio diciendo que publish solo consume subtype/is_error/num_turns, pero cmd_publish usa el texto: build_findings parsea el bloque de hallazgos de result['result'] y compose lo pasa por split_coverage y lo publica. Con texto vacio el comentario saldria con 'Revision incompleta'. La afirmacion es falsa y debilita la prueba real que documenta.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-025",
+      "veredicto": "false_positive",
+      "razon": "En a398079, .saikit/decisiones/pr-a.tsv:5 registra una ronda única de arreglos y una aprobación después de corregir dos observaciones menores. La fila no demuestra que se abriera otra ronda de hallazgos ni altera el comportamiento del producto; la supuesta inversión de la regla no queda acreditada.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-026",
+      "veredicto": "false_positive",
+      "razon": "En 164fc79, docs/evidence/reviewer/Q0.md:8 identifica el SHA de código a3c5a34 y :31-33 declara que el enlace de CI queda pendiente porque esa ronda prohibía push y PR. La ausencia del SHA final y CI está reconocida como tarea de cierre, no se presenta como validación ya obtenida.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-027",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 164fc79 todas las pruebas preparan su propio import: tests/test_review.py:15-17 inserta ROOT en sys.path y tests/test_test_shards.py invoca el script por ruta absoluta. El comando documentado 'unittest discover -s tests' tambien usa tests/ como top-level; la unica diferencia (cwd en sys.path) no rompe ninguna prueba del head y, si alguna la necesitara, fallaria ruidosamente en CI.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-028",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 6eb8cc7, prompt.md:74 ordena 'If there are no findings, output only the verdict line', mientras prompt.md:76-88 exige el bloque de hallazgos y :104-107 la linea COVERAGE. Si el modelo obedece la linea 74 en una revision limpia, split_coverage devuelve None y parse_model_findings None, y compose agrega 'Revision incompleta: el revisor no declaro su cobertura / no entrego su bloque de hallazgos' (review.py:611-618).",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-029",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. prompt.md:71 en 3166ad5 define partial por no leer el diff o saltar archivos del repo necesarios; los archivos filtrados antes del modelo se le presentan aparte como 'files excluded before you' (review.py:331), no son algo que el modelo salto. La observacion es de redaccion, sin conducta erronea demostrada.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-030",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. La autorizacion de merges por claw con la herramienta de saikit no vive solo en el mensaje de commit: en b48ca62 esta registrada en docs/reviewer-improvements-plan.md:15 y :31 y en Plans.md:71. merge:true es la configuracion que esa autorizacion requiere.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-031",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. Ya mitigado en el head 6eb8cc7: build_prompt expone prev_findings.md en revisiones completas con estado previo (review.py:1213-1218, 'This PR already has findings from an earlier review ... same ids ... never report the dismissed ones'), prepare lo escribe siempre (review.py:1035), y merge_findings reutiliza ids por same_issue y no revive descartados (review.py:384-387, 407).",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-032",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 191ae45, reviewed_completion exige body.count(COMPLETION_PREFIX) == 1 sobre todo el comentario (review.py:164), aunque el marcador valido esta en la posicion fija lines[2] que controla el publicador. Si el texto del modelo cita '<!-- ai-review:completion=' (p. ej. al revisar este mismo codigo), una revision completa se lee como cobertura desconocida y el siguiente push cae a revision completa 'incomplete-prev' (review.py:1031-1032).",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-033",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En ac1d208 'Check inputs' (action.yml) ya no valida la llave; la ausencia de API_KEY se detecta en cmd_run (review.py:405-408) despues de gate, prepare e install (npm de Claude Code y venv+pip de LiteLLM). Un repo sin secret paga esos minutos en cada push para terminar en el mismo aviso; se puede detectar en el primer paso sin perder el fail-soft.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-034",
+      "veredicto": "false_positive",
+      "razon": "En 09c67ab, review.py:457-471 construye el diff que se entrega al modelo y registra sus bytes y archivos revisados; :424-428 calcula el tope con ese trabajo efectivo. Contar archivos excluidos o fuera de presupuesto para asignar turnos no está exigido por A4 ni corrige un fallo observado.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-035",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. Plans.md:71 en e4e4746 sigue diciendo 'Todos los bloques siguientes permanecen sin iniciar', pero la tabla inmediata (Plans.md:75-77) marca B0, Q0 y P0 como cc:done, dos de ellos en este mismo cambio. Afirmacion contradicha en el mismo archivo.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-036",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. El anclaje a la raiz de dist/ y build/ es deliberado y documentado en el mismo head: README.md:10 dice 'dist/, build/ y vendor/ de la raiz, node_modules/ a cualquier profundidad' (commit afb7897 'document root-anchored excludes'), y solo node_modules/__snapshots__ pasaron a '**/'. Confunde intencion con defecto.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-037",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En e4e4746, Q0.md:8 fija 'Head final del PR: 164fc79', pero la seccion Q0.md:22 sigue titulada 'Comandos y resultados sobre el head final a3c5a34' y Q0.md:29 dice que los jobs de CI 'la correran ... cuando se abra el PR', mientras Q0.md:33-35 ya registra esa corrida. El ledger de cierre queda internamente contradictorio.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-038",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. Plans.md:8 en b7e2d47 dice 'cerca de 1 de cada 4 revisiones se corto' y da 4+3+1=8 cortes sobre los ultimos 40 PRs de cada repo (120 PRs, ~2.5 pushes por PR segun la linea 9): ninguna lectura da ~25%, y la meta de la linea 22 (~25% a <5%) se apoya en esa cifra. Inconsistencia numerica real; el Plans.md posterior (a628351:8) la rehace como 7 de 35 (20%).",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-039",
+      "veredicto": "valid",
+      "razon": "En 3166ad5, review.py:305-315 añade cmd_install con una rama por defecto que crea un venv LiteLLM y modifica GITHUB_PATH, pero tests/test_review.py sólo ejercita la ejecución del agente y no invoca install. Falta una prueba del camino de instalación del que depende el proveedor por defecto.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-040",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. Q0.md:61 en e4e4746 cita scripts/run_test_shard.py:77-81 para la comprobacion len(elegidos) != len(mios), pero en ese head esta en las lineas 71-75 (77 es el raise SystemExit final). Referencia de linea erronea en el ledger.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-041",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En f0dcf57, docs/evidence/reviewer/B0.md:89 afirma que la config activa en origin/main es {\"merge\":false,...} y que todo merge sera manual 'hasta que David cambie la respuesta 1', pero ese mismo head integra 5b9e928 y .saikit/autopilot.json trae \"merge\":true. Afirmacion documental falsa en el head.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-042",
+      "veredicto": "false_positive",
+      "razon": "El cambio de deepseek_api_key a api_key en action.yml:5 también actualiza templates/ai-review.yml. El historial local de rollout registra que el repo central se mergeó antes de abrir los PRs de instalación con la nueva plantilla; el caso no acredita repos consumidores ya instalados con el input antiguo.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-043",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. pr-a.tsv:6 no certifica PR A en main: registra 'PR #9 abierto ... merge lo ejecuta el operador' con resultado 'pendiente-merge-operador', y las filas 4-5 citan commits de la rama (08bec7a, 9fda345). El rastro describe con exactitud el estado de la rama; no afirma que PR A este en el repositorio en a398079.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-044",
+      "veredicto": "false_positive",
+      "razon": "En ecd04b1, review.py:1429-1433 busca como substring el mensaje de reasoning_content observado. El requisito P0 limita la recuperación a ese error comprobado y pide no ampliar el matcher sin otro mensaje observado; una variante hipotética de puntuación no acredita defecto.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-045",
+      "veredicto": "false_positive",
+      "razon": "En 0ace22f, quality.yml:61 omite su paso pytest sin pyproject.toml ni requirements.txt, pero ci.yml:12-17 ejecuta python3 -m unittest discover -s tests en PR y push. La batería del repo sigue cubierta; el hallazgo no muestra una prueba perdida.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-046",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 9bf2c3d, un segundo intento solo corre si remaining-30 >= MIN_ATTEMPT_SECONDS=300 (review.py:1819) y su limite es min(attempt_timeout, remaining-30) con attempt_timeout = ATTEMPT_TIMEOUT o max(300, 15*max_turns) (review.py:1501, :1751, :1825); un 'limite 180 s' en el intento 2 (P0.md:35) exige un override de ATTEMPT_TIMEOUT que el documento no declara mientras la llama 'Secuencia de produccion completa'.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-047",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En ac1d208, result.json guarda tal cual el JSON del CLI (review.py:472) o el centinela {\"error\": reason} de soft_fail (review.py:220), y cmd_publish los distingue solo con 'if \"error\" in result' (review.py:495): una clave generica compartida con la salida cruda del CLI. El propio repo lo trato como defecto y lo separo despues como ai_review_error (Plans.md A5 punto 9 en 09c67ab).",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-048",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 3166ad5, cmd_run hace proxy.terminate(); proxy.wait(timeout=10) en el finally (review.py:376-378) sin capturar TimeoutExpired ni matar el proceso. Si LiteLLM tarda mas de 10 s en salir, la excepcion hace fallar el paso Review despues de escribir result.json, y 'Publish sticky comment' (action.yml, solo if: gate != skip) no corre: la revision hecha se pierde.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-049",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. Ya mitigado en el head 0ace22f: .github/workflows/quality.yml:26-27 declara 'permissions: contents: read' a nivel de workflow, que aplica a ambos jobs.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-050",
+      "veredicto": "valid",
+      "razon": "En 0ace22f, Plans.md:73-76 comienza la tabla de seguimiento en Q0 aunque el mismo cambio entrega B0 y su evidencia. El bloque que establece plan y candados carece de fila y estado en el tracker central; agregarla es una corrección documental concreta.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-051",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 14cfbf7, strip_model_verdict empareja vallas con cualquier linea que empiece por ``` (review.py:576-582) sin exigir cierre del mismo largo. Con una cita anidada (```` ... ``` ... **Veredicto:** ... ``` ... ````) la valla interior cierra la exterior y la linea de veredicto citada queda fuera de 'fenced' y se borra, justo lo que este cambio promete conservar dentro de bloques de codigo.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-052",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En ac1d208, una primera falla sin sticky crea un comentario solo-aviso (MARKER + banner, review.py:499). En la siguiente falla find_sticky devuelve ese comentario y has_previous=bool(sticky) (review.py:498) agrega 'Lo de abajo es de la revision anterior' (caution_banner, review.py:168-173), aunque debajo no queda nada tras strip_caution_banner.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-053",
+      "veredicto": "false_positive",
+      "razon": "En b48ca62, merge:true coincide con la autorización explícita de merges por saikit. El historial local de rollout describe que la herramienta bloquea runs no exitosos o skipped, y autopilot.json conserva revert_si_rojo:true; la afirmación de que no hay ninguna barrera es incorrecta.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-054",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. verificar_particion (scripts/run_test_shard.py:80-97) reparte con la misma shard_de sobre la misma lista y comprueba que la union sea esa lista: por construccion (posicion % n) nunca falla salvo por shards vacios. Ademas ci.yml fija la matriz [0, 1] y '/2' por separado de '--verify-partition 2', asi que quitar un shard de la matriz deja el candado en verde con parte de la bateria sin correr.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-055",
+      "veredicto": "false_positive",
+      "razon": "En 09c67ab, prompt.md:14 llama sin costo de turnos al contexto precalculado aunque abrirlo requiere Read. La instrucción operativa sigue siendo leerlo antes de repetir búsquedas y agrupar lecturas (:23); no se acredita un comportamiento roto por esa imprecisión.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-056",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En ac1d208, .github/workflows/ai-review.yml:25-33 y templates/ai-review.yml corren actions/checkout (fetch-depth: 0) antes de que la action lea 'disabled'; un checkout fallido deja rojo un job apagado y el apagado no es inmediato, contra README.md:38 ('queda en verde de inmediato').",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-057",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. En 6eb8cc7, la celda de estado de B2 en Plans.md:41 dice 'tope 20 turnos', pero el texto de la misma fila, README.md:12/:41 y el codigo (INCREMENTAL_MAX_TURNS = 30, review.py:35 y :966-968) usan 30 en pushes incrementales chicos. Afirmacion documental desactualizada.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-058",
+      "veredicto": "false_positive",
+      "razon": "Coincidencia de dos clasificaciones independientes. En run_in_group (review.py:1357-1362, 14cfbf7) se llega a killpg solo por timeout de communicate, es decir, con las tuberias aun abiertas por algun descendiente del grupo; mientras el grupo tenga miembros su PGID no se reasigna. La reutilizacion requiere que el grupo quede vacio y que el numero se asigne a otro lider de grupo en microsegundos: riesgo teorico sin sustento en el caso.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-059",
+      "veredicto": "valid",
+      "razon": "Coincidencia de dos clasificaciones independientes. CLAUDE.md:17 y AGENTS.md en 0ace22f exigen que cada bug arreglado incluya una prueba que lo habria atrapado. El arreglo de permisos de quality.yml (bloque 'permissions: contents: read', :26-27) no trae prueba y nada en CI detectaria su retiro: ci.yml solo corre unittest y actionlint, que no exige permisos. (El arreglo SC2066 si queda cubierto por actionlint.)",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "acuerdo"
+    },
+    {
+      "blind_id": "H-060",
+      "veredicto": "valid",
+      "razon": "En 9bf2c3d, tests/test_review.py:663-676 hereda el entorno del proceso de pruebas y FAKE_CLAUDE lo copia entero al archivo de log en :517-519. Los asserts de :820-825 serializan ese entorno y pueden imprimirlo al fallar. Guardar sólo las claves verificadas evita copiar y exponer variables ajenas a la prueba.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-061",
+      "veredicto": "false_positive",
+      "razon": "En ecd04b1, review.py:1414 reinicia el motivo antes de interpretar la salida del intento actual. Si éste falla de otra forma, :1442 informa ese último fallo y el rechazo de reasoning_content anterior ya quedó en stderr (:1426-1428); conservar el motivo anterior sería engañoso.",
+      "duplicado_de": null,
+      "defecto": null,
+      "via": "desempate"
+    },
+    {
+      "blind_id": "H-062",
+      "veredicto": "duplicate",
+      "razon": "Coincidencia de dos clasificaciones independientes. Mismo defecto raiz que H-052: has_previous=bool(sticky) en review.py:498 trata un sticky solo-aviso como revision previa y el banner promete una revision anterior inexistente.",
+      "duplicado_de": "H-052",
+      "defecto": null,
+      "via": "acuerdo"
+    }
+  ]
+}

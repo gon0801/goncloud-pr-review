@@ -1,0 +1,15 @@
+{
+  "base": "749a6f5009b42940727a0b01f03cb5f8829452bd",
+  "head": "a628351f3b17cdd36b4f959cbb054ea7151b8b11",
+  "reviewed": [
+    ".saikit/autopilot.json"
+  ],
+  "excluded": [],
+  "diff_bytes": 298,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

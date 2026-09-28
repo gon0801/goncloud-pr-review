@@ -1,4 +1,321 @@
 {
-  "adjudicaciones": [],
+  "meta": {
+    "fuente": "consenso ciego final (adjudicacion-final-ciega.json) integrado via ciego-correspondencia.json",
+    "orden": "blind_id ascendente (H-001..H-062)",
+    "pendiente_e0": "E0 carga una observacion por caso y hoy no puede consumir observaciones multi-producto; el informe end-to-end queda pendiente con el rechazo literal documentado en E1.md. Las filas son no ambiguas: cada (caso, hallazgo) mapea a un unico blind_id y el sufijo R/C distingue productos"
+  },
+  "adjudicaciones": [
+    {
+      "caso": "pr24",
+      "hallazgo": "pr24-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr9",
+      "hallazgo": "pr9-C02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr13",
+      "hallazgo": "pr13-C02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-C02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr25",
+      "hallazgo": "pr25-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr22",
+      "hallazgo": "pr22-R01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-C01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-C03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-C03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr9",
+      "hallazgo": "pr9-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr28",
+      "hallazgo": "pr28-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr30",
+      "hallazgo": "pr30-R04",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr13",
+      "hallazgo": "pr13-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr9",
+      "hallazgo": "pr9-C03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr14",
+      "hallazgo": "pr14-R01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R06",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R04",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R05",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr31",
+      "hallazgo": "pr31-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-R04",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr29",
+      "hallazgo": "pr29-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr10",
+      "hallazgo": "pr10-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr28",
+      "hallazgo": "pr28-R03",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr28",
+      "hallazgo": "pr28-R04",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr13",
+      "hallazgo": "pr13-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-C04",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr27",
+      "hallazgo": "pr27-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr13",
+      "hallazgo": "pr13-C01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr20",
+      "hallazgo": "pr20-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr9",
+      "hallazgo": "pr9-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr30",
+      "hallazgo": "pr30-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr30",
+      "hallazgo": "pr30-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr8",
+      "hallazgo": "pr8-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-R05",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr30",
+      "hallazgo": "pr30-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr26",
+      "hallazgo": "pr26-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-R01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr10",
+      "hallazgo": "pr10-R01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr22",
+      "hallazgo": "pr22-R03",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr24",
+      "hallazgo": "pr24-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr29",
+      "hallazgo": "pr29-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr2",
+      "hallazgo": "pr2-R04",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr24",
+      "hallazgo": "pr24-C01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr24",
+      "hallazgo": "pr24-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr19",
+      "hallazgo": "pr19-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-R02",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr27",
+      "hallazgo": "pr27-R01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr28",
+      "hallazgo": "pr28-R01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr9",
+      "hallazgo": "pr9-C01",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-C01",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr13",
+      "hallazgo": "pr13-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr19",
+      "hallazgo": "pr19-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr24",
+      "hallazgo": "pr24-R04",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr29",
+      "hallazgo": "pr29-R03",
+      "veredicto": "valid"
+    },
+    {
+      "caso": "pr22",
+      "hallazgo": "pr22-R02",
+      "veredicto": "false_positive"
+    },
+    {
+      "caso": "pr4",
+      "hallazgo": "pr4-C02",
+      "veredicto": "duplicate",
+      "duplicado_de": "pr4-R02"
+    }
+  ],
   "defectos": {}
 }

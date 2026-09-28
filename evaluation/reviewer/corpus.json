@@ -1,9 +1,9 @@
 {
   "meta": {
-    "congelado": "2026-09-27 (re-congelado r3: pushes en orden de empuje)",
+    "congelado": "2026-09-27 (re-congelado r3: pushes en orden de empuje; enmienda E1-ADJ-HOJA: bases de pr10/pr14 = merge-base realmente medido)",
     "completo": false,
     "regla_particion": "ordenado por número de PR; reservada en los índices i % 3 == 0 (determinística; todos los commits de un PR quedan en una sola partición)",
-    "regla_shas": "head = punta revisada del PR (head.sha de la API, vive en refs/pull/<pr>/head); base = estado de main al merge (primer padre del merge commit); merge_commit queda para auditoría",
+    "regla_shas": "head = punta revisada del PR (head.sha de la API, vive en refs/pull/<pr>/head); base = merge-base de la punta con main, que es lo que realmente se midió (coincide con el primer padre del merge commit salvo cuando la punta ramificó antes de que subiera main: pr10 y pr14, marcados en arbol; el manifest de cada salida retenida es la evidencia); merge_commit queda para auditoría",
     "criterio_orden_pushes": "submitted_at de la primera revisión de CodeRabbit de cada SHA, ascendente; pushes_submitted_at es la lista paralela de esas marcas",
     "versiones": {
       "claude_code": "2.1.282",
@@ -29,7 +29,8 @@
       "salidas del revisor sin capturar (tanda pagada pendiente de autorización)",
       "CodeRabbit: sólo pr2, pr4, pr9, pr13 y pr24 tienen SHAs con revisión existente; los otros 15 casos quedan con pushes null (sin comentarios existentes que capturar)",
       "pares con SHAs reales de pushes: sólo pr2 (4 SHAs), pr4 (2), pr9 (2) y pr13 (2); pr24 tiene 1 SHA y los demás casos no tienen lista (pendiente)",
-      "adjudicación ciega vacía hasta contar con salidas"
+      "adjudicación ciega vacía hasta contar con salidas",
+      "resuelto (enmienda E1-ADJ-HOJA 2026-09-27): el residual de E1 r2 sobre la base congelada de pr10/pr14 — el corpus traía el primer padre del merge pero las salidas midieron contra el merge-base de la punta (d2e8dd3c / ee06f976, grabados por el manifest); los bases quedaron corregidos a lo realmente medido, heads intactos, sin re-dispatch"
     ]
   },
   "casos": [
@@ -168,7 +169,7 @@
       "caso": "pr10",
       "pr": 10,
       "repo": "gon0801/goncloud-pr-review",
-      "base": "c811c736b6a6b97c805610fbe84dd747d9889f0b",
+      "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
       "head": "a398079ef5103bb54fbd8d3fd4c153ede936460d",
       "merge_commit": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
       "pushes": null,
@@ -214,7 +215,7 @@
       "caso": "pr14",
       "pr": 14,
       "repo": "gon0801/goncloud-pr-review",
-      "base": "9e7d4f72dcfddbef1744c4a8d13eb2b3f90f7ae8",
+      "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
       "head": "a1930e695587b1d776b5baf301aee908c442c30e",
       "merge_commit": "b805a5756903df24b2154845472095ffe80aa422",
       "pushes": null,

@@ -1,0 +1,16 @@
+{
+  "base": "5b9e928cc63923e11c3ce6b1a2dc5c110bc279bb",
+  "head": "f0dcf5728aeff6889376edf3b93f7b6781b26ccc",
+  "reviewed": [
+    "Plans.md",
+    "docs/evidence/reviewer/B0.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 6846,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

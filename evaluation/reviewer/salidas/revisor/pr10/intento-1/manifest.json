@@ -1,0 +1,16 @@
+{
+  "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+  "head": "a398079ef5103bb54fbd8d3fd4c153ede936460d",
+  "reviewed": [
+    ".saikit/decisiones/pr-a.tsv",
+    ".saikit/findings/blast-pr-a.json"
+  ],
+  "excluded": [],
+  "diff_bytes": 2537,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}
