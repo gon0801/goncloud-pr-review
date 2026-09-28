@@ -553,3 +553,167 @@ class PublicacionConMemoriaConservada(unittest.TestCase):
         self.assertIn("conservada", body, "aviso visible para el operador")
         self.assertIn(review.CAUTION_MARK, body)
         self.assertIn("Texto previo que debe permanecer.", body)
+
+
+class PresupuestosEnBytes(unittest.TestCase):
+    def snapshot_con_titulo(self, titulo):
+        return domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=None,
+            next_id=2,
+            completion=domain.UNKNOWN,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title=titulo,
+                    severity="Low",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                )
+            ],
+            command_cursor=0,
+        )
+
+    def test_v2_en_el_limite_exacto_y_un_byte_encima(self):
+        vacio = domain.encode_snapshot(self.snapshot_con_titulo(""))
+        self.assertIsInstance(vacio, str)
+        fijo = len(vacio.encode("utf-8"))
+        titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
+        bloque = domain.encode_snapshot(self.snapshot_con_titulo(titulo))
+        self.assertIsInstance(bloque, str)
+        self.assertEqual(
+            len(bloque.encode("utf-8")), domain.FINDINGS_MAX_BYTES, "justo en el límite"
+        )
+        de_mas = domain.encode_snapshot(self.snapshot_con_titulo(titulo + "x"))
+        self.assertIsInstance(de_mas, domain.CapacityExceeded, "un byte por encima")
+        self.assertEqual(de_mas.needed, domain.FINDINGS_MAX_BYTES + 1)
+
+    def test_v2_unicode_cuenta_bytes_y_no_caracteres(self):
+        # 4200 'ñ' son 4200 caracteres pero 8400 bytes: el tope es en bytes.
+        resultado = domain.encode_snapshot(self.snapshot_con_titulo("ñ" * 4200))
+        self.assertIsInstance(resultado, domain.CapacityExceeded)
+        self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
+
+    def test_legado_mide_bytes_y_no_caracteres(self):
+        findings = [
+            {
+                "id": f"F{i}",
+                "file": "a.py",
+                "line": 1,
+                "severity": "Low",
+                "title": "ñ" * 130,
+                "state": "open",
+            }
+            for i in range(1, 41)
+        ]
+        bloque = review.serialize_findings({"findings": findings, "next": 41})
+        self.assertLessEqual(
+            len(bloque.encode("utf-8")),
+            review.FINDINGS_MAX_BYTES,
+            "el presupuesto legado es en bytes UTF-8",
+        )
+        back = review.parse_findings_block(bloque)
+        self.assertEqual(len(back["findings"]), 40, "nada se pierde por medir mal")
+        self.assertEqual(back["next"], 41)
+
+
+class FronteraDeEscritura(unittest.TestCase):
+    def test_encode_v2_rechaza_revision_parcial(self):
+        s = snapshot_v2()
+        s.revision = domain.Revision(base_sha="c" * 40)
+        with self.assertRaises(ValueError) as ctx:
+            domain.encode_snapshot(s)
+        self.assertIn("revisión", str(ctx.exception))
+
+    def test_encode_v2_rechaza_id_nulo(self):
+        s = snapshot_v2()
+        s.findings[0].id = None
+        with self.assertRaises(ValueError) as ctx:
+            domain.encode_snapshot(s)
+        self.assertIn("id", str(ctx.exception))
+
+    def test_encode_v2_neutraliza_el_cierre_del_comentario(self):
+        s = snapshot_v2()
+        s.findings[0].title = "a --> b --!> c"
+        bloque = domain.encode_snapshot(s)
+        self.assertIsInstance(bloque, str)
+        self.assertEqual(bloque.count("-->"), 1, "sólo el sufijo del bloque")
+        self.assertIn("a --› b --!› c", bloque)
+        load = domain.read_snapshot(bloque)
+        self.assertIsInstance(load, domain.Valid)
+        self.assertEqual(load.snapshot.findings[0].title, "a --› b --!› c")
+
+    def test_leer_v2_con_la_revision_exacta_de_m0_no_convierte_a_legacy(self):
+        s = snapshot_v2()
+        bloque = domain.encode_snapshot(s)
+        load = domain.read_snapshot(bloque)
+        self.assertIsInstance(load, domain.Valid)
+        self.assertNotIsInstance(load, domain.Legacy)
+        self.assertEqual(load.snapshot.revision, s.revision)
+        self.assertIsNone(
+            review.parse_findings_block(bloque),
+            "el adaptador de M0 no convierte el estado nuevo a legacy",
+        )
+
+
+class MedicionDelEstadoEnriquecido(unittest.TestCase):
+    def enriquecido(self, n):
+        findings = [
+            domain.Finding(
+                id=f"F{i}",
+                title=f"Problema {i} en la ruta de pago",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path=f"src/mod{i % 5}.py",
+                    blob_sha="a" * 40,
+                    range=(10 * i, 10 * i + 5),
+                    excerpt_digest=f"d{i}",
+                    symbol_hint="pagar",
+                ),
+                related_anchors=[
+                    domain.AnchorLegacy(path="tests/test_pago.py", line=i)
+                ],
+                cause_hint="posible condición de carrera en el cobro",
+                evidence=[
+                    domain.EvidenceSource(
+                        anchor=domain.AnchorLegacy(path="src/mod.py", line=10 * i)
+                    ),
+                    domain.EvidenceUnverified(
+                        text="falla intermitente en CI con carga"
+                    ),
+                ],
+            )
+            for i in range(1, n + 1)
+        ]
+        return domain.Snapshot(
+            schema=2,
+            generation=5,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=n + 1,
+            completion=domain.PARTIAL,
+            findings=findings,
+            command_cursor=50,
+        )
+
+    def test_medicion_representativa_documenta_la_decision(self):
+        tamanios = {}
+        for n in (1, 3, 10, 60):
+            r = domain.encode_snapshot(self.enriquecido(n))
+            tamanios[n] = (
+                r.needed
+                if isinstance(r, domain.CapacityExceeded)
+                else len(r.encode("utf-8"))
+            )
+        # lo que trae una revisión típica chica sí cabe en el bloque v2...
+        self.assertLessEqual(tamanios[3], domain.FINDINGS_MAX_BYTES)
+        # ...pero el tope de 60 hallazgos enriquecidos NO cabe: por eso la
+        # escritura v2 sigue desactivada por defecto y la decisión de
+        # almacenamiento queda documentada como pendiente en M1.md.
+        self.assertIsInstance(
+            domain.encode_snapshot(self.enriquecido(60)), domain.CapacityExceeded
+        )
+        print(f"M1 medición (bytes UTF-8 de estado enriquecido): {tamanios}")

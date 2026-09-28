@@ -3895,3 +3895,151 @@ class PromptFindings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersistenciaSinPerdida(unittest.TestCase):
+    """M1: el desborde y la memoria inválida conservan el estado y no confirman el commit."""
+
+    def sticky_v2_al_limite(self):
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def snapshot(titulo):
+            return domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=None,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title=titulo,
+                        severity="Low",
+                        status=domain.StatusDismissed(command_id=7),
+                        primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                    ),
+                    domain.Finding(
+                        id="F2",
+                        title="Abierto",
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLegacy(path="b.py", line=2),
+                    ),
+                ],
+                command_cursor=7,
+            )
+
+        vacio = domain.encode_snapshot(snapshot(""))
+        fijo = len(vacio.encode("utf-8"))
+        titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
+        bloque = domain.encode_snapshot(snapshot(titulo))
+        self.assertIsInstance(bloque, str, "el sticky queda justo en el límite")
+        de_mas = domain.encode_snapshot(snapshot(titulo + "x"))
+        self.assertIsInstance(de_mas, domain.CapacityExceeded, "un byte más no cabe")
+        cuerpo = (
+            review.MARKER
+            + "\n"
+            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + bloque
+            + "\n\n### Revisión anterior\n\nTexto previo.\n"
+        )
+        return cuerpo
+
+    def test_overflow_keeps_previous_snapshot_and_reviewed_sha(self):
+        sticky_body = self.sticky_v2_al_limite()
+        result = {
+            "result": review.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F-new",
+                            "file": "c.py",
+                            "line": 1,
+                            "severity": "Medium",
+                            "title": "bug nuevo z",
+                            "state": "open",
+                        }
+                    ],
+                    "next": 1,
+                },
+                separators=(",", ":"),
+            )
+            + review.FINDINGS_SUFFIX
+        }
+        out = review.build_findings(
+            result,
+            dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+            {"id": 9, "body": sticky_body},
+            "x/y",
+            1,
+            "bot",
+            [],
+        )
+        self.assertIn(out["block"], sticky_body, "el bloque queda byte a byte")
+        load_back = __import__("review_domain").read_snapshot(out["block"])
+        self.assertEqual([f.id for f in load_back.snapshot.findings], ["F1", "F2"])
+        self.assertEqual(load_back.snapshot.findings[0].status.command_id, 7)
+        self.assertEqual(load_back.snapshot.command_cursor, 7)
+        self.assertEqual(review.reviewed_sha(sticky_body), "a" * 40)
+
+    def test_sticky_invalido_se_conserva_con_banner(self):
+        sticky_body = (
+            review.MARKER
+            + "\n"
+            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + review.FINDINGS_PREFIX
+            + '{"schema":2,"findings":null,"next_id":1}'
+            + review.FINDINGS_SUFFIX
+            + "\n\n### Revisión anterior\n\nTexto previo.\n"
+        )
+        result = {
+            "result": review.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F-new",
+                            "file": "c.py",
+                            "line": 1,
+                            "severity": "Medium",
+                            "title": "bug nuevo z",
+                            "state": "open",
+                        }
+                    ],
+                    "next": 1,
+                },
+                separators=(",", ":"),
+            )
+            + review.FINDINGS_SUFFIX
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps(result))
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"])
+                )
+            )
+            sticky = {"id": 9, "user": "github-actions[bot]", "body": sticky_body}
+            with mock.patch.dict(
+                os.environ, {"REPO": "x/y", "PR_NUMBER": "1", "HEAD_SHA": "c" * 40}
+            ):
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+                with (
+                    mock.patch.object(
+                        review, "fetch_all_comments", return_value=[sticky]
+                    ),
+                    mock.patch.object(review, "sh"),
+                ):
+                    review.cmd_publish(argparse.Namespace(work=str(work)))
+            body = json.loads((work / "comment.json").read_text())["body"]
+        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
+        self.assertNotIn("bug nuevo z", body, "no publica encima de memoria inválida")
+        self.assertIn("conservada", body, "aviso visible")
+        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn("Texto previo.", body)
