@@ -713,3 +713,374 @@ class MedicionDelEstadoEnriquecido(unittest.TestCase):
             domain.encode_snapshot(self.enriquecido(60)), domain.CapacityExceeded
         )
         print(f"M1 medición (bytes UTF-8 de estado enriquecido): {tamanios}")
+
+
+# ---- F0: identidad, evidencia y resolución ----
+
+
+def _ancla_locada(digest, path="src/app.py", blob="a" * 40, rango=(2, 2)):
+    return domain.AnchorLocated(
+        path=path,
+        blob_sha=blob,
+        range=rango,
+        excerpt_digest=digest,
+        symbol_hint=None,
+    )
+
+
+def _observacion(titulo, ruta="src/app.py", **kw):
+    base = dict(
+        title=titulo,
+        severity="High",
+        primary_anchor=domain.AnchorLegacy(path=ruta, line=1),
+        related_anchors=[],
+        cause_hint=None,
+        evidence=[],
+        claim=domain.OPEN,
+    )
+    base.update(kw)
+    return domain.Observation(**base)
+
+
+class IdentidadDeHallazgos(unittest.TestCase):
+    def hechos(self, renames=()):
+        return domain.RepositoryFacts(renames=dict(renames))
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="Bug del IVA",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="Bug del IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/otro.py", line=20),
+            ),
+            domain.Finding(
+                id="F3",
+                title="Fuga de recurso",
+                severity="Low",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=30),
+            ),
+        ]
+
+    def test_cambio_de_titulo_conserva_id(self):
+        obs = _observacion("El IVA se valida tarde y mal", ruta="src/app.py")
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_desplazamiento_de_lineas_conserva_id(self):
+        obs = _observacion(
+            "Bug del IVA",
+            ruta="src/app.py",
+            primary_anchor=domain.AnchorLegacy(path="src/app.py", line=500),
+        )
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_renombre_confirmado_conserva_id(self):
+        obs = _observacion("Bug del IVA", ruta="src/app_renombrado.py")
+        self.assertEqual(
+            domain.match_finding(
+                self.previos(),
+                obs,
+                self.hechos(renames=(("src/app_renombrado.py", "src/app.py"),)),
+            ),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_dos_bugs_mismo_titulo_en_archivos_distintos_no_se_fusionan(self):
+        previos = [self.previos()[0], self.previos()[1]]
+        obs_a = _observacion("Bug del IVA", ruta="src/app.py")
+        obs_b = _observacion("Bug del IVA", ruta="src/otro.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs_a, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs_b, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+
+    def test_dos_candidatos_plausibles_dan_ambiguo_sin_fusionar(self):
+        # un archivo dividido en dos: la ruta nueva corresponde a dos viejas
+        obs = _observacion("Bug del IVA", ruta="src/iva.py")
+        hechos = self.hechos(
+            renames=(("src/iva.py", "src/app.py"), ("src/iva.py", "src/otro.py"))
+        )
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, hechos),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def test_los_descartes_se_conservan_y_no_reaparecen(self):
+        previos = self.previos()
+        obs_f3 = _observacion("Fuga de recurso", ruta="src/app.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs_f3, self.hechos()),
+            domain.MatchExisting(id="F3"),
+        )
+        plan = domain.ReviewPlan(revision=None, changed_paths=())
+        report = domain.validar_reporte([obs_f3], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(self._snapshot_v2(previos), plan, report)
+        self.assertIsInstance(transicion, domain.Replace)
+        f3 = {f.id: f for f in transicion.snapshot.findings}["F3"]
+        self.assertEqual(f3.status, domain.StatusDismissed(command_id=None))
+
+    def _snapshot_v2(self, findings):
+        return domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=4,
+            completion=domain.UNKNOWN,
+            findings=findings,
+            command_cursor=0,
+        )
+
+
+class CitasYEvidencia(unittest.TestCase):
+    BLOB = ("def pagar():\n", "    uso del IVA sin validar\n", "    return total\n")
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): self.BLOB})
+
+    def observacion_con_cita(self, digest, claim=domain.OPEN):
+        return _observacion(
+            "Uso del IVA sin validar",
+            primary_anchor=_ancla_locada(digest),
+            evidence=[
+                domain.EvidenceSource(
+                    anchor=domain.AnchorLocated(
+                        path="src/app.py",
+                        blob_sha="a" * 40,
+                        range=(2, 2),
+                        excerpt_digest=digest,
+                    )
+                ),
+                domain.EvidenceUnverified(text="se reproduce al pagar sin IVA"),
+            ],
+            claim=claim,
+        )
+
+    def test_cita_valida_queda_etiquetada_como_ubicacion_verificada(self):
+        import hashlib
+
+        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        report = domain.validar_reporte(
+            [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
+        )
+        self.assertEqual(report.rechazadas, ())
+        fuente = report.observations[0].evidence[0]
+        self.assertIsInstance(fuente, domain.EvidenceSource)
+
+    def test_cita_con_digest_invalido_se_rechaza(self):
+        report = domain.validar_reporte(
+            [self.observacion_con_cita("d" * 64)], domain.UNKNOWN, self.hechos()
+        )
+        self.assertTrue(report.rechazadas)
+        self.assertEqual(report.observations[0].evidence, [])
+
+    def test_afirmacion_sin_evidencia_comprobable_queda_etiquetada(self):
+        import hashlib
+
+        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        report = domain.validar_reporte(
+            [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
+        )
+        tipos = [type(e) for e in report.observations[0].evidence]
+        self.assertIn(domain.EvidenceUnverified, tipos)
+
+    def test_cita_existente_con_interpretacion_falsa_no_marca_reproducido(self):
+        import hashlib
+
+        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="Uso del IVA sin validar",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=2),
+            )
+        ]
+        obs = self.observacion_con_cita(digest, claim=domain.RESOLVED)
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=(),  # nada cambió: la cita existe pero no hay arreglo
+        )
+        report = domain.validar_reporte([obs], domain.PARTIAL, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        f1 = transicion.snapshot.findings[0]
+        self.assertIsInstance(
+            f1.status, domain.StatusOpen, "la cita validada no marca reproducido"
+        )
+        self.assertTrue(
+            any(isinstance(e, domain.EvidenceSource) for e in f1.evidence),
+            "la ubicación verificada queda como evidencia",
+        )
+        self.assertTrue(
+            any(isinstance(e, domain.EvidenceUnverified) for e in f1.evidence),
+            "la evaluación del modelo queda etiquetada aparte",
+        )
+
+
+class ResolucionConCambioPertinente(unittest.TestCase):
+    def _previo(self, estado=domain.StatusOpen()):
+        return domain.Finding(
+            id="F1",
+            title="bug x",
+            severity="Low",
+            status=estado,
+            primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+        )
+
+    def _aceptar(self, previo, claim, changed, reverted=(), prev_estado=None):
+        obs = _observacion(
+            "bug x",
+            ruta="src/x.py",
+            primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            claim=claim,
+        )
+        hechos = domain.RepositoryFacts(reverted_paths=tuple(reverted))
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=tuple(changed),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=plan.revision,
+            next_id=2,
+            completion=domain.UNKNOWN,
+            findings=[previo],
+            command_cursor=0,
+        )
+        return domain.accept_report(snapshot, plan, report)
+
+    def test_resolver_exige_cambio_pertinente(self):
+        t = self._aceptar(self._previo(), domain.RESOLVED, changed=())
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusOpen)
+
+    def test_resolucion_con_cambio_pertinente(self):
+        t = self._aceptar(self._previo(), domain.RESOLVED, changed=("src/x.py",))
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_resolucion_por_reversion_exacta(self):
+        t = self._aceptar(
+            self._previo(), domain.OPEN, changed=(), reverted=("src/x.py",)
+        )
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_resolucion_previa_por_reversion_se_conserva(self):
+        t = self._aceptar(
+            self._previo(domain.StatusResolved(at_sha="c" * 40)),
+            domain.OPEN,
+            changed=(),
+        )
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_arreglo_en_archivo_relacionado(self):
+        previo = self._previo()
+        previo.related_anchors = [domain.AnchorLegacy(path="tests/test_x.py", line=9)]
+        t = self._aceptar(previo, domain.RESOLVED, changed=("tests/test_x.py",))
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_accept_en_estado_legado_da_keep(self):
+        obs = _observacion("bug x", ruta="src/x.py")
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        legado = domain.Snapshot(
+            schema=1,
+            generation=0,
+            revision=None,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+        plan = domain.ReviewPlan(revision=None, changed_paths=())
+        self.assertIsInstance(domain.accept_report(legado, plan, report), domain.Keep)
+
+
+class NuevosIdsYAmbiguosEnAccept(unittest.TestCase):
+    def test_ambiguo_crea_hallazgo_separado_sin_fusionar(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="Bug del IVA",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="Bug del IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/otro.py", line=20),
+            ),
+        ]
+        # renames son pares (ruta_nueva, ruta_vieja): un archivo dividido
+        # mapea una ruta nueva a dos viejas y eso es lo que hace ambiguo el match.
+        hechos = domain.RepositoryFacts(
+            renames=(("src/iva.py", "src/app.py"), ("src/iva.py", "src/otro.py"))
+        )
+        obs = _observacion("Bug del IVA", ruta="src/iva.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs, hechos),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/iva.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=plan.revision,
+            next_id=3,
+            completion=domain.UNKNOWN,
+            findings=previos,
+            command_cursor=0,
+        )
+        transicion = domain.accept_report(snapshot, plan, report)
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertIn("F3", por_id, "el ambiguo entra separado con id del programa")
+        self.assertIn("posible duplicado", por_id["F3"].cause_hint)
+        self.assertEqual(por_id["F1"].title, "Bug del IVA")
+        self.assertEqual(por_id["F2"].title, "Bug del IVA")
