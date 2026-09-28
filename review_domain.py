@@ -37,6 +37,8 @@ _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 class Missing:
     """No hay bloque de memoria."""
 
+    block: str = ""
+
 
 @dataclass
 class Invalid:

@@ -1994,15 +1994,19 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2 o de versión futura: se conserva el comentario original
-            # completo (el sha= y la cobertura no avanzan) y se avisa en visible,
-            # como en la ruta de falla de infraestructura.
+            # Memoria v2, de versión futura, inválida o desbordada: se conserva
+            # el comentario sin modificar (o MARKER + banner si no hay sticky),
+            # el sha= y la cobertura no avanzan y se avisa en visible, como en
+            # la ruta de falla de infraestructura.
             banner = caution_banner(
                 f"memoria de {findings['keep']} conservada; esta versión no la modifica",
                 head,
-                has_previous=True,
+                has_previous=bool(sticky),
             )
-            body = insert_caution_banner(sticky["body"], banner)
+            if sticky:
+                body = insert_caution_banner(sticky["body"], banner)
+            else:
+                body = f"{MARKER}\n{banner}"
             body = redact(
                 body,
                 [
