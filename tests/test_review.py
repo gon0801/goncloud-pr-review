@@ -3961,7 +3961,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 "state": "dismissed",
             }
         ]
-        for i in range(2, 40):
+        for i in range(2, 51):
             findings.append(
                 {
                     "id": f"F{i}",
@@ -3973,7 +3973,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 }
             )
         bloque_sticky = review.serialize_findings(
-            {"findings": findings, "next": 40, "seen": 7}
+            {"findings": findings, "next": 51, "seen": 7}
         )
         self.assertIsInstance(bloque_sticky, str)
         sticky_body = (

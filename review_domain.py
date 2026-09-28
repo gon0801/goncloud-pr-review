@@ -290,25 +290,15 @@ def legacy_raw_of(data):
 
 
 def serialize_findings(state, *, max_bytes=None):
-    """Canonical hidden block, always within the findings budget.
+    """Canonical hidden block: íntegro o CapacityExceeded (M1).
 
-    Titles and paths shrink first; oldest resolved/dismissed go next; oldest
-    open findings go only as a last resort so the comment budgets never break.
-    `max_bytes` lets the adapter own its knob (tests patch it there).
+    La memoria es esencial: nunca se recortan títulos, rutas, ids, descartes
+    ni el cursor. Si el estado íntegro no cabe en el presupuesto (bytes
+    UTF-8), se devuelve CapacityExceeded y el publicador aplica Keep:
+    conserva el bloque anterior sin avanzar el commit.
     """
     limite = FINDINGS_MAX_BYTES if max_bytes is None else max_bytes
     findings = sorted(state["findings"], key=lambda f: finding_number(f["id"]) or 0)
-    if len(findings) > FINDINGS_MAX_COUNT:
-        open_only = [f for f in findings if f["state"] == OPEN]
-        rest = sorted(
-            (f for f in findings if f["state"] != OPEN),
-            key=lambda f: finding_number(f["id"]) or 0,
-            reverse=True,
-        )
-        findings = sorted(
-            open_only + rest[: max(0, FINDINGS_MAX_COUNT - len(open_only))],
-            key=lambda f: finding_number(f["id"]) or 0,
-        )
     entries = []
     for f in findings:
         entry = {
@@ -323,47 +313,20 @@ def serialize_findings(state, *, max_bytes=None):
         if related:
             entry["files"] = related
         entries.append(entry)
-
-    def build(items):
-        blob = json.dumps(
-            {
-                "findings": items,
-                "next": state["next"],
-                **({"seen": state["seen"]} if state.get("seen") else {}),
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
-
-    title_limit, path_limit = FINDINGS_TITLE_MAX, 200
-    while True:
-        block = build(entries)
-        if len(block.encode("utf-8")) <= limite:
-            return block
-        if title_limit > 20 or path_limit > 25:
-            title_limit = max(20, title_limit // 2)
-            path_limit = max(25, path_limit // 2)
-            entries = [
-                dict(
-                    e,
-                    file=one_line(e["file"], path_limit),
-                    title=one_line(e["title"], title_limit),
-                    **(
-                        {"files": [one_line(x, path_limit) for x in e["files"]]}
-                        if "files" in e
-                        else {}
-                    ),
-                )
-                for e in entries
-            ]
-            continue
-        if any("files" in e for e in entries):
-            entries = [{k: v for k, v in e.items() if k != "files"} for e in entries]
-            continue
-        drop_from = [e for e in entries if e["state"] != OPEN] or entries
-        victim = min(drop_from, key=lambda e: finding_number(e["id"]) or 0)
-        entries = [e for e in entries if e is not victim]
+    blob = json.dumps(
+        {
+            "findings": entries,
+            "next": state["next"],
+            **({"seen": state["seen"]} if state.get("seen") else {}),
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+    needed = len(bloque.encode("utf-8"))
+    if needed > limite:
+        return CapacityExceeded(limit=limite, needed=needed)
+    return bloque
 
 
 def same_issue(a, b):
@@ -681,7 +644,7 @@ def read_snapshot(body, *, last=False):
             return Future(schema, block=found_block)
         return Invalid(f"schema desconocido: {schema!r}")
     raw = legacy_raw_of(data)
-    return Legacy(snapshot=_migrate_legacy(raw), raw=raw)
+    return Legacy(snapshot=_migrate_legacy(raw), raw=raw, block=found_block)
 
 
 def _legacy_raw_of_snapshot(snapshot):

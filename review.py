@@ -1923,10 +1923,24 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         dismiss_all=dismiss_all,
     )
     merged["seen"] = last_seen
+    bloque = serialize_findings(merged)
+    if isinstance(bloque, review_domain.CapacityExceeded):
+        motivo = f"desborde ({bloque.needed} bytes para {bloque.limit})"
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
     return {
         "merged": merged["findings"],
         "new_ids": new_ids,
-        "block": serialize_findings(merged),
+        "block": bloque,
         "model_ok": model is not None,
     }
 
