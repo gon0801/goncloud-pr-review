@@ -15,11 +15,15 @@ Entradas (JSON):
     duplicate | unresolved), defecto?, duplicado_de?, resuelto_real?}],
     "defectos": {caso: [ids de defectos conocidos]}}  (opcional)
 
-Reglas: sólo se comparan pares con base y head exactos; las filas de
-adjudicación duplicadas se rechazan; unresolved sale del denominador de
-precisión y se informa cuántos se excluyeron; el costo ausente se informa
-como desconocido (nunca cero) y la recuperación sólo se calcula cuando existe
-un conjunto de defectos conocidos adjudicados.
+Reglas: la identidad de una observación es la clave completa
+(caso, producto, configuracion, intento); varias observaciones del mismo caso
+se aceptan si la clave difiere y la clave completa repetida se rechaza. La
+adjudicación es (caso, hallazgo): un ID de hallazgo no puede repetirse entre
+observaciones del mismo caso. Sólo se comparan pares con base y head exactos;
+las filas de adjudicación duplicadas se rechazan; unresolved sale del
+denominador de precisión y se informa cuántos se excluyeron; el costo ausente
+se informa como desconocido (nunca cero) y la recuperación sólo se calcula
+cuando existe un conjunto de defectos conocidos adjudicados.
 """
 
 import argparse
@@ -71,12 +75,11 @@ def main():
         corpus[ident] = caso
 
     vistas = {}
+    indice_hallazgos = {}
     for obs in observaciones:
         ident = obs.get("caso")
         if ident not in corpus:
             falla(f"observación de caso desconocido: {ident!r}")
-        if ident in vistas:
-            falla(f"observación duplicada para el caso {ident}")
         caso = corpus[ident]
         if (obs.get("base"), obs.get("head")) != (caso["base"], caso["head"]):
             falla(
@@ -99,26 +102,48 @@ def main():
         ):
             if clave not in obs:
                 falla(f"observación del caso {ident} sin la clave requerida {clave!r}")
+        clave_obs = (
+            ident,
+            obs["producto"],
+            obs["configuracion"],
+            obs["intento"],
+        )
+        if clave_obs in vistas:
+            falla(
+                f"observación duplicada para el caso {ident}: ya hay una con la "
+                f"misma clave completa (caso, producto, configuracion, intento) "
+                f"= ({ident}, {obs['producto']!r}, {obs['configuracion']!r}, "
+                f"{obs['intento']!r})"
+            )
         hallazgos = {}
         for h in obs["hallazgos"]:
             if h["id"] in hallazgos:
                 falla(f"hallazgo duplicado {h['id']!r} en el caso {ident}")
+            if (ident, h["id"]) in indice_hallazgos:
+                falla(
+                    f"hallazgo {h['id']!r} repetido en el caso {ident}: la clave de "
+                    "adjudicación es (caso, hallazgo) y ya existe en otra "
+                    "observación del mismo caso; usa IDs distintos por producto"
+                )
             hallazgos[h["id"]] = h
-        vistas[ident] = {"obs": obs, "hallazgos": hallazgos}
+            indice_hallazgos[(ident, h["id"])] = clave_obs
+        vistas[clave_obs] = {"obs": obs, "hallazgos": hallazgos}
 
-    conocidos_por_caso = {c: set(d) for c, d in defectos.items() if c in vistas}
+    conocidos_por_caso = {c: set(d) for c, d in defectos.items() if c in corpus}
     vistos = set()
     conteo = {"valid": 0, "false_positive": 0, "duplicate": 0, "unresolved": 0}
     detectados = set()
     falsos_resueltos = 0
+    casos_con_observaciones = {k[0] for k in vistas}
     for fila in filas:
         ident, hallazgo = fila.get("caso"), fila.get("hallazgo")
         llave = (ident, hallazgo)
         if llave in vistos:
             falla(f"fila de adjudicación duplicada para {ident}/{hallazgo}")
-        if ident not in vistas:
+        if ident not in casos_con_observaciones:
             falla(f"adjudicación de caso desconocido: {ident!r}")
-        if hallazgo not in vistas[ident]["hallazgos"]:
+        clave_vista = indice_hallazgos.get(llave)
+        if clave_vista is None:
             falla(f"adjudicación de hallazgo desconocido: {ident}/{hallazgo}")
         veredicto = fila.get("veredicto")
         if veredicto not in conteo:
@@ -139,11 +164,11 @@ def main():
                 detectados.add((ident, defecto))
         if veredicto == "duplicate":
             original = fila.get("duplicado_de")
-            if original not in vistas[ident]["hallazgos"]:
+            if (ident, original) not in indice_hallazgos:
                 falla(
                     f"duplicate sin original válido: {ident}/{hallazgo} -> {original!r}"
                 )
-        h = vistas[ident]["hallazgos"][hallazgo]
+        h = vistas[clave_vista]["hallazgos"][hallazgo]
         if h.get("resuelto") and fila.get("resuelto_real") is False:
             falsos_resueltos += 1
 
@@ -180,6 +205,18 @@ def main():
         for o in vistas.values()
         if o["obs"]["costo_usd"] is not None
     ]
+
+    def identidad(clave):
+        return f"{clave[0]}/{clave[1]}/{clave[2]}/intento={clave[3]}"
+
+    duraciones = [
+        o["obs"]["duracion_s"]
+        for o in vistas.values()
+        if o["obs"]["duracion_s"] is not None
+    ]
+    turnos = [
+        o["obs"]["turnos"] for o in vistas.values() if o["obs"]["turnos"] is not None
+    ]
     informe = {
         "casos": len(corpus),
         "observaciones": len(vistas),
@@ -200,18 +237,17 @@ def main():
         "defectos_conocidos": defectos_informe,
         "falsos_resueltos": falsos_resueltos,
         "cobertura_declarada": {
-            i: v["obs"]["cobertura"] for i, v in sorted(vistas.items())
+            identidad(k): v["obs"]["cobertura"]
+            for k, v in sorted(vistas.items(), key=lambda kv: identidad(kv[0]))
         },
         "tiempo": {
-            "duracion_total_s": round(
-                sum(o["obs"]["duracion_s"] for o in vistas.values()), 3
-            ),
-            "duracion_promedio_s": round(
-                sum(o["obs"]["duracion_s"] for o in vistas.values()) / len(vistas), 3
-            )
-            if vistas
+            "duracion_total_s": round(sum(duraciones), 3) if duraciones else None,
+            "duracion_desconocidas": len(vistas) - len(duraciones),
+            "duracion_promedio_s": round(sum(duraciones) / len(duraciones), 3)
+            if duraciones
             else None,
-            "turnos_total": sum(o["obs"]["turnos"] for o in vistas.values()),
+            "turnos_total": sum(turnos) if turnos else None,
+            "turnos_desconocidos": len(vistas) - len(turnos),
         },
         "costo": {
             "usd_conocido": round(sum(costos), 6) if costos else None,

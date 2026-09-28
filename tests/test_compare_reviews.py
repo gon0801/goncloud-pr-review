@@ -117,7 +117,10 @@ class Comparador(unittest.TestCase):
         self.assertEqual(informe["falsos_resueltos"], 1)
         self.assertEqual(informe["defectos_conocidos"]["recuperacion"], 1.0)
         self.assertEqual(informe["defectos_conocidos"]["omitidos"], [])
-        self.assertEqual(informe["cobertura_declarada"], {"c1": "complete"})
+        self.assertEqual(
+            informe["cobertura_declarada"],
+            {"c1/revisor local/v1/intento=1": "complete"},
+        )
         self.assertEqual(informe["tiempo"]["duracion_total_s"], 120.5)
         self.assertEqual(informe["tiempo"]["turnos_total"], 9)
         self.assertEqual(informe["costo"], {"usd_conocido": 0.048, "desconocidos": 0})
@@ -266,6 +269,60 @@ class DefectosPorCaso(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("D9", r.stderr)
         self.assertIn("c2", r.stderr)
+
+
+class ClaveMultiProducto(unittest.TestCase):
+    def test_acepta_mismo_caso_con_clave_distinta_y_ambas_cuentan(self):
+        corpus = {"casos": [caso_simple("c1")]}
+        o1 = obs_simple("c1", "F1")
+        o2 = obs_simple("c1", "G1")
+        o2["intento"] = 2
+        o3 = obs_simple("c1", "H1")
+        o3["producto"] = "coderabbit"
+        o3["configuracion"] = "comentarios existentes"
+        o3["duracion_s"] = None
+        o3["turnos"] = None
+        judg = {
+            "adjudicaciones": [
+                {"caso": "c1", "hallazgo": "F1", "veredicto": "valid"},
+                {"caso": "c1", "hallazgo": "G1", "veredicto": "false_positive"},
+                {"caso": "c1", "hallazgo": "H1", "veredicto": "valid"},
+            ],
+            "defectos": {},
+        }
+        r, informe = correr(corpus, {"observaciones": [o1, o2, o3]}, judg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(informe["observaciones"], 3)
+        self.assertEqual(informe["hallazgos"]["total"], 3)
+        self.assertEqual(informe["precision"]["validos"], 2)
+        self.assertEqual(len(informe["cobertura_declarada"]), 3)
+        self.assertEqual(informe["tiempo"]["duracion_total_s"], 20.0)
+        self.assertEqual(informe["tiempo"]["duracion_desconocidas"], 1)
+        self.assertEqual(informe["tiempo"]["turnos_total"], 4)
+        self.assertEqual(informe["tiempo"]["turnos_desconocidos"], 1)
+
+    def test_rechaza_misma_clave_completa_duplicada(self):
+        corpus = {"casos": [caso_simple("c1")]}
+        o1 = obs_simple("c1", "F1")
+        o2 = obs_simple("c1", "G1")
+        r, _ = correr(
+            corpus, {"observaciones": [o1, o2]}, {"adjudicaciones": [], "defectos": {}}
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("duplicad", r.stderr)
+
+    def test_rechaza_hallazgo_repetido_entre_observaciones_del_mismo_caso(self):
+        corpus = {"casos": [caso_simple("c1")]}
+        o1 = obs_simple("c1", "F1")
+        o2 = obs_simple("c1", "F1")
+        o2["intento"] = 2
+        judg = {
+            "adjudicaciones": [{"caso": "c1", "hallazgo": "F1", "veredicto": "valid"}],
+            "defectos": {},
+        }
+        r, _ = correr(corpus, {"observaciones": [o1, o2]}, judg)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("F1", r.stderr)
 
 
 if __name__ == "__main__":

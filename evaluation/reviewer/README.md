@@ -24,7 +24,8 @@ inválido o fila duplicada no pasó la validación.
             "producto": "revisor local", "configuracion": "v1", "intento": 1}]}
 ```
 
-`observaciones.json` trae una salida capturada por caso, con base y head
+`observaciones.json` trae una o más salidas capturadas por caso, identificadas por
+la clave completa `(caso, producto, configuracion, intento)`, con base y head
 exactos del corpus, resultado, cobertura declarada, duración en segundos,
 turnos, costo en USD (`null` = desconocido) y la lista de hallazgos con
 `id`, `titulo`, `ruta` y `resuelto`.
@@ -64,6 +65,13 @@ recuperación que calcular.
 
 ## Reglas de oro
 
+- La identidad de una observación es la clave completa `(caso, producto,
+  configuracion, intento)`: se aceptan varias observaciones del mismo caso
+  cuando la clave difiere, y dos observaciones con la misma clave completa se
+  rechazan con salida 2.
+- La adjudicación es por `(caso, hallazgo)`: un ID de hallazgo no puede
+  repetirse entre observaciones del mismo caso (usa IDs distintos por
+  producto); el informe declara cada cobertura por su identidad completa.
 - Sólo se comparan salidas del mismo SHA: base y head de la observación deben
   ser exactamente los del corpus, o el comparador rechaza el par.
 - No hay verdad de referencia externa: la adjudicación humana es la entrada,
