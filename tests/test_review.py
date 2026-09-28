@@ -3930,8 +3930,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 command_cursor=7,
             )
 
-        vacio = domain.encode_snapshot(snapshot(""))
-        fijo = len(vacio.encode("utf-8"))
+        base = domain.encode_snapshot(snapshot("x"))
+        fijo = len(base.encode("utf-8")) - 1
         titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
         bloque = domain.encode_snapshot(snapshot(titulo))
         self.assertIsInstance(bloque, str, "el sticky queda justo en el límite")

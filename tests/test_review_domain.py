@@ -576,9 +576,9 @@ class PresupuestosEnBytes(unittest.TestCase):
         )
 
     def test_v2_en_el_limite_exacto_y_un_byte_encima(self):
-        vacio = domain.encode_snapshot(self.snapshot_con_titulo(""))
-        self.assertIsInstance(vacio, str)
-        fijo = len(vacio.encode("utf-8"))
+        base = domain.encode_snapshot(self.snapshot_con_titulo("x"))
+        self.assertIsInstance(base, str)
+        fijo = len(base.encode("utf-8")) - 1
         titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
         bloque = domain.encode_snapshot(self.snapshot_con_titulo(titulo))
         self.assertIsInstance(bloque, str)

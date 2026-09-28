@@ -43,6 +43,7 @@ class Invalid:
     """Hay bloque pero no se puede leer con confianza."""
 
     reason: str
+    block: str = ""
 
 
 @dataclass
@@ -338,7 +339,7 @@ def serialize_findings(state, *, max_bytes=None):
     title_limit, path_limit = FINDINGS_TITLE_MAX, 200
     while True:
         block = build(entries)
-        if len(block) <= limite:
+        if len(block.encode("utf-8")) <= limite:
             return block
         if title_limit > 20 or path_limit > 25:
             title_limit = max(20, title_limit // 2)
@@ -673,9 +674,9 @@ def read_snapshot(body, *, last=False):
             try:
                 return Valid(_v2_snapshot(data), block=found_block)
             except _SchemaError as exc:
-                return Invalid(exc.reason)
+                return Invalid(exc.reason, block=found_block)
             except (TypeError, ValueError, AttributeError, KeyError) as exc:
-                return Invalid(f"bloque v2 mal formado: {exc}")
+                return Invalid(f"bloque v2 mal formado: {exc}", block=found_block)
         if isinstance(schema, int) and not isinstance(schema, bool):
             return Future(schema, block=found_block)
         return Invalid(f"schema desconocido: {schema!r}")
@@ -713,6 +714,13 @@ def _legacy_raw_of_snapshot(snapshot):
     return raw
 
 
+def _neutralizar(texto):
+    """Los textos nunca cierran el bloque: -->/--!> pasan a --›/--!›."""
+    if texto is None:
+        return None
+    return str(texto).replace("--!>", "--!\u203a").replace("-->", "--\u203a")
+
+
 def encode_snapshot(snapshot):
     """Serializa el estado: legado en formato legado, v2 sin pérdida.
 
@@ -732,14 +740,14 @@ def encode_snapshot(snapshot):
 
     def anchor_json(a):
         if isinstance(a, AnchorLegacy):
-            return {"kind": "legacy", "path": a.path, "line": a.line}
+            return {"kind": "legacy", "path": _neutralizar(a.path), "line": a.line}
         return {
             "kind": "located",
-            "path": a.path,
+            "path": _neutralizar(a.path),
             "blob_sha": a.blob_sha,
             "range": list(a.range),
-            "excerpt_digest": a.excerpt_digest,
-            "symbol_hint": a.symbol_hint,
+            "excerpt_digest": _neutralizar(a.excerpt_digest),
+            "symbol_hint": _neutralizar(a.symbol_hint),
         }
 
     def evidence_json(e):
@@ -748,13 +756,13 @@ def encode_snapshot(snapshot):
         if isinstance(e, EvidenceCheck):
             return {
                 "kind": "check",
-                "check_id": e.check_id,
+                "check_id": _neutralizar(e.check_id),
                 "head_sha": e.head_sha,
-                "producer": e.producer,
-                "conclusion": e.conclusion,
-                "url": e.url,
+                "producer": _neutralizar(e.producer),
+                "conclusion": _neutralizar(e.conclusion),
+                "url": _neutralizar(e.url),
             }
-        return {"kind": "unverified", "text": e.text}
+        return {"kind": "unverified", "text": _neutralizar(e.text)}
 
     def status_json(s):
         if isinstance(s, StatusOpen):
@@ -777,12 +785,12 @@ def encode_snapshot(snapshot):
         "findings": [
             {
                 "id": f.id,
-                "title": f.title,
+                "title": _neutralizar(f.title),
                 "severity": f.severity,
                 "status": status_json(f.status),
                 "primary_anchor": anchor_json(f.primary_anchor),
                 "related_anchors": [anchor_json(a) for a in f.related_anchors],
-                "cause_hint": f.cause_hint,
+                "cause_hint": _neutralizar(f.cause_hint),
                 "evidence": [evidence_json(e) for e in f.evidence],
             }
             for f in snapshot.findings
@@ -790,6 +798,9 @@ def encode_snapshot(snapshot):
     }
     blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+    load = read_snapshot(bloque)
+    if not isinstance(load, Valid):
+        raise ValueError(f"estado v2 ilegal: {load.reason}")
     needed = len(bloque.encode("utf-8"))
     if needed > FINDINGS_MAX_BYTES:
         return CapacityExceeded(limit=FINDINGS_MAX_BYTES, needed=needed)

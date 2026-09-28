@@ -1867,6 +1867,19 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
             "model_ok": model is not None,
             "keep": motivo,
         }
+    if isinstance(load, review_domain.Invalid):
+        motivo = f"inválida ({load.reason})"
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
     prev = load.raw if isinstance(load, review_domain.Legacy) else None
     try:
         dismiss_ids, dismiss_all, last_seen = collect_dismissals(
