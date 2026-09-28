@@ -322,3 +322,146 @@ class EscrituraCompatible(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def snapshot_v2_chico():
+    return domain.Snapshot(
+        schema=2,
+        generation=2,
+        revision=None,
+        next_id=3,
+        completion=domain.UNKNOWN,
+        findings=[
+            domain.Finding(
+                id="F1",
+                title="Descartado por el operador",
+                severity="Low",
+                status=domain.StatusDismissed(command_id=7),
+                primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+            ),
+            domain.Finding(
+                id="F2",
+                title="Abierto vigente",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="b.py", line=2),
+            ),
+        ],
+        command_cursor=7,
+        pending_requests=[],
+    )
+
+
+class RutaDePublicacion(unittest.TestCase):
+    def memoria_v2_en_sticky(self):
+        snapshot = snapshot_v2_chico()
+        cuerpo = domain.encode_snapshot(snapshot)
+        self.assertIsInstance(cuerpo, str)
+        return snapshot, cuerpo
+
+    def test_b1_sticky_v2_se_conserva_sin_perdida_en_publicacion(self):
+        snapshot, sticky_body = self.memoria_v2_en_sticky()
+        sticky = {"id": 9, "body": sticky_body}
+        result = {"result": legado([entrada("F-new", file="c.py")])}
+        manifest = {"mode": "full", "reason": "no-prev", "reviewed": ["c.py"]}
+        out = review.build_findings(
+            result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
+        )
+        self.assertEqual(out["block"], sticky_body, "el bloque v2 sale intacto")
+        self.assertTrue(out.get("keep"))
+        de_vuelta = domain.read_snapshot(out["block"])
+        self.assertIsInstance(de_vuelta, domain.Valid)
+        self.assertEqual([f.id for f in de_vuelta.snapshot.findings], ["F1", "F2"])
+        self.assertEqual(
+            de_vuelta.snapshot.findings[0].status,
+            domain.StatusDismissed(command_id=7),
+            "un descarte confirmado no reaparece",
+        )
+
+    def test_b1_sticky_de_version_futura_tambien_se_conserva(self):
+        sticky_body = (
+            PRE + json.dumps({"schema": 9, "findings": [], "next_id": 1}) + SUF
+        )
+        sticky = {"id": 9, "body": sticky_body}
+        result = {"result": legado([entrada("F1")])}
+        manifest = {"mode": "full", "reason": "no-prev", "reviewed": ["a.py"]}
+        out = review.build_findings(
+            result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
+        )
+        self.assertEqual(out["block"], sticky_body)
+        self.assertTrue(out.get("keep"))
+
+    def test_b2_null_en_claves_v2_da_invalid_y_no_trona(self):
+        for clave in ("pending_requests", "related_anchors", "evidence"):
+            with self.subTest(clave=clave):
+                p = payload_v2()
+                if clave == "pending_requests":
+                    p[clave] = None
+                else:
+                    p["findings"][0][clave] = None
+                load = domain.read_snapshot(PRE + json.dumps(p) + SUF)
+                self.assertIsInstance(load, domain.Invalid)
+
+    def test_b2_el_texto_del_modelo_no_trona_la_publicacion(self):
+        p = payload_v2()
+        p["findings"][0]["evidence"] = None
+        self.assertIsNone(review.parse_model_findings(PRE + json.dumps(p) + SUF))
+
+
+class FronteraDeReferencias(unittest.TestCase):
+    def lee(self, payload):
+        return domain.read_snapshot(PRE + json.dumps(payload) + SUF)
+
+    def hallazgo_f5(self):
+        return {
+            "id": "F5",
+            "title": "Viejo",
+            "severity": "Low",
+            "status": {"kind": "open"},
+            "primary_anchor": {"kind": "legacy", "path": "a.py", "line": 1},
+            "related_anchors": [],
+            "cause_hint": None,
+            "evidence": [],
+        }
+
+    def test_b3_next_id_debe_superar_al_maximo_existente(self):
+        load = self.lee(payload_v2(next_id=1, findings=[self.hallazgo_f5()]))
+        self.assertIsInstance(load, domain.Invalid)
+        self.assertIn("next_id", load.reason)
+
+    def test_b3_solicitud_de_hallazgo_inexistente(self):
+        load = self.lee(
+            payload_v2(
+                pending_requests=[
+                    {"id": "req-1", "kind": "explain", "finding_id": "F9"}
+                ]
+            )
+        )
+        self.assertIsInstance(load, domain.Invalid)
+        self.assertIn("F9", load.reason)
+
+    def test_b3_command_id_no_puede_superar_el_cursor(self):
+        p = payload_v2(
+            command_cursor=0,
+            findings=[
+                {
+                    "id": "F1",
+                    "title": "x",
+                    "severity": "Low",
+                    "status": {"kind": "dismissed", "command_id": 99},
+                    "primary_anchor": {"kind": "legacy", "path": "a.py", "line": 1},
+                    "related_anchors": [],
+                    "cause_hint": None,
+                    "evidence": [],
+                }
+            ],
+        )
+        load = self.lee(p)
+        self.assertIsInstance(load, domain.Invalid)
+        self.assertIn("command_cursor", load.reason)
+
+    def test_b3_cause_hint_debe_ser_texto_o_nulo(self):
+        p = payload_v2()
+        p["findings"][0]["cause_hint"] = 123
+        load = self.lee(p)
+        self.assertIsInstance(load, domain.Invalid)
