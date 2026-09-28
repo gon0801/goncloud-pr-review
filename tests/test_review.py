@@ -272,7 +272,7 @@ FAKE_GH = textwrap.dedent("""\
 
 
 class GitHubGlue(unittest.TestCase):
-    def run_cmd(self, command, comments, run_attempt="1"):
+    def run_cmd(self, command, comments, run_attempt="1", result=None, extra_env=None):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
@@ -285,7 +285,9 @@ class GitHubGlue(unittest.TestCase):
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
             (work / "result.json").write_text(
                 json.dumps(
-                    {
+                    result
+                    if result is not None
+                    else {
                         "result": "**Veredicto:** leaked sk-secret-key-123\nCOVERAGE: complete"
                     }
                 )
@@ -302,6 +304,7 @@ class GitHubGlue(unittest.TestCase):
                 RUN_ATTEMPT=run_attempt,
                 API_KEY="sk-secret-key-123",
             )
+            env.update(extra_env or {})
             env.pop("GITHUB_STEP_SUMMARY", None)
             subprocess.run(
                 [sys.executable, str(ROOT / "review.py"), command, "--work", str(work)],
@@ -361,6 +364,23 @@ class GitHubGlue(unittest.TestCase):
         self.assertEqual(
             calls[1][:4], ["api", "-X", "POST", "repos/o/r/issues/7/comments"]
         )
+
+    def test_publish_labels_the_provider_that_completed_the_fallback_and_redacts_its_key(
+        self,
+    ):
+        fallback_key = "sk-deepseek-fallback-123"
+        _, _, posted = self.run_cmd(
+            "publish",
+            [],
+            result={
+                "result": f"**Veredicto:** {fallback_key}\nCOVERAGE: complete",
+                "review_provider": "deepseek",
+            },
+            extra_env={"PROVIDER": "opencode-go", "FALLBACK_API_KEY": fallback_key},
+        )
+        self.assertIn("DeepSeek V4.1 Flash · API DeepSeek", posted["body"])
+        self.assertIn("**Veredicto:** [REDACTED]", posted["body"])
+        self.assertNotIn(fallback_key, posted["body"])
 
     def run_cmd_with_error(self, comments, reason="el proxy LiteLLM no arrancó"):
         with tempfile.TemporaryDirectory() as tmp:
@@ -917,6 +937,136 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn(review.ERROR_KEY, result)
 
+    def test_opencode_insufficient_funds_switches_to_deepseek_with_its_own_key(self):
+        replies = [
+            {
+                "result": "API Error: 402 Insufficient account funds",
+                "is_error": True,
+                "api_error_status": 402,
+            },
+            OK_REPLY,
+        ]
+        proc, calls, result, proxy, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_REPLIES=json.dumps(replies),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls],
+            ["deepseek-v4.1-flash", "deepseek-flash[1m]"],
+        )
+        self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-key-123")
+        self.assertEqual(calls[1]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
+        self.assertIsNone(calls[1]["ANTHROPIC_AUTH_TOKEN"])
+        self.assertTrue(all("FALLBACK_API_KEY" not in call["env"] for call in calls))
+        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["review_provider"], "deepseek")
+
+    def test_deepseek_quota_switches_to_opencode(self):
+        replies = [
+            {
+                "result": "API Error: 429 quota exceeded",
+                "is_error": True,
+                "api_error_status": 429,
+            },
+            OK_REPLY,
+        ]
+        proc, calls, result, proxy, _ = self.run_agent(
+            OK_REPLY,
+            provider="deepseek",
+            FALLBACK_API_KEY="sk-go-fallback",
+            FAKE_CLAUDE_REPLIES=json.dumps(replies),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls],
+            ["deepseek-flash[1m]", "deepseek-v4.1-flash"],
+        )
+        self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-fallback")
+        self.assertEqual(result["review_provider"], "opencode-go")
+
+    def test_both_providers_out_of_quota_leave_commit_unreviewed(self):
+        replies = [
+            {
+                "result": "API Error: 402 Insufficient account funds",
+                "is_error": True,
+                "api_error_status": 402,
+            },
+            {
+                "result": "API Error: 429 quota exceeded",
+                "is_error": True,
+                "api_error_status": 429,
+            },
+        ]
+        proc, calls, result, _, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_REPLIES=json.dumps(replies),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            result, {review.ERROR_KEY: "ambos proveedores agotaron su cuota"}
+        )
+
+    def test_quota_without_fallback_key_reports_missing_secret_without_retry(self):
+        reply = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
+        proc, calls, result, _, _ = self.run_agent(reply, provider="opencode-go")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("FALLBACK_API_KEY", result[review.ERROR_KEY])
+
+    def test_auth_failure_does_not_switch_providers(self):
+        reply = {
+            "result": "API Error: 401 invalid key",
+            "is_error": True,
+            "api_error_status": 401,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            reply, provider="opencode-go", FALLBACK_API_KEY="sk-deepseek-key"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn(review.ERROR_KEY, result)
+
+    def test_primary_proxy_failure_uses_direct_deepseek_fallback(self):
+        proc, calls, result, _, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            litellm_script=FAKE_LITELLM_CRASH,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-flash[1m]"]
+        )
+        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["review_provider"], "deepseek")
+
+    def test_fallback_proxy_failure_names_both_failed_providers(self):
+        quota = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            quota,
+            provider="deepseek",
+            FALLBACK_API_KEY="sk-go-key",
+            litellm_script=FAKE_LITELLM_CRASH,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("deepseek", result[review.ERROR_KEY])
+        self.assertIn("proxy", result[review.ERROR_KEY])
+
     def test_max_turns_is_kept_as_partial_result(self):
         proc, calls, result, _, _ = self.run_agent(
             {"result": "", "subtype": "error_max_turns", "is_error": True}
@@ -1149,6 +1299,70 @@ class MaxTurns(unittest.TestCase):
 
 
 class Install(unittest.TestCase):
+    def test_deepseek_primary_installs_proxy_for_opencode_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prefix = tmp / "prefix"
+            (prefix / "bin").mkdir(parents=True)
+            claude = prefix / "bin" / "claude"
+            claude.write_text(
+                '#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n'
+            )
+            claude.chmod(0o755)
+            path_file = tmp / "github_path"
+            path_file.write_text("")
+            venv = tmp / "venv"
+            env = dict(
+                os.environ,
+                PROVIDER="deepseek",
+                FALLBACK_ENABLED="true",
+                CLAUDE_PREFIX=str(prefix),
+                LITELLM_VENV=str(venv),
+                GITHUB_PATH=str(path_file),
+            )
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(review, "ensure_litellm_venv") as ensure,
+            ):
+                review.cmd_install(argparse.Namespace(work=str(tmp / "work")))
+            ensure.assert_called_once_with(venv)
+            self.assertEqual(
+                path_file.read_text(), f"{prefix / 'bin'}\n{venv / 'bin'}\n"
+            )
+
+    def test_failed_fallback_proxy_install_does_not_disable_direct_deepseek(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prefix = tmp / "prefix"
+            (prefix / "bin").mkdir(parents=True)
+            claude = prefix / "bin" / "claude"
+            claude.write_text(
+                '#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n'
+            )
+            claude.chmod(0o755)
+            path_file = tmp / "github_path"
+            path_file.write_text("")
+            venv = tmp / "venv"
+            env = dict(
+                os.environ,
+                PROVIDER="deepseek",
+                FALLBACK_ENABLED="true",
+                CLAUDE_PREFIX=str(prefix),
+                LITELLM_VENV=str(venv),
+                GITHUB_PATH=str(path_file),
+            )
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(
+                    review,
+                    "ensure_litellm_venv",
+                    side_effect=subprocess.CalledProcessError(1, "pip"),
+                ),
+            ):
+                review.cmd_install(argparse.Namespace(work=str(tmp / "work")))
+            self.assertFalse((tmp / "work" / "install_error.txt").exists())
+            self.assertEqual(path_file.read_text(), f"{prefix / 'bin'}\n")
+
     def test_warm_cache_skips_npm_and_pip(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -1437,6 +1651,7 @@ class TimeBudget(unittest.TestCase):
             cmd, child_env, result_path, name, attempt_timeout, deadline
         ):
             captured["deadline"] = deadline
+            result_path.write_text(json.dumps(OK_REPLY))
 
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)

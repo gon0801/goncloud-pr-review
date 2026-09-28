@@ -5,6 +5,9 @@ inputs:
   api_key:
     description: Key for the model endpoint (pass secrets.AI_REVIEW_API_KEY)
     required: true
+  fallback_api_key:
+    description: Key for the other provider when the primary provider runs out of quota
+    default: ""
   disabled:
     description: Set to "true" to turn the review off without failing the check (pass vars.AI_REVIEW_DISABLED)
     default: ""
@@ -95,6 +98,7 @@ runs:
       shell: bash
       env:
         PROVIDER: ${{ inputs.provider }}
+        FALLBACK_ENABLED: ${{ inputs.fallback_api_key != '' }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" install
 
     - name: Review
@@ -102,6 +106,7 @@ runs:
       shell: bash
       env:
         API_KEY: ${{ inputs.api_key }}
+        FALLBACK_API_KEY: ${{ inputs.fallback_api_key }}
         PROVIDER: ${{ inputs.provider }}
         LANGUAGE: ${{ inputs.language }}
         MAX_TURNS: ${{ inputs.max_turns }}
@@ -115,6 +120,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         API_KEY: ${{ inputs.api_key }}
+        FALLBACK_API_KEY: ${{ inputs.fallback_api_key }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
