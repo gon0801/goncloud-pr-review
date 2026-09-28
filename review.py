@@ -706,6 +706,35 @@ def compose_with_findings(
     )
     review = strip_model_verdict(strip_findings_block(review, last=True))
     sections = sections_for(merged, new_ids)
+    if isinstance(block, review_domain.CapacityExceeded):
+        # Memoria íntegra que no cabe: no se publica bloque ni se marca el
+        # commit como revisado; sólo el aviso visible, dentro del tope.
+        aviso = (
+            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** el estado "
+            f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
+            "bytes; esta revisión no se marca como revisada ni confirma cobertura."
+        )
+        partes = [
+            MARKER,
+            aviso,
+            "",
+            "",
+            "",
+            "<details><summary>Alcance de la revisión</summary>",
+            "",
+            *scope_lines(result, manifest, provider),
+            "",
+            "</details>",
+        ]
+        overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
+        disponible = max(0, GITHUB_COMMENT_MAX - overhead)
+        if len(review) > disponible:
+            review = (
+                review[:disponible]
+                + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+            )
+        partes[3] = review or "_El revisor no devolvió texto._"
+        return "\n".join(partes)
     budget = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget:
         review = (
@@ -1867,6 +1896,19 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
             "model_ok": model is not None,
             "keep": motivo,
         }
+    if isinstance(load, review_domain.Invalid):
+        motivo = f"inválida ({load.reason})"
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
     prev = load.raw if isinstance(load, review_domain.Legacy) else None
     try:
         dismiss_ids, dismiss_all, last_seen = collect_dismissals(
@@ -1910,10 +1952,24 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         dismiss_all=dismiss_all,
     )
     merged["seen"] = last_seen
+    bloque = serialize_findings(merged)
+    if isinstance(bloque, review_domain.CapacityExceeded):
+        motivo = f"desborde ({bloque.needed} bytes para {bloque.limit})"
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
     return {
         "merged": merged["findings"],
         "new_ids": new_ids,
-        "block": serialize_findings(merged),
+        "block": bloque,
         "model_ok": model is not None,
     }
 
@@ -1967,15 +2023,19 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2 o de versión futura: se conserva el comentario original
-            # completo (el sha= y la cobertura no avanzan) y se avisa en visible,
-            # como en la ruta de falla de infraestructura.
+            # Memoria v2, de versión futura, inválida o desbordada: se conserva
+            # el comentario sin modificar (o MARKER + banner si no hay sticky),
+            # el sha= y la cobertura no avanzan y se avisa en visible, como en
+            # la ruta de falla de infraestructura.
             banner = caution_banner(
                 f"memoria de {findings['keep']} conservada; esta versión no la modifica",
                 head,
-                has_previous=True,
+                has_previous=bool(sticky),
             )
-            body = insert_caution_banner(sticky["body"], banner)
+            if sticky:
+                body = insert_caution_banner(sticky["body"], banner)
+            else:
+                body = f"{MARKER}\n{banner}"
             body = redact(
                 body,
                 [
