@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -465,3 +466,90 @@ class FronteraDeReferencias(unittest.TestCase):
         p["findings"][0]["cause_hint"] = 123
         load = self.lee(p)
         self.assertIsInstance(load, domain.Invalid)
+
+
+class PublicacionConMemoriaConservada(unittest.TestCase):
+    def test_b4_publicar_con_memoria_v2_conserva_el_comentario_y_avisa(self):
+        import argparse
+        import os
+        from unittest import mock
+
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=2,
+            revision=None,
+            next_id=3,
+            completion=domain.UNKNOWN,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title="bug x",
+                    severity="Low",
+                    status=domain.StatusDismissed(command_id=7),
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="Abierto",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="b.py", line=2),
+                ),
+            ],
+            command_cursor=7,
+            pending_requests=[],
+        )
+        sticky_body = (
+            review.MARKER
+            + "\n"
+            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + domain.encode_snapshot(snapshot)
+            + "\n\n### Revisión anterior\n\nTexto previo que debe permanecer.\n"
+        )
+        modelo = "## Detalle\n\n- bug x en a.py\n- bug nuevo z en c.py\n\n" + legado(
+            [
+                entrada("F-new", file="a.py", line=1, title="bug x"),
+                entrada("F2-new", file="c.py", line=9, title="bug nuevo z"),
+            ],
+            next=3,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps({"result": modelo}))
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "full",
+                        "reason": "no-prev",
+                        "reviewed": ["a.py", "c.py"],
+                        "excluded": [],
+                    }
+                )
+            )
+            sticky = {"id": 9, "user": "github-actions[bot]", "body": sticky_body}
+            envs = {
+                "REPO": "x/y",
+                "PR_NUMBER": "1",
+                "HEAD_SHA": "c" * 40,
+            }
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            with mock.patch.dict(os.environ, envs):
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+                with (
+                    mock.patch.object(
+                        review, "fetch_all_comments", return_value=[sticky]
+                    ),
+                    mock.patch.object(review, "sh"),
+                ):
+                    review.cmd_publish(argparse.Namespace(work=str(work)))
+            body = json.loads((work / "comment.json").read_text())["body"]
+        original_sha = f"{review.SHA_PREFIX}{'a' * 40} -->"
+        self.assertIn(original_sha, body, "el SHA revisado no avanza")
+        self.assertNotIn(f"{review.SHA_PREFIX}{'c' * 40}", body)
+        self.assertNotIn(f"{'c' * 40}:complete", body, "la cobertura no se confirma")
+        self.assertNotIn("bug nuevo z", body, "lo nuevo no se publica encima")
+        self.assertNotIn("bug x</code>", body)
+        self.assertIn("conservada", body, "aviso visible para el operador")
+        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn("Texto previo que debe permanecer.", body)
