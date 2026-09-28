@@ -3523,15 +3523,21 @@ class BlockingFixes(unittest.TestCase):
         self.assertIn("No hubo archivos revisables en este push", body)
 
     def test_sections_count_against_the_comment_budget(self):
+        import review_domain as domain
+
         many = [
             make_finding(f"F{i}", file="d/" + "x" * 190, title="t" * 160)
             for i in range(1, 61)
         ]
+        block = review.serialize_findings({"findings": many, "next": 61})
+        # M1: el estado íntegro no cabe -> CapacityExceeded; compose nunca
+        # llama len() sobre él ni publica el bloque como si fuera str.
+        self.assertIsInstance(block, domain.CapacityExceeded)
         findings = {
             "merged": many,
             "new_ids": [],
             "model_ok": True,
-            "block": review.serialize_findings({"findings": many, "next": 61}),
+            "block": block,
         }
         body = review.compose(
             {"result": "y" * 70000 + "\nCOVERAGE: complete"},
@@ -3540,7 +3546,12 @@ class BlockingFixes(unittest.TestCase):
             provider="opencode-go",
             findings=findings,
         )
-        self.assertLess(len(body), 65000)
+        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertIn(
+            "Memoria conservada", body, "aviso visible de memoria íntegra no guardada"
+        )
+        self.assertNotIn(review.SHA_PREFIX, body, "no confirma el commit revisado")
+        self.assertNotIn(review.COMPLETION_PREFIX, body, "no confirma cobertura")
         self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):

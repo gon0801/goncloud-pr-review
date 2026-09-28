@@ -706,6 +706,35 @@ def compose_with_findings(
     )
     review = strip_model_verdict(strip_findings_block(review, last=True))
     sections = sections_for(merged, new_ids)
+    if isinstance(block, review_domain.CapacityExceeded):
+        # Memoria íntegra que no cabe: no se publica bloque ni se marca el
+        # commit como revisado; sólo el aviso visible, dentro del tope.
+        aviso = (
+            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** el estado "
+            f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
+            "bytes; esta revisión no se marca como revisada ni confirma cobertura."
+        )
+        partes = [
+            MARKER,
+            aviso,
+            "",
+            "",
+            "",
+            "<details><summary>Alcance de la revisión</summary>",
+            "",
+            *scope_lines(result, manifest, provider),
+            "",
+            "</details>",
+        ]
+        overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
+        disponible = max(0, GITHUB_COMMENT_MAX - overhead)
+        if len(review) > disponible:
+            review = (
+                review[:disponible]
+                + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+            )
+        partes[3] = review or "_El revisor no devolvió texto._"
+        return "\n".join(partes)
     budget = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget:
         review = (
