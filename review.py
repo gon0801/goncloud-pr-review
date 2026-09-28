@@ -1573,7 +1573,7 @@ def claude_version_ok(claude_bin):
 
 
 def cmd_install(args):
-    _, provider = get_provider()
+    name, provider = get_provider()
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     stage = claude_prefix()
@@ -1599,7 +1599,9 @@ def cmd_install(args):
             )
         with open(os.environ["GITHUB_PATH"], "a") as fh:
             fh.write(f"{prefix / 'bin'}\n")
-        if provider["via_proxy"]:
+        if provider["via_proxy"] or (
+            name == "deepseek" and os.environ.get("FALLBACK_ENABLED") == "true"
+        ):
             venv = litellm_venv()
             stage = venv
             ensure_litellm_venv(venv)
@@ -1659,7 +1661,6 @@ def cmd_run(args):
     )
     work = Path(args.work)
     name, provider = get_provider()
-    model = provider["model"]
     manifest = json.loads((work / "manifest.json").read_text())
     result_path = work / "result.json"
     install_error = work / "install_error.txt"
@@ -1681,7 +1682,7 @@ def cmd_run(args):
         "-p",
         prompt,
         "--model",
-        model,
+        provider["model"],
         "--append-system-prompt-file",
         str(work / "system.md"),
         "--restricted",
@@ -1708,13 +1709,59 @@ def cmd_run(args):
         soft_fail(result_path, "falta el secret AI_REVIEW_API_KEY en este repo")
         return
 
+    attempt_timeout = int(
+        os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
+    )
+    quota_exhausted = run_with_provider(
+        name, key, cmd, work, result_path, attempt_timeout, deadline
+    )
+    if quota_exhausted:
+        fallback_key = os.environ.get("FALLBACK_API_KEY", "")
+        if not fallback_key:
+            soft_fail(
+                result_path,
+                f"{name} agotó su cuota; falta FALLBACK_API_KEY para usar el otro proveedor",
+            )
+            return
+        fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
+        if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
+            soft_fail(
+                result_path,
+                f"{name} agotó su cuota; no queda tiempo para probar {fallback_name}",
+            )
+            return
+        print(
+            f"ai-review: {name} agotó su cuota; se cambia a {fallback_name}", flush=True
+        )
+        cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
+        fallback_quota_exhausted = run_with_provider(
+            fallback_name,
+            fallback_key,
+            cmd,
+            work,
+            result_path,
+            attempt_timeout,
+            deadline,
+        )
+        if fallback_quota_exhausted:
+            soft_fail(result_path, "ambos proveedores agotaron su cuota")
+        else:
+            result = json.loads(result_path.read_text())
+            if ERROR_KEY not in result:
+                result["review_provider"] = fallback_name
+                result_path.write_text(json.dumps(result))
+
+
+def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadline):
+    provider = PROVIDERS[name]
+    model = provider["model"]
     proxy = None
     if provider["via_proxy"]:
         session = f"{env('REPO')}#{env('PR_NUMBER')}-{os.environ.get('GITHUB_RUN_ID', 'local')}"
         started = start_proxy(work, provider, key, session)
         if started is None:
             soft_fail(result_path, "el proxy LiteLLM no arrancó")
-            return
+            return False
         proxy, base_url, token = started
         auth = {"ANTHROPIC_AUTH_TOKEN": token}
     else:
@@ -1728,6 +1775,7 @@ def cmd_run(args):
             "GH_TOKEN",
             "GITHUB_TOKEN",
             "API_KEY",
+            "FALLBACK_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_API_KEY",
         )
@@ -1747,10 +1795,7 @@ def cmd_run(args):
     )
 
     try:
-        attempt_timeout = int(
-            os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
-        )
-        run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
+        return run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
     finally:
         if proxy:
             proxy.terminate()
@@ -1870,6 +1915,8 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
                 file=sys.stderr,
             )
             print_proxy_log(result_path.parent)
+            if quota_error(result):
+                return True
             reasoning_replay_error = (
                 name == "opencode-go"
                 and result.get("api_error_status") == 400
@@ -1893,6 +1940,26 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
         result_path,
         failure_reason
         or "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
+    )
+
+
+def quota_error(result):
+    status = result.get("api_error_status")
+    message = (result.get("result") or "").lower()
+    return status in (402, 429) or (
+        status in (400, 403)
+        and any(
+            phrase in message
+            for phrase in (
+                "quota exceeded",
+                "insufficient account funds",
+                "insufficient balance",
+                "credit balance",
+                "out of credits",
+                "rate limit exceeded",
+                "usage limit",
+            )
+        )
     )
 
 
@@ -1965,6 +2032,7 @@ def cmd_publish(args):
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
+    name = result.get("review_provider", name)
     manifest = json.loads((work / "manifest.json").read_text())
     comments = fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
@@ -1980,16 +2048,30 @@ def cmd_publish(args):
             else f"{MARKER}\n{banner}"
         )
         body = redact(
-            body, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")]
+            body,
+            [
+                os.environ.get("API_KEY", ""),
+                os.environ.get("FALLBACK_API_KEY", ""),
+                os.environ.get("GH_TOKEN", ""),
+            ],
         )
         summary_text = redact(
-            banner, [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")]
+            banner,
+            [
+                os.environ.get("API_KEY", ""),
+                os.environ.get("FALLBACK_API_KEY", ""),
+                os.environ.get("GH_TOKEN", ""),
+            ],
         )
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         body = redact(
             compose(result, manifest, sha=head, provider=name, findings=findings),
-            [os.environ.get("API_KEY", ""), os.environ.get("GH_TOKEN", "")],
+            [
+                os.environ.get("API_KEY", ""),
+                os.environ.get("FALLBACK_API_KEY", ""),
+                os.environ.get("GH_TOKEN", ""),
+            ],
         )
         summary_text = summary_of(body)
 

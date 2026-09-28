@@ -26,11 +26,12 @@ Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_fo
 
 ```bash
 scripts/set-secret.sh gon0801/mi-repo          # pide la key una vez, sin eco
+SECRET_NAME=DEEPSEEK_API_KEY scripts/set-secret.sh gon0801/mi-repo  # llave de respaldo
 scripts/install.sh gon0801/mi-repo             # abre el PR con el workflow
 EXCLUDE=$'data/**\nout/**' scripts/install.sh gon0801/mi-repo   # con exclusiones extra
 ```
 
-El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/auth) o la de DeepSeek (platform.deepseek.com), según el proveedor. En una cuenta personal los secrets van repo por repo.
+`AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). `DEEPSEEK_API_KEY` guarda la llave de la API directa de DeepSeek para el respaldo automático. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal, `fallback_api_key` debe recibir una llave de OpenCode Go.
 
 ## Operación
 
@@ -44,13 +45,13 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 
 ## Proveedor y costo
 
-**Ahora: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Go cuenta peticiones en ventanas de 5 horas, semana y mes. DeepSeek V4.1 Flash da unas 6,500 peticiones cada 5 horas y 32,500 al mes con la promoción 4× que termina el 27 de septiembre de 2026; sin ella, una cuarta parte. Una revisión gasta unas 20 a 80 peticiones. Cuando la cuota se agota, el check queda en verde con un aviso amarillo hasta que la ventana se renueva, y el merge no se bloquea.
+**Principal: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Si OpenCode responde con un error de cuota o saldo y `DEEPSEEK_API_KEY` está configurado, la revisión comienza de nuevo con la API directa de DeepSeek. El comentario identifica el proveedor que completó la revisión. Si falta la llave de respaldo o ambos proveedores agotan su cuota, el check queda en verde con un aviso amarillo sin marcar el commit como revisado.
 
-**Destino: `provider: deepseek`, la API de DeepSeek, sin cuotas y pagando por uso.** Para cambiar:
+**Alternativa: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal:
 
 1. Carga saldo en platform.deepseek.com y crea una llave.
 2. Corre `scripts/set-secret.sh` con la llave nueva en los mismos repos.
-3. Cambia el default de `provider` en `action.yml` a `deepseek`. Ese proveedor habla formato Anthropic directo, sin proxy.
+3. Pasa `provider: deepseek` en el workflow y usa esa llave como `AI_REVIEW_API_KEY`. Para conservar el respaldo en sentido contrario, pasa una llave OpenCode Go como `fallback_api_key`.
 
 Con la API de DeepSeek ($0.30/M de entrada, $0.006/M en caché, $1.20/M de salida en hora pico, la mitad fuera de pico), una revisión típica cuesta unos $0.05, y el mes queda en $50 a $150 para ~2,000 revisiones. Cada comentario trae en "Alcance de la revisión" los turnos (usados/tope) y los tokens de esa revisión, y con la API de DeepSeek también el costo aproximado. Los repos públicos no gastan minutos de Actions; en los privados, cada revisión toma unos 4 a 9 minutos del plan según el tamaño del diff.
 
