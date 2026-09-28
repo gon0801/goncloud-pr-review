@@ -1,0 +1,78 @@
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = ROOT / ".github" / "workflows" / "e1-measure.yml"
+
+
+class WorkflowE1Measure(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.texto = WORKFLOW.read_text()
+
+    def test_declara_workflow_dispatch_con_inputs(self):
+        self.assertIn("name: E1 measure", self.texto)
+        self.assertIn("workflow_dispatch:", self.texto)
+        for entrada in ("pr:", "head:", "base:", "caso:"):
+            self.assertIn(entrada, self.texto)
+
+    def test_permisos_solo_lectura(self):
+        self.assertIn("permissions:", self.texto)
+        self.assertIn("contents: read", self.texto)
+        self.assertNotIn("pull-requests", self.texto)
+        self.assertNotIn(": write", self.texto)
+
+    def test_no_publica_nada(self):
+        self.assertNotIn("publish", self.texto)
+
+    def test_secreto_solo_como_env_de_run(self):
+        lineas = self.texto.splitlines()
+        con_secreto = [
+            linea for linea in lineas if "secrets.AI_REVIEW_API_KEY" in linea
+        ]
+        self.assertEqual(len(con_secreto), 1, "el secreto se referencia una sola vez")
+        self.assertIn("API_KEY:", con_secreto[0])
+        self.assertNotIn("echo", con_secreto[0])
+
+    def test_proveedor_fijo_opencode_go(self):
+        self.assertIn("PROVIDER: opencode-go", self.texto)
+
+    def test_mide_el_arbol_del_head_con_revisor_fuera(self):
+        self.assertIn('git checkout --detach "${{ inputs.head }}"', self.texto)
+        self.assertIn("cp review.py prompt.md", self.texto)
+        self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
+        self.assertLess(
+            self.texto.index("cp review.py prompt.md"),
+            self.texto.index("git checkout --detach"),
+            "el revisor se copia del arbol de main antes de mover el arbol al head",
+        )
+        self.assertLess(
+            self.texto.index("git checkout --detach"),
+            self.texto.index('review.py" prepare'),
+            "el arbol ya es el head cuando prepare calcula el diff",
+        )
+        self.assertGreaterEqual(
+            self.texto.count('"$RUNNER_TEMP/reviewer/review.py"'),
+            3,
+            "prepare, install y run invocan el revisor de fuera del workspace",
+        )
+        self.assertEqual(
+            self.texto.count('--prompt "$RUNNER_TEMP/reviewer/prompt.md"'),
+            2,
+            "prepare y run usan el prompt del revisor fijo",
+        )
+        self.assertNotIn("run: python3 review.py", self.texto)
+
+    def test_concurrency_no_cancela_mediciones(self):
+        self.assertIn("e1-measure-${{ inputs.caso }}", self.texto)
+        self.assertIn("cancel-in-progress: false", self.texto)
+
+    def test_subir_salidas_del_corpus(self):
+        self.assertIn("actions/upload-artifact@v4", self.texto)
+        self.assertIn("e1-salida-", self.texto)
+        self.assertIn("result.json", self.texto)
+        self.assertIn("manifest.json", self.texto)
+
+
+if __name__ == "__main__":
+    unittest.main()
