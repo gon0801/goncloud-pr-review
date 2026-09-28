@@ -38,9 +38,19 @@ class WorkflowE1Measure(unittest.TestCase):
         self.assertIn("PROVIDER: opencode-go", self.texto)
 
     def test_mide_el_arbol_del_head_con_revisor_fuera(self):
-        self.assertIn("git checkout --detach", self.texto)
+        self.assertIn('git checkout --detach "${{ inputs.head }}"', self.texto)
         self.assertIn("cp review.py prompt.md", self.texto)
         self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
+        self.assertLess(
+            self.texto.index("cp review.py prompt.md"),
+            self.texto.index("git checkout --detach"),
+            "el revisor se copia del arbol de main antes de mover el arbol al head",
+        )
+        self.assertLess(
+            self.texto.index("git checkout --detach"),
+            self.texto.index('review.py" prepare'),
+            "el arbol ya es el head cuando prepare calcula el diff",
+        )
         self.assertGreaterEqual(
             self.texto.count('"$RUNNER_TEMP/reviewer/review.py"'),
             3,
