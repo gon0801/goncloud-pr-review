@@ -1981,15 +1981,22 @@ class FindingsBlock(unittest.TestCase):
             "la memoria bien formada se conserva",
         )
 
-    def test_serialize_never_drops_open_and_fits_budget(self):
+    def test_serialize_intacto_o_capacity_exceeded(self):
+        # M1: la memoria es esencial; si no cabe íntegra, CapacityExceeded
+        # (nunca recortar títulos/rutas ni descartar hallazgos).
         findings = [make_finding(f"F{i}", title="t" * 160) for i in range(1, 61)]
         findings += [make_finding(f"F{i}", state="resolved") for i in range(61, 71)]
-        block = review.serialize_findings({"findings": findings, "next": 71})
-        self.assertLessEqual(len(block), review.FINDINGS_MAX_BYTES)
-        back = review.parse_findings_block(block)
-        self.assertEqual(sum(1 for f in back["findings"] if f["state"] == "open"), 60)
-        self.assertLessEqual(len(back["findings"]), review.FINDINGS_MAX_COUNT)
-        self.assertEqual(back["next"], 71)
+        over = review.serialize_findings({"findings": findings, "next": 71})
+        import review_domain as domain
+
+        self.assertIsInstance(over, domain.CapacityExceeded)
+        chico = review.serialize_findings({"findings": findings[:5], "next": 6})
+        self.assertIsInstance(chico, str)
+        back = review.parse_findings_block(chico)
+        self.assertEqual(
+            [f["id"] for f in back["findings"]], ["F1", "F2", "F3", "F4", "F5"]
+        )
+        self.assertEqual(back["next"], 6)
 
     def test_title_cannot_break_the_comment(self):
         state = {
@@ -2001,26 +2008,20 @@ class FindingsBlock(unittest.TestCase):
         back = review.parse_findings_block(block)
         self.assertEqual(back["findings"][0]["title"], "a --\u203a b nueva línea")
 
-    def test_hard_ceiling_drops_oldest_open_last(self):
+    def test_tope_bajo_no_descarta_devuelve_capacity_exceeded(self):
         findings = [
             make_finding(
                 f"F{i}", file=f"src/muy/largo/{'d' * 180}/m{i}.py", title="t" * 160
             )
             for i in range(1, 101)
         ]
-        block = review.serialize_findings({"findings": findings, "next": 101})
-        self.assertLessEqual(len(block), review.FINDINGS_MAX_BYTES)
-        back = review.parse_findings_block(block)
-        kept = [review.finding_number(f["id"]) for f in back["findings"]]
-        self.assertLess(len(kept), 100, "100 long findings cannot all fit in 8 KB")
-        self.assertEqual(
-            sorted(kept),
-            list(range(101 - len(kept), 101)),
-            "only the oldest open findings go, newest stay",
-        )
-        self.assertEqual(back["next"], 101)
+        over = review.serialize_findings({"findings": findings, "next": 101})
+        import review_domain as domain
 
-    def test_hard_ceiling_prefers_dropping_closed_over_open(self):
+        self.assertIsInstance(over, domain.CapacityExceeded)
+        self.assertEqual(over.limit, review.FINDINGS_MAX_BYTES)
+
+    def test_presupuesto_inyectado_respeta_el_tope_del_adaptador(self):
         findings = [
             make_finding("F1"),
             make_finding("F2", state="resolved"),
@@ -2029,17 +2030,15 @@ class FindingsBlock(unittest.TestCase):
             make_finding("F5"),
         ]
         with mock.patch.object(review, "FINDINGS_MAX_BYTES", 400):
-            block = review.serialize_findings({"findings": findings, "next": 6})
-        self.assertLessEqual(len(block), 400)
-        back = review.parse_findings_block(block)
-        kept = {f["id"]: f["state"] for f in back["findings"]}
-        dropped_opens = {"F1", "F3", "F5"} - set(kept)
-        kept_closed = {i for i, s in kept.items() if s != "open"}
-        self.assertFalse(
-            dropped_opens and kept_closed,
-            "an open finding goes only when no closed one is left",
-        )
-        self.assertEqual(back["next"], 6)
+            over = review.serialize_findings({"findings": findings, "next": 6})
+        import review_domain as domain
+
+        self.assertIsInstance(over, domain.CapacityExceeded)
+        self.assertEqual(over.limit, 400)
+        with mock.patch.object(review, "FINDINGS_MAX_BYTES", 400):
+            self.assertIsInstance(
+                review.serialize_findings({"findings": findings[:2], "next": 3}), str
+            )
 
 
 class DismissCommands(unittest.TestCase):
@@ -3948,25 +3947,57 @@ class PersistenciaSinPerdida(unittest.TestCase):
         return cuerpo
 
     def test_overflow_keeps_previous_snapshot_and_reviewed_sha(self):
-        sticky_body = self.sticky_v2_al_limite()
+        # B2: el estado fusionado (sticky legado con descartado y acentos +
+        # hallazgos nuevos del modelo) no cabe íntegro -> Keep: bloque anterior
+        # idéntico, sha=/completion= sin avanzar, banner y descartes intactos.
+
+        findings = [
+            {
+                "id": "F1",
+                "file": "src/pagos.py",
+                "line": 12,
+                "severity": "High",
+                "title": "Corrección de la validación del IVA en facturas",
+                "state": "dismissed",
+            }
+        ]
+        for i in range(2, 40):
+            findings.append(
+                {
+                    "id": f"F{i}",
+                    "file": f"src/módulo_{i}.py",
+                    "line": i,
+                    "severity": "Medium",
+                    "title": f"Problema acentuado ñ {i} en la validación del flujo",
+                    "state": "open",
+                }
+            )
+        bloque_sticky = review.serialize_findings(
+            {"findings": findings, "next": 40, "seen": 7}
+        )
+        self.assertIsInstance(bloque_sticky, str)
+        sticky_body = (
+            review.MARKER
+            + "\n"
+            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + bloque_sticky
+            + "\n\n### Revisión anterior\n\nTexto previo.\n"
+        )
+        nuevos = [
+            {
+                "id": "F-new",
+                "file": f"src/nuevo_{i}.py",
+                "line": i,
+                "severity": "Medium",
+                "title": f"bug nuevo z ñ {i}",
+                "state": "open",
+            }
+            for i in range(1, 11)
+        ]
         result = {
             "result": review.FINDINGS_PREFIX
-            + json.dumps(
-                {
-                    "findings": [
-                        {
-                            "id": "F-new",
-                            "file": "c.py",
-                            "line": 1,
-                            "severity": "Medium",
-                            "title": "bug nuevo z",
-                            "state": "open",
-                        }
-                    ],
-                    "next": 1,
-                },
-                separators=(",", ":"),
-            )
+            + json.dumps({"findings": nuevos, "next": 50}, separators=(",", ":"))
             + review.FINDINGS_SUFFIX
         }
         out = review.build_findings(
@@ -3978,12 +4009,47 @@ class PersistenciaSinPerdida(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertIn(out["block"], sticky_body, "el bloque queda byte a byte")
+        self.assertTrue(out.get("keep"), "desborde -> Keep")
+        self.assertIn("desborde", out["keep"])
+        self.assertEqual(out["block"], bloque_sticky, "bloque anterior idéntico")
         load_back = __import__("review_domain").read_snapshot(out["block"])
-        self.assertEqual([f.id for f in load_back.snapshot.findings], ["F1", "F2"])
-        self.assertEqual(load_back.snapshot.findings[0].status.command_id, 7)
-        self.assertEqual(load_back.snapshot.command_cursor, 7)
-        self.assertEqual(review.reviewed_sha(sticky_body), "a" * 40)
+        por_id = {f["id"]: f for f in load_back.raw["findings"]}
+        self.assertEqual(por_id["F1"]["state"], "dismissed")
+        self.assertEqual(
+            por_id["F1"]["title"],
+            "Corrección de la validación del IVA en facturas",
+            "el título no se recorta",
+        )
+        self.assertEqual(load_back.raw["seen"], 7)
+        # publicación: comentario original + banner, sha=/completion= sin avanzar
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps(result))
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"])
+                )
+            )
+            sticky = {"id": 9, "user": "github-actions[bot]", "body": sticky_body}
+            with mock.patch.dict(
+                os.environ, {"REPO": "x/y", "PR_NUMBER": "1", "HEAD_SHA": "c" * 40}
+            ):
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+                with (
+                    mock.patch.object(
+                        review, "fetch_all_comments", return_value=[sticky]
+                    ),
+                    mock.patch.object(review, "sh"),
+                ):
+                    review.cmd_publish(argparse.Namespace(work=str(work)))
+            body = json.loads((work / "comment.json").read_text())["body"]
+        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertNotIn(f"{review.SHA_PREFIX}{'c' * 40}", body)
+        self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
+        self.assertNotIn("bug nuevo z", body, "no publica encima del desborde")
+        self.assertIn("desborde", body, "aviso visible")
+        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(bloque_sticky, body, "memoria anterior íntegra")
 
     def test_sticky_invalido_se_conserva_con_banner(self):
         sticky_body = (

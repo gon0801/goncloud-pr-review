@@ -595,7 +595,9 @@ class PresupuestosEnBytes(unittest.TestCase):
         self.assertIsInstance(resultado, domain.CapacityExceeded)
         self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
-    def test_legado_mide_bytes_y_no_caracteres(self):
+    def test_legado_overflow_da_capacity_exceeded_sin_recortar(self):
+        # 40 abiertos con títulos ñ×130: la memoria íntegra no cabe y NO se
+        # recorta (un título recortado rompe same_issue y revive descartes).
         findings = [
             {
                 "id": f"F{i}",
@@ -607,15 +609,9 @@ class PresupuestosEnBytes(unittest.TestCase):
             }
             for i in range(1, 41)
         ]
-        bloque = review.serialize_findings({"findings": findings, "next": 41})
-        self.assertLessEqual(
-            len(bloque.encode("utf-8")),
-            review.FINDINGS_MAX_BYTES,
-            "el presupuesto legado es en bytes UTF-8",
-        )
-        back = review.parse_findings_block(bloque)
-        self.assertEqual(len(back["findings"]), 40, "nada se pierde por medir mal")
-        self.assertEqual(back["next"], 41)
+        resultado = review.serialize_findings({"findings": findings, "next": 41})
+        self.assertIsInstance(resultado, domain.CapacityExceeded)
+        self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
 
 class FronteraDeEscritura(unittest.TestCase):
