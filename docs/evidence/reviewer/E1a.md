@@ -6,6 +6,7 @@ Fecha: 2026-09-27. Todo local, sin push, sin PR, sin CI, sin corridas pagadas. L
 
 - Base: `7e2dfac` (`origin/main` verificada 2026-09-27).
 - Commits: `test:` con la prueba focal (rojo primero contra el yml ausente), `feat:` con `.github/workflows/e1-measure.yml`, `docs:` con esta evidencia. SHAs en el LISTO.
+- Enmienda r2 (2026-09-27): el árbol medido pasa a ser el head del PR y el revisor se fija fuera del workspace — bloqueante único de Claude sobre `9925f3b`; ver la sección final.
 
 ## Propósito
 
@@ -65,3 +66,20 @@ No aplica en esta ronda: push, PR y CI prohibidos por el encargo. El PR de E1a l
 
 - 20 corridas del revisor vía `workflow_dispatch` de E1a (una por caso del corpus, con `pr`/`head`/`base`/`caso`), DeepSeek V4.1 Flash, secreto del repo nunca leído. Requiere E1a mergeado + orden de David.
 - 0 corridas de CodeRabbit (sólo lectura de comentarios existentes).
+
+## Enmienda r2 — el árbol medido es el head del PR; revisor fijado fuera del workspace (2026-09-27)
+
+Claude marcó un bloqueante sobre `9925f3b`: el checkout no fijaba `ref`, así que en un `workflow_dispatch` el árbol quedaba en main; el paso de fetch sólo traía el objeto del head, no movía el árbol. `review.py` lee del árbol en dos lugares (`grep_files` corre `git grep` de donde salen `callers.txt` y `tests.txt`, y Claude hereda el directorio del workspace para sus Read/Grep/Glob): el modelo habría revisado el diff viejo leyendo archivos que en ese momento no existían, contaminando las 20 corridas pagadas.
+
+Reproducción local (caso pr24 del corpus de E1, base `2b372305…`, head `0ace22fb…`): `prepare` con el árbol en main (9925f3b) vs con el árbol en el head:
+
+- `tests.txt` DIFIERE: en main aparece `tests/test_compare_reviews.py` (creado después, en E0).
+- `callers.txt` DIFIERE.
+- `diff.patch` y `conventions.md` iguales.
+
+Arreglo (el literal de Claude, dos piezas porque ninguna alcanza sola):
+
+1. El revisor que se ejecuta queda fijado a main, fuera del árbol medido: `review.py` y `prompt.md` se copian a `$RUNNER_TEMP/reviewer` y los pasos invocan `python3 "$RUNNER_TEMP/reviewer/review.py" <subcmd> --prompt "$RUNNER_TEMP/reviewer/prompt.md"`. Poner `ref:` en el único checkout no alcanza: entonces correría el `review.py` viejo de cada PR. Tampoco vale un segundo checkout dentro del workspace: el modelo vería esos archivos con Glob/Grep.
+2. El árbol de trabajo se mueve a la punta revisada: tras traer `pull/<pr>/head` y verificar ambos SHAs con `git cat-file -e`, `git checkout --detach "${{ inputs.head }}"`.
+
+Test nuevo `test_mide_el_arbol_del_head_con_revisor_fuera`: afirma el `checkout --detach` a `inputs.head`, la copia del revisor, las tres invocaciones desde `"$RUNNER_TEMP/reviewer/review.py"`, los dos `--prompt` del revisor fijo, y que ninguna línea vuelve a invocar `python3 review.py` desde el workspace. Rojo contra el yml de r1 (`FAILED (failures=1)`, los 7 de r1 en verde); verde con el arreglo (`Ran 8 tests`, `OK`). Mutación quitando el `checkout --detach` → `FAILED (failures=1)`, exit 1; revertida → `Ran 8 tests`, `OK` y actionlint exit 0.
