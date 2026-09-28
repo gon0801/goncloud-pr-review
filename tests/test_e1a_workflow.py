@@ -37,6 +37,22 @@ class WorkflowE1Measure(unittest.TestCase):
     def test_proveedor_fijo_opencode_go(self):
         self.assertIn("PROVIDER: opencode-go", self.texto)
 
+    def test_mide_el_arbol_del_head_con_revisor_fuera(self):
+        self.assertIn("git checkout --detach", self.texto)
+        self.assertIn("cp review.py prompt.md", self.texto)
+        self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
+        self.assertGreaterEqual(
+            self.texto.count('"$RUNNER_TEMP/reviewer/review.py"'),
+            3,
+            "prepare, install y run invocan el revisor de fuera del workspace",
+        )
+        self.assertEqual(
+            self.texto.count('--prompt "$RUNNER_TEMP/reviewer/prompt.md"'),
+            2,
+            "prepare y run usan el prompt del revisor fijo",
+        )
+        self.assertNotIn("run: python3 review.py", self.texto)
+
     def test_concurrency_no_cancela_mediciones(self):
         self.assertIn("e1-measure-${{ inputs.caso }}", self.texto)
         self.assertIn("cancel-in-progress: false", self.texto)
