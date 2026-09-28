@@ -50,6 +50,7 @@ class Future:
     """Hay bloque de una versión más nueva que ésta."""
 
     version: int
+    block: str = ""
 
 
 @dataclass
@@ -150,12 +151,14 @@ class Snapshot:
 @dataclass
 class Valid:
     snapshot: Snapshot
+    block: str = ""
 
 
 @dataclass
 class Legacy:
     snapshot: Snapshot
     raw: dict
+    block: str = ""
 
 
 @dataclass
@@ -534,15 +537,24 @@ def _finding_of(data):
         or data.get("severity") not in SEVERITIES
     ):
         raise _SchemaError(f"hallazgo {fid} con título o severidad inválidos")
+    if "related_anchors" in data and not isinstance(data["related_anchors"], list):
+        raise _SchemaError("related_anchors debe ser una lista")
+    if "evidence" in data and not isinstance(data["evidence"], list):
+        raise _SchemaError("evidence debe ser una lista")
+    relacionadas = data.get("related_anchors") or []
+    evidencia = data.get("evidence") or []
+    causa = data.get("cause_hint")
+    if causa is not None and not isinstance(causa, str):
+        raise _SchemaError(f"cause_hint inválido: {causa!r}")
     return Finding(
         id=fid,
         title=data["title"],
         severity=data["severity"],
         status=_status_of(data.get("status")),
         primary_anchor=_anchor_of(data.get("primary_anchor")),
-        related_anchors=[_anchor_of(a) for a in data.get("related_anchors", [])],
-        cause_hint=data.get("cause_hint"),
-        evidence=[_evidence_of(e) for e in data.get("evidence", [])],
+        related_anchors=[_anchor_of(a) for a in relacionadas],
+        cause_hint=causa,
+        evidence=[_evidence_of(e) for e in evidencia],
     )
 
 
@@ -585,8 +597,11 @@ def _v2_snapshot(data):
             head_sha=rev["head_sha"],
             policy_digest=rev["policy_digest"],
         )
+    if "pending_requests" in data and not isinstance(data["pending_requests"], list):
+        raise _SchemaError("pending_requests debe ser una lista")
+    pedidos = data.get("pending_requests") or []
     solicitudes = []
-    for req in data.get("pending_requests", []):
+    for req in pedidos:
         if (
             not isinstance(req, dict)
             or not isinstance(req.get("id"), str)
@@ -606,6 +621,24 @@ def _v2_snapshot(data):
             raise _SchemaError(f"id de hallazgo duplicado: {hallazgo.id}")
         vistos.add(hallazgo.id)
         findings.append(hallazgo)
+    maximo = max((finding_number(f.id) or 0) for f in findings) if findings else 0
+    if next_id <= maximo:
+        raise _SchemaError(
+            f"next_id ({next_id}) no supera al id máximo existente (F{maximo})"
+        )
+    ids = {f.id for f in findings}
+    for req in solicitudes:
+        if req.finding_id is not None and req.finding_id not in ids:
+            raise _SchemaError(
+                f"la solicitud {req.id!r} apunta al hallazgo inexistente {req.finding_id!r}"
+            )
+    for f in findings:
+        if isinstance(f.status, StatusDismissed) and (
+            f.status.command_id is not None and f.status.command_id > cursor
+        ):
+            raise _SchemaError(
+                f"command_id {f.status.command_id} supera command_cursor ({cursor})"
+            )
     return Snapshot(
         schema=2,
         generation=generation,
@@ -631,16 +664,20 @@ def read_snapshot(body, *, last=False):
         if FINDINGS_PREFIX in (body or ""):
             return Invalid("bloque de hallazgos corrupto: JSON o cierre ausentes")
         return Missing()
+    start, end, data = found
+    found_block = body[start:end]
     data = found[2]
     if "schema" in data:
         schema = data["schema"]
         if schema == 2:
             try:
-                return Valid(_v2_snapshot(data))
+                return Valid(_v2_snapshot(data), block=found_block)
             except _SchemaError as exc:
                 return Invalid(exc.reason)
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                return Invalid(f"bloque v2 mal formado: {exc}")
         if isinstance(schema, int) and not isinstance(schema, bool):
-            return Future(schema)
+            return Future(schema, block=found_block)
         return Invalid(f"schema desconocido: {schema!r}")
     raw = legacy_raw_of(data)
     return Legacy(snapshot=_migrate_legacy(raw), raw=raw)

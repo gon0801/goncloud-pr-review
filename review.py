@@ -1838,9 +1838,36 @@ def quota_error(result):
 
 
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
-    """Merge previous state with the model's block. Broken block: keep last parseable (B6)."""
-    prev = parse_findings_block(sticky["body"]) if sticky else None
+    """Merge previous state with the model's block. Broken block: keep last parseable (B6).
+
+    A v2 or future-version sticky is kept verbatim (the Keep of the design):
+    the memory is never downgraded to legacy, so a confirmed dismissal can't
+    reappear and nothing is lost.
+    """
+    load = (
+        review_domain.read_snapshot(sticky["body"])
+        if sticky
+        else review_domain.Missing()
+    )
     model = parse_model_findings((result or {}).get("result") or "")
+    if isinstance(load, (review_domain.Valid, review_domain.Future)):
+        motivo = (
+            "schema 2"
+            if isinstance(load, review_domain.Valid)
+            else f"versión {load.version}"
+        )
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
+    prev = load.raw if isinstance(load, review_domain.Legacy) else None
     try:
         dismiss_ids, dismiss_all, last_seen = collect_dismissals(
             repo, pr, login, comments, (prev or {}).get("seen", 0)

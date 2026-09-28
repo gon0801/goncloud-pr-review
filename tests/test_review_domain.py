@@ -117,7 +117,7 @@ def snapshot_v2():
                 evidence=[],
             ),
         ],
-        command_cursor=11,
+        command_cursor=98,
         pending_requests=[
             domain.PendingRequest(id="req-1", kind="explain", finding_id="F1")
         ],
