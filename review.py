@@ -1966,15 +1966,42 @@ def cmd_publish(args):
         )
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
-        body = redact(
-            compose(result, manifest, sha=head, provider=name, findings=findings),
-            [
-                os.environ.get("API_KEY", ""),
-                os.environ.get("FALLBACK_API_KEY", ""),
-                os.environ.get("GH_TOKEN", ""),
-            ],
-        )
-        summary_text = summary_of(body)
+        if findings.get("keep"):
+            # Memoria v2 o de versión futura: se conserva el comentario original
+            # completo (el sha= y la cobertura no avanzan) y se avisa en visible,
+            # como en la ruta de falla de infraestructura.
+            banner = caution_banner(
+                f"memoria de {findings['keep']} conservada; esta versión no la modifica",
+                head,
+                has_previous=True,
+            )
+            body = insert_caution_banner(sticky["body"], banner)
+            body = redact(
+                body,
+                [
+                    os.environ.get("API_KEY", ""),
+                    os.environ.get("FALLBACK_API_KEY", ""),
+                    os.environ.get("GH_TOKEN", ""),
+                ],
+            )
+            summary_text = redact(
+                banner,
+                [
+                    os.environ.get("API_KEY", ""),
+                    os.environ.get("FALLBACK_API_KEY", ""),
+                    os.environ.get("GH_TOKEN", ""),
+                ],
+            )
+        else:
+            body = redact(
+                compose(result, manifest, sha=head, provider=name, findings=findings),
+                [
+                    os.environ.get("API_KEY", ""),
+                    os.environ.get("FALLBACK_API_KEY", ""),
+                    os.environ.get("GH_TOKEN", ""),
+                ],
+            )
+            summary_text = summary_of(body)
 
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
