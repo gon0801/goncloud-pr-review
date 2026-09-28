@@ -16,32 +16,78 @@ import time
 import urllib.request
 from pathlib import Path
 
+import review_domain
+from review_domain import (
+    DISMISSED,
+    FINDING_FILES_MAX,
+    FINDING_ID_RE,
+    FINDINGS_MAX_COUNT,
+    FINDINGS_PREFIX,
+    FINDINGS_SUFFIX,
+    FINDINGS_TITLE_MAX,
+    OPEN,
+    RESOLVED,
+    SEVERITIES,
+    derive_next,
+    find_findings_block,
+    finding_number,
+    normalize_severity,
+    one_line,
+    parse_model_findings,
+    same_issue,
+    sanitize_finding,
+    strip_findings_block,
+    unique_paths,
+)
+
+# Superficie de compatibilidad: los tests y el adaptador consumen estos nombres
+# via review.* aunque el cuerpo de review.py ya no los use directamente.
+__all__ = [
+    "DISMISSED",
+    "FINDING_FILES_MAX",
+    "FINDING_ID_RE",
+    "FINDINGS_MAX_BYTES",
+    "FINDINGS_MAX_COUNT",
+    "FINDINGS_PREFIX",
+    "FINDINGS_SUFFIX",
+    "FINDINGS_TITLE_MAX",
+    "OPEN",
+    "RESOLVED",
+    "SEVERITIES",
+    "derive_next",
+    "find_findings_block",
+    "finding_number",
+    "normalize_severity",
+    "one_line",
+    "parse_findings_block",
+    "parse_model_findings",
+    "same_issue",
+    "sanitize_finding",
+    "serialize_findings",
+    "strip_findings_block",
+    "unique_paths",
+]
+
 MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
 COMPLETION_PREFIX = "<!-- ai-review:completion="
 COMMENT_LIMIT = 50000
 GITHUB_COMMENT_MAX = 65000
 
+FINDINGS_MAX_BYTES = 8000
+
 # Findings memory (PR B). The model emits one hidden block BEFORE the COVERAGE line
 # (never after: split_coverage drops everything behind it, and the 50k/65k trims cut
 # from the end). Publish re-emits the canonical block right after the SHA marker, so
 # tail trims can never eat it; the review text budget reserves its bytes.
-FINDINGS_PREFIX = "<!-- ai-review:findings="
-FINDINGS_SUFFIX = " -->"
-FINDINGS_MAX_BYTES = 8000
-FINDINGS_MAX_COUNT = 60
-FINDINGS_TITLE_MAX = 160
-FINDING_FILES_MAX = 5
+# The constants and the state functions live in review_domain; re-exported above.
 # Small incremental pushes get a short cap; big ones (a whole fix round) get the normal one.
 # PR #13's own incremental review of a ~800-line fix round ran out of turns at a flat 20.
 INCREMENTAL_MAX_TURNS = 30
 INCREMENTAL_SMALL_BYTES = 30_000
 INCREMENTAL_SMALL_FILES = 5
 INCREMENTAL_PROMPT_MAX_FILES = 50
-SEVERITIES = ("Critical", "High", "Medium", "Low")
 SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "⚪"}
-OPEN, RESOLVED, DISMISSED = "open", "resolved", "dismissed"
-FINDING_ID_RE = re.compile(r"^F(\d+)$")
 
 # Dismiss commands (B4): `ai-review: descartar F3` / `ai-review: descartar todo`.
 # Only applied when the comment author has push access, checked with the same token
@@ -218,215 +264,19 @@ def redact(text, secrets):
     return text
 
 
-def one_line(text, limit):
-    collapsed = " ".join(str(text or "").split())
-    if len(collapsed) > limit:
-        collapsed = collapsed[:limit].rstrip()
-    return collapsed.replace("--!>", "--!\u203a").replace("-->", "--\u203a")
-
-
-def normalize_severity(value):
-    for severity in SEVERITIES:
-        if str(value or "").strip().lower() == severity.lower():
-            return severity
-    return "Medium"
-
-
-def finding_number(fid):
-    match = FINDING_ID_RE.match(str(fid or ""))
-    return int(match.group(1)) if match else None
-
-
-def sanitize_finding(entry, *, allow_dismissed):
-    """Validate one raw finding dict. Returns a clean dict, or None to drop it."""
-    if not isinstance(entry, dict):
-        return None
-    path = one_line(entry.get("file"), 200)
-    title = one_line(entry.get("title"), FINDINGS_TITLE_MAX)
-    if not path or not title:
-        return None
-    try:
-        line = int(entry.get("line") or 0)
-    except (TypeError, ValueError):
-        line = 0
-    state = str(entry.get("state") or OPEN).strip().lower()
-    if state not in (OPEN, RESOLVED, DISMISSED) or (
-        state == DISMISSED and not allow_dismissed
-    ):
-        state = OPEN
-    fid = str(entry.get("id") or "").strip().upper()
-    raw_files = entry.get("files") if isinstance(entry.get("files"), list) else []
-    files = unique_paths([path] + [one_line(item, 200) for item in raw_files])
-    return {
-        "id": fid if finding_number(fid) else None,
-        "file": path,
-        "files": files,
-        "line": max(line, 0),
-        "severity": normalize_severity(entry.get("severity")),
-        "title": title,
-        "state": state,
-    }
-
-
-def unique_paths(paths):
-    """Primary path first, then related ones, no blanks or repeats, capped."""
-    out = []
-    for path in paths:
-        if path and path not in out:
-            out.append(path)
-    return out[:FINDING_FILES_MAX]
-
-
-def derive_next(findings):
-    numbers = [finding_number(f["id"]) for f in findings if f.get("id")]
-    return (max(numbers) + 1) if numbers else 1
-
-
-def find_findings_block(text, *, last=False):
-    """Locate a findings block: (start, end, data) or None.
-
-    Each ` -->` after the prefix is tried until the JSON parses, so a `-->` inside a
-    title can't cut the block short. The sticky's own block is the FIRST one (right
-    under the markers); the model's is the LAST one (right before COVERAGE), so a block
-    the model quotes from the PR earlier in its text never wins.
-    """
-    text = text or ""
-    starts, pos = [], text.find(FINDINGS_PREFIX)
-    while pos >= 0:
-        starts.append(pos)
-        pos = text.find(FINDINGS_PREFIX, pos + 1)
-    for start in reversed(starts) if last else starts:
-        body = start + len(FINDINGS_PREFIX)
-        end = text.find(FINDINGS_SUFFIX, body)
-        while end >= 0:
-            try:
-                data = json.loads(text[body:end])
-            except ValueError:
-                end = text.find(FINDINGS_SUFFIX, end + 1)
-                continue
-            if isinstance(data, dict) and isinstance(data.get("findings"), list):
-                return start, end + len(FINDINGS_SUFFIX), data
-            break
-    return None
-
-
 def parse_findings_block(text, *, last=False):
-    """Hidden findings state, or None when missing or broken (B6 falls back)."""
-    found = find_findings_block(text, last=last)
-    if found is None:
-        return None
-    data = found[2]
-    findings = [
-        f
-        for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"])
-        if f
-    ]
-    claimed = data.get("next")
-    minimum = derive_next(findings)
-    seen = data.get("seen")
-    return {
-        "findings": findings,
-        "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum,
-        "seen": seen if isinstance(seen, int) and seen > 0 else 0,
-    }
+    """Estado legado crudo, o None (sin bloque, roto o de otra versión).
 
-
-def parse_model_findings(text):
-    """Parse the block the model emitted. The model may never dismiss; only users do."""
-    state = parse_findings_block(text, last=True)
-    if state is None:
-        return None
-    for finding in state["findings"]:
-        if finding["state"] == DISMISSED:
-            finding["state"] = OPEN
-    return state
-
-
-def strip_findings_block(text, *, last=False):
-    found = find_findings_block(text, last=last)
-    if found is None:
-        return text or ""
-    start, end, _ = found
-    return (text[:start] + text[end:]).strip()
+    La lectura completa con migración (Valid/Legacy/Missing/Invalid/Future)
+    vive en review_domain.read_snapshot.
+    """
+    load = review_domain.read_snapshot(text, last=last)
+    return load.raw if isinstance(load, review_domain.Legacy) else None
 
 
 def serialize_findings(state):
-    """Canonical hidden block, always within FINDINGS_MAX_BYTES.
-
-    Titles and paths shrink first; oldest resolved/dismissed go next; oldest
-    open findings go only as a last resort so the comment budgets never break.
-    """
-    findings = sorted(state["findings"], key=lambda f: finding_number(f["id"]) or 0)
-    if len(findings) > FINDINGS_MAX_COUNT:
-        open_only = [f for f in findings if f["state"] == OPEN]
-        rest = sorted(
-            (f for f in findings if f["state"] != OPEN),
-            key=lambda f: finding_number(f["id"]) or 0,
-            reverse=True,
-        )
-        findings = sorted(
-            open_only + rest[: max(0, FINDINGS_MAX_COUNT - len(open_only))],
-            key=lambda f: finding_number(f["id"]) or 0,
-        )
-    entries = []
-    for f in findings:
-        entry = {
-            "id": f["id"],
-            "file": one_line(f["file"], 200),
-            "line": f["line"],
-            "severity": f["severity"],
-            "title": one_line(f["title"], FINDINGS_TITLE_MAX),
-            "state": f["state"],
-        }
-        related = [one_line(path, 200) for path in f.get("files", [])[1:]]
-        if related:
-            entry["files"] = related
-        entries.append(entry)
-
-    def build(items):
-        blob = json.dumps(
-            {
-                "findings": items,
-                "next": state["next"],
-                **({"seen": state["seen"]} if state.get("seen") else {}),
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
-
-    title_limit, path_limit = FINDINGS_TITLE_MAX, 200
-    while True:
-        block = build(entries)
-        if len(block) <= FINDINGS_MAX_BYTES:
-            return block
-        if title_limit > 20 or path_limit > 25:
-            title_limit = max(20, title_limit // 2)
-            path_limit = max(25, path_limit // 2)
-            entries = [
-                dict(
-                    e,
-                    file=one_line(e["file"], path_limit),
-                    title=one_line(e["title"], title_limit),
-                    **(
-                        {"files": [one_line(x, path_limit) for x in e["files"]]}
-                        if "files" in e
-                        else {}
-                    ),
-                )
-                for e in entries
-            ]
-            continue
-        if any("files" in e for e in entries):
-            entries = [{k: v for k, v in e.items() if k != "files"} for e in entries]
-            continue
-        drop_from = [e for e in entries if e["state"] != OPEN] or entries
-        victim = min(drop_from, key=lambda e: finding_number(e["id"]) or 0)
-        entries = [e for e in entries if e is not victim]
-
-
-def same_issue(a, b):
-    return a["file"] == b["file"] and a["title"].casefold() == b["title"].casefold()
+    """Bloque canónico dentro del presupuesto del adaptador (parcheable)."""
+    return review_domain.serialize_findings(state, max_bytes=FINDINGS_MAX_BYTES)
 
 
 def merge_findings(

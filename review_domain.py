@@ -1,0 +1,759 @@
+"""Dominio de la memoria del revisor: lectura compatible, migración, tipos
+y escritura. Puro: sin red, sin modelo, sin Git.
+
+Esquema legado (bloque sin `schema`): findings [{id, file, files, line,
+severity, title, state}], next y seen. Lectura tolerante (las entradas malas
+se descartan y los campos se normalizan, como siempre) y escritura legada por
+defecto para estados legados.
+
+Esquema 2: Snapshot con anclas, evidencia, cursor de comandos y solicitudes
+pendientes. La lectura es estricta en la frontera (ids duplicados, tipos
+inválidos o referencias inconsistentes -> Invalid) y la escritura no tiene
+camino con pérdida: si el estado no cabe en el tope de 8000 bytes UTF-8 se
+devuelve CapacityExceeded y el llamador conserva el último estado válido.
+"""
+
+import json
+import re
+from dataclasses import dataclass, field
+
+FINDINGS_PREFIX = "<!-- ai-review:findings="
+FINDINGS_SUFFIX = " -->"
+FINDINGS_MAX_BYTES = 8000
+FINDINGS_MAX_COUNT = 60
+FINDINGS_TITLE_MAX = 160
+FINDING_FILES_MAX = 5
+SEVERITIES = ("Critical", "High", "Medium", "Low")
+OPEN, RESOLVED, DISMISSED = "open", "resolved", "dismissed"
+FINDING_ID_RE = re.compile(r"^F(\d+)$")
+COMPLETE_CLAIM, PARTIAL, UNKNOWN = "complete_claim", "partial", "unknown"
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+# Tipos del diseño (descriptivo en docs/reviewer-improvements-design.md).
+
+
+@dataclass
+class Missing:
+    """No hay bloque de memoria."""
+
+
+@dataclass
+class Invalid:
+    """Hay bloque pero no se puede leer con confianza."""
+
+    reason: str
+
+
+@dataclass
+class Future:
+    """Hay bloque de una versión más nueva que ésta."""
+
+    version: int
+
+
+@dataclass
+class CapacityExceeded:
+    """El estado v2 no cabe en el presupuesto; no se recorta nada."""
+
+    limit: int
+    needed: int
+
+
+@dataclass
+class Revision:
+    base_sha: str | None = None
+    head_sha: str | None = None
+    policy_digest: str | None = None
+
+
+@dataclass
+class StatusOpen:
+    pass
+
+
+@dataclass
+class StatusResolved:
+    at_sha: str | None = None
+
+
+@dataclass
+class StatusDismissed:
+    command_id: int | None = None
+
+
+@dataclass
+class AnchorLegacy:
+    path: str
+    line: int | None = None
+
+
+@dataclass
+class AnchorLocated:
+    path: str
+    blob_sha: str
+    range: tuple
+    excerpt_digest: str
+    symbol_hint: str | None = None
+
+
+@dataclass
+class EvidenceSource:
+    anchor: object
+
+
+@dataclass
+class EvidenceCheck:
+    check_id: str
+    head_sha: str
+    producer: str
+    conclusion: str
+    url: str
+
+
+@dataclass
+class EvidenceUnverified:
+    text: str
+
+
+@dataclass
+class Finding:
+    id: str | None
+    title: str
+    severity: str
+    status: object
+    primary_anchor: object
+    related_anchors: list = field(default_factory=list)
+    cause_hint: str | None = None
+    evidence: list = field(default_factory=list)
+
+
+@dataclass
+class PendingRequest:
+    id: str
+    kind: str
+    finding_id: str | None = None
+
+
+@dataclass
+class Snapshot:
+    schema: int
+    generation: int
+    revision: Revision | None
+    next_id: int
+    completion: str
+    findings: list
+    command_cursor: int
+    pending_requests: list = field(default_factory=list)
+
+
+@dataclass
+class Valid:
+    snapshot: Snapshot
+
+
+@dataclass
+class Legacy:
+    snapshot: Snapshot
+    raw: dict
+
+
+@dataclass
+class Replace:
+    snapshot: Snapshot
+
+
+@dataclass
+class Keep:
+    reason: str
+
+
+@dataclass
+class RequestWork:
+    request: PendingRequest
+
+
+# Funciones del estado legado, extraídas de review.py sin cambio de conducta.
+
+
+def one_line(text, limit):
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[:limit].rstrip()
+    return collapsed.replace("--!>", "--!\u203a").replace("-->", "--\u203a")
+
+
+def normalize_severity(value):
+    for severity in SEVERITIES:
+        if str(value or "").strip().lower() == severity.lower():
+            return severity
+    return "Medium"
+
+
+def finding_number(fid):
+    match = FINDING_ID_RE.match(str(fid or ""))
+    return int(match.group(1)) if match else None
+
+
+def sanitize_finding(entry, *, allow_dismissed):
+    """Validate one raw finding dict. Returns a clean dict, or None to drop it."""
+    if not isinstance(entry, dict):
+        return None
+    path = one_line(entry.get("file"), 200)
+    title = one_line(entry.get("title"), FINDINGS_TITLE_MAX)
+    if not path or not title:
+        return None
+    try:
+        line = int(entry.get("line") or 0)
+    except (TypeError, ValueError):
+        line = 0
+    state = str(entry.get("state") or OPEN).strip().lower()
+    if state not in (OPEN, RESOLVED, DISMISSED) or (
+        state == DISMISSED and not allow_dismissed
+    ):
+        state = OPEN
+    fid = str(entry.get("id") or "").strip().upper()
+    raw_files = entry.get("files") if isinstance(entry.get("files"), list) else []
+    files = unique_paths([path] + [one_line(item, 200) for item in raw_files])
+    return {
+        "id": fid if finding_number(fid) else None,
+        "file": path,
+        "files": files,
+        "line": max(line, 0),
+        "severity": normalize_severity(entry.get("severity")),
+        "title": title,
+        "state": state,
+    }
+
+
+def unique_paths(paths):
+    """Primary path first, then related ones, no blanks or repeats, capped."""
+    out = []
+    for path in paths:
+        if path and path not in out:
+            out.append(path)
+    return out[:FINDING_FILES_MAX]
+
+
+def derive_next(findings):
+    numbers = [finding_number(f["id"]) for f in findings if f.get("id")]
+    return (max(numbers) + 1) if numbers else 1
+
+
+def find_findings_block(text, *, last=False):
+    """Locate a findings block: (start, end, data) or None.
+
+    Each ` -->` after the prefix is tried until the JSON parses, so a `-->` inside a
+    title can't cut the block short. The sticky's own block is the FIRST one (right
+    under the markers); the model's is the LAST one (right before COVERAGE), so a block
+    the model quotes from the PR earlier in its text never wins.
+    """
+    text = text or ""
+    starts, pos = [], text.find(FINDINGS_PREFIX)
+    while pos >= 0:
+        starts.append(pos)
+        pos = text.find(FINDINGS_PREFIX, pos + 1)
+    for start in reversed(starts) if last else starts:
+        body = start + len(FINDINGS_PREFIX)
+        end = text.find(FINDINGS_SUFFIX, body)
+        while end >= 0:
+            try:
+                data = json.loads(text[body:end])
+            except ValueError:
+                end = text.find(FINDINGS_SUFFIX, end + 1)
+                continue
+            if isinstance(data, dict) and isinstance(data.get("findings"), list):
+                return start, end + len(FINDINGS_SUFFIX), data
+            break
+    return None
+
+
+def legacy_raw_of(data):
+    """Sanitized legacy dict ({findings, next, seen}) from a parsed block."""
+    findings = [
+        f
+        for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"])
+        if f
+    ]
+    claimed = data.get("next")
+    minimum = derive_next(findings)
+    seen = data.get("seen")
+    return {
+        "findings": findings,
+        "next": claimed if isinstance(claimed, int) and claimed >= minimum else minimum,
+        "seen": seen if isinstance(seen, int) and seen > 0 else 0,
+    }
+
+
+def serialize_findings(state, *, max_bytes=None):
+    """Canonical hidden block, always within the findings budget.
+
+    Titles and paths shrink first; oldest resolved/dismissed go next; oldest
+    open findings go only as a last resort so the comment budgets never break.
+    `max_bytes` lets the adapter own its knob (tests patch it there).
+    """
+    limite = FINDINGS_MAX_BYTES if max_bytes is None else max_bytes
+    findings = sorted(state["findings"], key=lambda f: finding_number(f["id"]) or 0)
+    if len(findings) > FINDINGS_MAX_COUNT:
+        open_only = [f for f in findings if f["state"] == OPEN]
+        rest = sorted(
+            (f for f in findings if f["state"] != OPEN),
+            key=lambda f: finding_number(f["id"]) or 0,
+            reverse=True,
+        )
+        findings = sorted(
+            open_only + rest[: max(0, FINDINGS_MAX_COUNT - len(open_only))],
+            key=lambda f: finding_number(f["id"]) or 0,
+        )
+    entries = []
+    for f in findings:
+        entry = {
+            "id": f["id"],
+            "file": one_line(f["file"], 200),
+            "line": f["line"],
+            "severity": f["severity"],
+            "title": one_line(f["title"], FINDINGS_TITLE_MAX),
+            "state": f["state"],
+        }
+        related = [one_line(path, 200) for path in f.get("files", [])[1:]]
+        if related:
+            entry["files"] = related
+        entries.append(entry)
+
+    def build(items):
+        blob = json.dumps(
+            {
+                "findings": items,
+                "next": state["next"],
+                **({"seen": state["seen"]} if state.get("seen") else {}),
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+
+    title_limit, path_limit = FINDINGS_TITLE_MAX, 200
+    while True:
+        block = build(entries)
+        if len(block) <= limite:
+            return block
+        if title_limit > 20 or path_limit > 25:
+            title_limit = max(20, title_limit // 2)
+            path_limit = max(25, path_limit // 2)
+            entries = [
+                dict(
+                    e,
+                    file=one_line(e["file"], path_limit),
+                    title=one_line(e["title"], title_limit),
+                    **(
+                        {"files": [one_line(x, path_limit) for x in e["files"]]}
+                        if "files" in e
+                        else {}
+                    ),
+                )
+                for e in entries
+            ]
+            continue
+        if any("files" in e for e in entries):
+            entries = [{k: v for k, v in e.items() if k != "files"} for e in entries]
+            continue
+        drop_from = [e for e in entries if e["state"] != OPEN] or entries
+        victim = min(drop_from, key=lambda e: finding_number(e["id"]) or 0)
+        entries = [e for e in entries if e is not victim]
+
+
+def same_issue(a, b):
+    return a["file"] == b["file"] and a["title"].casefold() == b["title"].casefold()
+
+
+def parse_model_findings(text):
+    """Parse the block the model emitted. The model may never dismiss; only users do."""
+    load = read_snapshot(text, last=True)
+    if not isinstance(load, Legacy):
+        return None
+    state = load.raw
+    for finding in state["findings"]:
+        if finding["state"] == DISMISSED:
+            finding["state"] = OPEN
+    return state
+
+
+def strip_findings_block(text, *, last=False):
+    found = find_findings_block(text, last=last)
+    if found is None:
+        return text or ""
+    start, end, _ = found
+    return (text[:start] + text[end:]).strip()
+
+
+# Lectura compatible (legado + esquema 2) y migración.
+
+
+def _migrate_legacy(raw):
+    """Legacy dict -> Snapshot sin inventar anclas ni evidencia.
+
+    Ubicaciones legadas (path/line), estados tal cual (descartes conservados),
+    cursor `seen` -> command_cursor y contador `next` -> next_id. Sin causas,
+    sin evidencia, sin revisión ni solicitudes (eso no existía en legado).
+    """
+    findings = []
+    for f in raw["findings"]:
+        status = {
+            OPEN: StatusOpen(),
+            RESOLVED: StatusResolved(at_sha=None),
+            DISMISSED: StatusDismissed(command_id=None),
+        }[f["state"]]
+        findings.append(
+            Finding(
+                id=f.get("id"),
+                title=f["title"],
+                severity=f["severity"],
+                status=status,
+                primary_anchor=AnchorLegacy(path=f["file"], line=f["line"]),
+                related_anchors=[
+                    AnchorLegacy(path=p, line=None) for p in f.get("files", [])[1:]
+                ],
+                cause_hint=None,
+                evidence=[],
+            )
+        )
+    return Snapshot(
+        schema=1,
+        generation=0,
+        revision=None,
+        next_id=raw["next"],
+        completion=UNKNOWN,
+        findings=findings,
+        command_cursor=raw["seen"],
+        pending_requests=[],
+    )
+
+
+def _hex40(value):
+    return isinstance(value, str) and bool(_HEX40.match(value))
+
+
+def _anchor_of(data):
+    if not isinstance(data, dict):
+        raise _SchemaError("ancla no es un objeto")
+    kind = data.get("kind")
+    if kind == "legacy":
+        path = data.get("path")
+        line = data.get("line")
+        if not isinstance(path, str) or not path:
+            raise _SchemaError("ancla legada sin path")
+        if line is not None and (
+            not isinstance(line, int) or isinstance(line, bool) or line < 0
+        ):
+            raise _SchemaError("ancla legada con line inválido")
+        return AnchorLegacy(path=path, line=line)
+    if kind == "located":
+        rango = data.get("range")
+        if (
+            not isinstance(data.get("path"), str)
+            or not data["path"]
+            or not _hex40(data.get("blob_sha"))
+            or not isinstance(rango, list)
+            or len(rango) != 2
+            or not all(isinstance(x, int) and not isinstance(x, bool) for x in rango)
+            or not isinstance(data.get("excerpt_digest"), str)
+        ):
+            raise _SchemaError("ancla localizada incompleta")
+        hint = data.get("symbol_hint")
+        if hint is not None and not isinstance(hint, str):
+            raise _SchemaError("symbol_hint inválido")
+        return AnchorLocated(
+            path=data["path"],
+            blob_sha=data["blob_sha"],
+            range=(rango[0], rango[1]),
+            excerpt_digest=data["excerpt_digest"],
+            symbol_hint=hint,
+        )
+    raise _SchemaError(f"ancla de kind desconocido: {kind!r}")
+
+
+def _evidence_of(data):
+    if not isinstance(data, dict):
+        raise _SchemaError("evidencia no es un objeto")
+    kind = data.get("kind")
+    if kind == "source":
+        return EvidenceSource(anchor=_anchor_of(data.get("anchor")))
+    if kind == "check":
+        if (
+            not isinstance(data.get("check_id"), str)
+            or not _hex40(data.get("head_sha"))
+            or not isinstance(data.get("producer"), str)
+            or not isinstance(data.get("conclusion"), str)
+            or not isinstance(data.get("url"), str)
+        ):
+            raise _SchemaError("check de evidencia incompleto")
+        return EvidenceCheck(
+            check_id=data["check_id"],
+            head_sha=data["head_sha"],
+            producer=data["producer"],
+            conclusion=data["conclusion"],
+            url=data["url"],
+        )
+    if kind == "unverified":
+        if not isinstance(data.get("text"), str):
+            raise _SchemaError("claim sin texto")
+        return EvidenceUnverified(text=data["text"])
+    raise _SchemaError(f"evidencia de kind desconocido: {kind!r}")
+
+
+def _status_of(data):
+    if not isinstance(data, dict):
+        raise _SchemaError("estado no es un objeto")
+    kind = data.get("kind")
+    if kind == "open":
+        return StatusOpen()
+    if kind == "resolved":
+        at_sha = data.get("at_sha")
+        if at_sha is not None and not _hex40(at_sha):
+            raise _SchemaError("resolved con at_sha inválido")
+        return StatusResolved(at_sha=at_sha)
+    if kind == "dismissed":
+        command_id = data.get("command_id")
+        if command_id is not None and (
+            not isinstance(command_id, int) or isinstance(command_id, bool)
+        ):
+            raise _SchemaError("dismissed con command_id inválido")
+        return StatusDismissed(command_id=command_id)
+    raise _SchemaError(f"estado de kind desconocido: {kind!r}")
+
+
+def _finding_of(data):
+    if not isinstance(data, dict):
+        raise _SchemaError("hallazgo no es un objeto")
+    fid = data.get("id")
+    if not isinstance(fid, str) or not FINDING_ID_RE.match(fid):
+        raise _SchemaError(f"id de hallazgo inválido: {fid!r}")
+    if (
+        not isinstance(data.get("title"), str)
+        or not data["title"]
+        or data.get("severity") not in SEVERITIES
+    ):
+        raise _SchemaError(f"hallazgo {fid} con título o severidad inválidos")
+    return Finding(
+        id=fid,
+        title=data["title"],
+        severity=data["severity"],
+        status=_status_of(data.get("status")),
+        primary_anchor=_anchor_of(data.get("primary_anchor")),
+        related_anchors=[_anchor_of(a) for a in data.get("related_anchors", [])],
+        cause_hint=data.get("cause_hint"),
+        evidence=[_evidence_of(e) for e in data.get("evidence", [])],
+    )
+
+
+class _SchemaError(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _v2_snapshot(data):
+    generation = data.get("generation")
+    next_id = data.get("next_id")
+    cursor = data.get("command_cursor")
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 0
+        or not isinstance(next_id, int)
+        or isinstance(next_id, bool)
+        or next_id < 1
+        or not isinstance(cursor, int)
+        or isinstance(cursor, bool)
+        or cursor < 0
+    ):
+        raise _SchemaError("contadores de schema 2 inválidos")
+    if data.get("completion") not in (COMPLETE_CLAIM, PARTIAL, UNKNOWN):
+        raise _SchemaError("completion inválida")
+    revision = None
+    if data.get("revision") is not None:
+        rev = data["revision"]
+        if (
+            not isinstance(rev, dict)
+            or not _hex40(rev.get("base_sha"))
+            or not _hex40(rev.get("head_sha"))
+            or not isinstance(rev.get("policy_digest"), str)
+        ):
+            raise _SchemaError("revisión inválida")
+        revision = Revision(
+            base_sha=rev["base_sha"],
+            head_sha=rev["head_sha"],
+            policy_digest=rev["policy_digest"],
+        )
+    solicitudes = []
+    for req in data.get("pending_requests", []):
+        if (
+            not isinstance(req, dict)
+            or not isinstance(req.get("id"), str)
+            or not req["id"]
+            or not isinstance(req.get("kind"), str)
+        ):
+            raise _SchemaError("solicitud pendiente inválida")
+        solicitudes.append(
+            PendingRequest(
+                id=req["id"], kind=req["kind"], finding_id=req.get("finding_id")
+            )
+        )
+    findings, vistos = [], set()
+    for entry in data.get("findings", []):
+        hallazgo = _finding_of(entry)
+        if hallazgo.id in vistos:
+            raise _SchemaError(f"id de hallazgo duplicado: {hallazgo.id}")
+        vistos.add(hallazgo.id)
+        findings.append(hallazgo)
+    return Snapshot(
+        schema=2,
+        generation=generation,
+        revision=revision,
+        next_id=next_id,
+        completion=data["completion"],
+        findings=findings,
+        command_cursor=cursor,
+        pending_requests=solicitudes,
+    )
+
+
+def read_snapshot(body, *, last=False):
+    """Lee el bloque de memoria y clasifica el resultado.
+
+    Missing (no hay bloque), Invalid (bloque ilegible o que viola la frontera
+    del esquema), Future (versión más nueva), Valid (schema 2) o Legacy
+    (formato legado, migrado a Snapshot sin inventar nada; `raw` conserva el
+    estado legado saneado para el adaptador).
+    """
+    found = find_findings_block(body, last=last)
+    if found is None:
+        if FINDINGS_PREFIX in (body or ""):
+            return Invalid("bloque de hallazgos corrupto: JSON o cierre ausentes")
+        return Missing()
+    data = found[2]
+    if "schema" in data:
+        schema = data["schema"]
+        if schema == 2:
+            try:
+                return Valid(_v2_snapshot(data))
+            except _SchemaError as exc:
+                return Invalid(exc.reason)
+        if isinstance(schema, int) and not isinstance(schema, bool):
+            return Future(schema)
+        return Invalid(f"schema desconocido: {schema!r}")
+    raw = legacy_raw_of(data)
+    return Legacy(snapshot=_migrate_legacy(raw), raw=raw)
+
+
+def _legacy_raw_of_snapshot(snapshot):
+    findings = []
+    for f in snapshot.findings:
+        if isinstance(f.status, StatusOpen):
+            state = OPEN
+        elif isinstance(f.status, StatusResolved):
+            state = RESOLVED
+        else:
+            state = DISMISSED
+        anchor = f.primary_anchor
+        path = anchor.path if isinstance(anchor, (AnchorLegacy, AnchorLocated)) else ""
+        line = anchor.line if isinstance(anchor, AnchorLegacy) else 0
+        entry = {
+            "id": f.id,
+            "file": path,
+            "line": line if isinstance(line, int) else 0,
+            "severity": f.severity,
+            "title": f.title,
+            "state": state,
+        }
+        related = [a.path for a in f.related_anchors]
+        if related:
+            entry["files"] = [path] + related
+        findings.append(entry)
+    raw = {"findings": findings, "next": snapshot.next_id}
+    if snapshot.command_cursor:
+        raw["seen"] = snapshot.command_cursor
+    return raw
+
+
+def encode_snapshot(snapshot):
+    """Serializa el estado: legado en formato legado, v2 sin pérdida.
+
+    Devuelve el bloque completo, o CapacityExceeded cuando el estado v2 no
+    cabe en el presupuesto de bytes (nunca se recorta: el llamador conserva
+    el último estado válido).
+    """
+    if snapshot.schema != 2:
+        return serialize_findings(_legacy_raw_of_snapshot(snapshot))
+    revision = None
+    if snapshot.revision is not None:
+        revision = {
+            "base_sha": snapshot.revision.base_sha,
+            "head_sha": snapshot.revision.head_sha,
+            "policy_digest": snapshot.revision.policy_digest,
+        }
+
+    def anchor_json(a):
+        if isinstance(a, AnchorLegacy):
+            return {"kind": "legacy", "path": a.path, "line": a.line}
+        return {
+            "kind": "located",
+            "path": a.path,
+            "blob_sha": a.blob_sha,
+            "range": list(a.range),
+            "excerpt_digest": a.excerpt_digest,
+            "symbol_hint": a.symbol_hint,
+        }
+
+    def evidence_json(e):
+        if isinstance(e, EvidenceSource):
+            return {"kind": "source", "anchor": anchor_json(e.anchor)}
+        if isinstance(e, EvidenceCheck):
+            return {
+                "kind": "check",
+                "check_id": e.check_id,
+                "head_sha": e.head_sha,
+                "producer": e.producer,
+                "conclusion": e.conclusion,
+                "url": e.url,
+            }
+        return {"kind": "unverified", "text": e.text}
+
+    def status_json(s):
+        if isinstance(s, StatusOpen):
+            return {"kind": "open"}
+        if isinstance(s, StatusResolved):
+            return {"kind": "resolved", "at_sha": s.at_sha}
+        return {"kind": "dismissed", "command_id": s.command_id}
+
+    payload = {
+        "schema": 2,
+        "generation": snapshot.generation,
+        "revision": revision,
+        "next_id": snapshot.next_id,
+        "completion": snapshot.completion,
+        "command_cursor": snapshot.command_cursor,
+        "pending_requests": [
+            {"id": r.id, "kind": r.kind, "finding_id": r.finding_id}
+            for r in snapshot.pending_requests
+        ],
+        "findings": [
+            {
+                "id": f.id,
+                "title": f.title,
+                "severity": f.severity,
+                "status": status_json(f.status),
+                "primary_anchor": anchor_json(f.primary_anchor),
+                "related_anchors": [anchor_json(a) for a in f.related_anchors],
+                "cause_hint": f.cause_hint,
+                "evidence": [evidence_json(e) for e in f.evidence],
+            }
+            for f in snapshot.findings
+        ],
+    }
+    blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+    needed = len(bloque.encode("utf-8"))
+    if needed > FINDINGS_MAX_BYTES:
+        return CapacityExceeded(limit=FINDINGS_MAX_BYTES, needed=needed)
+    return bloque
