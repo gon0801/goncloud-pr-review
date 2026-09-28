@@ -1092,3 +1092,168 @@ class NuevosIdsYAmbiguosEnAccept(unittest.TestCase):
         self.assertIn("posible duplicado", por_id["F3"].cause_hint)
         self.assertEqual(por_id["F1"].title, "Bug del IVA")
         self.assertEqual(por_id["F2"].title, "Bug del IVA")
+
+
+# ---- F0 r2: identidad por anclas, regresiones y anclas validadas ----
+
+
+def _ancla_locada_en(rango, digest, path="src/app.py", blob="a" * 40):
+    return domain.AnchorLocated(
+        path=path, blob_sha=blob, range=rango, excerpt_digest=digest
+    )
+
+
+def _hallazgo_locado(
+    fid, titulo, rango, digest, estado=domain.StatusOpen(), ruta="src/app.py"
+):
+    return domain.Finding(
+        id=fid,
+        title=titulo,
+        severity="Medium",
+        status=estado,
+        primary_anchor=domain.AnchorLocated(
+            path=ruta, blob_sha="a" * 40, range=rango, excerpt_digest=digest
+        ),
+    )
+
+
+class AnclasComoIdentidad(unittest.TestCase):
+    D1 = "d1" * 32
+    D2 = "d2" * 32
+    BLOB = {("src/app.py", "a" * 40): tuple(f"línea {i}\n" for i in range(1, 31))}
+
+    def test_b1_descarte_con_ancla_reformulada_no_reaparece(self):
+        previos = [
+            _hallazgo_locado(
+                "F1",
+                "la entrada no se valida",
+                (2, 2),
+                self.D1,
+                estado=domain.StatusDismissed(command_id=None),
+            ),
+            domain.Finding(
+                id="F2",
+                title="otro bug",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/b.py", line=5),
+            ),
+        ]
+        obs = _observacion(
+            "la entrada del formulario no se valida (reformulado)",
+            primary_anchor=_ancla_locada_en((2, 3), self.D1),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.BLOB),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_b1_ancla_estable_no_crea_duplicados_entre_pushes(self):
+        previos = [
+            _hallazgo_locado("F1", "bug x", (10, 20), self.D1),
+            _hallazgo_locado("F3", "bug x (reformulado)", (12, 18), self.D1),
+        ]
+        obs = _observacion(
+            "bug x (otra vez reformulado)",
+            primary_anchor=_ancla_locada_en((10, 20), self.D1),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.BLOB),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_b1_descarte_con_ancla_compatible_no_genera_nuevo_en_accept(self):
+        previos = [
+            _hallazgo_locado(
+                "F1",
+                "la entrada no se valida",
+                (2, 2),
+                self.D1,
+                estado=domain.StatusDismissed(command_id=None),
+            ),
+        ]
+        obs = _observacion(
+            "la entrada del formulario no se valida (reformulado)",
+            primary_anchor=_ancla_locada_en((2, 3), self.D1),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.BLOB)
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual([f.id for f in transicion.snapshot.findings], ["F1"])
+        self.assertIsInstance(
+            transicion.snapshot.findings[0].status, domain.StatusDismissed
+        )
+
+    def test_b3_ancla_primaria_fuera_del_blob_se_rechaza_y_baja(self):
+        obs = _observacion(
+            "bug x",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="a" * 40,
+                range=(900, 905),
+                excerpt_digest="f" * 64,
+            ),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.BLOB)
+        self.assertTrue(report.rechazadas)
+        self.assertIsInstance(
+            report.observations[0].primary_anchor,
+            domain.AnchorLegacy,
+            "el ancla que no verifica no sirve como identidad",
+        )
+
+
+class RegresionDeResuelto(unittest.TestCase):
+    def test_b2_regresion_con_cambio_pertinente_reabre(self):
+        previo = domain.Finding(
+            id="F1",
+            title="bug x",
+            severity="Low",
+            status=domain.StatusResolved(at_sha="c" * 40),
+            primary_anchor=domain.AnchorLegacy(path="src/app.py", line=1),
+        )
+        obs = _observacion("bug x otra vez", ruta="src/app.py", claim=domain.OPEN)
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[previo],
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertIsInstance(
+            transicion.snapshot.findings[0].status,
+            domain.StatusOpen,
+            "un bug reintroducido con cambio pertinente se reabre",
+        )
