@@ -46,6 +46,21 @@ class CorpusCongelado(unittest.TestCase):
                 len(pushes), len(set(pushes)), f"{c['caso']}: SHAs repetidos"
             )
 
+    def test_pushes_en_orden_cronologico(self):
+        for c in self.casos:
+            if not c["pushes"]:
+                continue
+            marcas = c["pushes_submitted_at"]
+            self.assertIsInstance(
+                marcas, list, f"{c['caso']}: faltan las marcas de tiempo de los pushes"
+            )
+            self.assertEqual(len(marcas), len(c["pushes"]))
+            self.assertEqual(
+                marcas,
+                sorted(marcas),
+                f"{c['caso']}: los pushes no van en orden de empuje",
+            )
+
     def test_head_es_la_punta_revisada_y_no_el_commit_de_main(self):
         for c in self.casos:
             self.assertRegex(c["head"], HEX40)
