@@ -45,16 +45,16 @@ Misma secuencia que `action.yml` sin `gate` ni publicación: `prepare` → `inst
 
 ## TDD
 
-Comando focalizado: `python3 -m unittest discover -s tests -p 'test_e1a_workflow.py' -v` (7 casos: dispatch con inputs, permisos de sólo lectura, sin substring `publish`, secreto único sin `echo`, proveedor fijo, concurrencia sin cancelación, artefacto con result+manifest).
+Comando focalizado: `python3 -m unittest discover -s tests -p 'test_e1a_workflow.py' -v` (8 casos: dispatch con inputs, permisos de sólo lectura, sin substring `publish`, secreto único sin `echo`, proveedor fijo, árbol del head con revisor fuera del workspace, concurrencia sin cancelación, artefacto con result+manifest).
 
 1. Rojo: sin el yml → `FAILED (errors=1)` (FileNotFoundError), exit 1.
-2. Verde: creado el yml → `Ran 7 tests`, `OK`, exit 0.
-3. Mutaciones (demuestran que la prueba discrimina): agregar `pull-requests: write` → `FAILED (failures=1)`, exit 1; agregar un paso `publish` → `FAILED (failures=1)`, exit 1. Ambas revertidas → `Ran 7 tests`, `OK`, exit 0.
+2. Verde: creado el yml → `Ran 7 tests` en r1, `Ran 8 tests` desde la enmienda r2, `OK`, exit 0.
+3. Mutaciones (demuestran que la prueba discrimina): agregar `pull-requests: write` → `FAILED (failures=1)`, exit 1; agregar un paso `publish` → `FAILED (failures=1)`, exit 1. Ambas revertidas → suite completa en verde, exit 0.
 
 ## Comandos y resultados sobre el head final
 
 - `pre-commit run --all-files` → 8 hooks Passed, exit 0.
-- `python3 -m unittest discover -s tests -p 'test_e1a_workflow.py' -v` → `Ran 7 tests`, `OK`, exit 0.
+- `python3 -m unittest discover -s tests -p 'test_e1a_workflow.py' -v` → `Ran 8 tests`, `OK`, exit 0.
 - `actionlint .github/workflows/e1-measure.yml` → sin salida, exit 0.
 - No se corrió la batería completa local (prohibido).
 
@@ -83,3 +83,9 @@ Arreglo (el literal de Claude, dos piezas porque ninguna alcanza sola):
 2. El árbol de trabajo se mueve a la punta revisada: tras traer `pull/<pr>/head` y verificar ambos SHAs con `git cat-file -e`, `git checkout --detach "${{ inputs.head }}"`.
 
 Test nuevo `test_mide_el_arbol_del_head_con_revisor_fuera`: afirma el `checkout --detach` a `inputs.head`, la copia del revisor, las tres invocaciones desde `"$RUNNER_TEMP/reviewer/review.py"`, los dos `--prompt` del revisor fijo, y que ninguna línea vuelve a invocar `python3 review.py` desde el workspace. Rojo contra el yml de r1 (`FAILED (failures=1)`, los 7 de r1 en verde); verde con el arreglo (`Ran 8 tests`, `OK`). Mutación quitando el `checkout --detach` → `FAILED (failures=1)`, exit 1; revertida → `Ran 8 tests`, `OK` y actionlint exit 0.
+
+## Enmienda r3 — la prueba del head exige destino y orden del checkout (2026-09-27)
+
+Residual 1 de Claude sobre el PR (F2, Medium): la prueba de r2 sólo exigía el literal `git checkout --detach`; seguía en verde si el destino volvía a main/base o si el paso quedaba después de `prepare` (el bloqueante original de r2), de modo que la frase "afirma el `checkout --detach` a `inputs.head`" de la sección anterior sólo es cierta desde esta ronda. `test_mide_el_arbol_del_head_con_revisor_fuera` ahora exige el literal completo `git checkout --detach "${{ inputs.head }}"`, que `cp review.py prompt.md` precede al checkout y que el checkout precede a `review.py" prepare`. La suite sigue en 8 casos y los conteos de las secciones TDD y de comandos ya lo reflejan.
+
+Rojo demostrado con tres mutaciones, cada una `FAILED (failures=1)` con la suite de r2 en verde: destino `origin/main` (lo caza el literal completo), checkout movido tras `prepare` (lo caza el orden contra prepare) y copia del revisor movida tras el checkout (lo caza el orden de la copia). Revertidas → `Ran 8 tests`, `OK`, exit 0.
