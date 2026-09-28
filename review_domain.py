@@ -873,38 +873,69 @@ def validar_reporte(observaciones, cobertura, facts):
     """
     observadas, rechazadas = [], []
     for i, obs in enumerate(observaciones):
+        primaria, motivo_primaria = _ancla_verificada(obs.primary_anchor, facts)
+        if obs.primary_anchor is not None and not isinstance(
+            obs.primary_anchor, AnchorLocated
+        ):
+            primaria = obs.primary_anchor  # ancla legada: no sirve como identidad
+        elif motivo_primaria:
+            rechazadas.append((i, f"ancla primaria: {motivo_primaria}"))
+            primaria = AnchorLegacy(path=obs.primary_anchor.path, line=None)
+        relacionadas = []
+        for a in obs.related_anchors:
+            verificada, motivo = _ancla_verificada(a, facts)
+            if verificada is None:
+                if motivo:
+                    rechazadas.append((i, f"ancla relacionada: {motivo}"))
+                relacionadas.append(a)
+            else:
+                relacionadas.append(verificada)
         evidencia = []
         for e in obs.evidence:
             if isinstance(e, EvidenceSource) and isinstance(e.anchor, AnchorLocated):
-                lineas = facts.blobs.get((e.anchor.path, e.anchor.blob_sha))
-                if lineas is None:
-                    rechazadas.append((i, "blob no verificado por el adaptador"))
-                    continue
-                a, b = e.anchor.range
-                if not (
-                    isinstance(a, int)
-                    and isinstance(b, int)
-                    and not isinstance(a, bool)
-                    and not isinstance(b, bool)
-                    and 1 <= a <= b <= len(lineas)
-                ):
-                    rechazadas.append((i, "rango fuera del blob"))
-                    continue
-                extracto = "\n".join(lineas[a - 1 : b])
-                digest = hashlib.sha256(extracto.encode("utf-8")).hexdigest()
-                if digest != e.anchor.excerpt_digest:
-                    rechazadas.append((i, "el digest del extracto no coincide"))
+                verificada, motivo = _ancla_verificada(e.anchor, facts)
+                if verificada is None:
+                    rechazadas.append((i, motivo or "ancla no verificada"))
                     continue
                 evidencia.append(e)
             else:
                 evidencia.append(e)
-        observadas.append(replace(obs, evidence=tuple(evidencia)))
+        observadas.append(
+            replace(
+                obs,
+                primary_anchor=primaria,
+                related_anchors=tuple(relacionadas),
+                evidence=tuple(evidencia),
+            )
+        )
     return ValidatedReport(
         facts=facts,
         observations=observadas,
         claimed_coverage=cobertura,
         rechazadas=tuple(rechazadas),
     )
+
+
+def _ancla_verificada(anchor, facts):
+    """El AnchorLocated verificado contra los blobs, o (None, motivo)."""
+    if not isinstance(anchor, AnchorLocated):
+        return None, None
+    lineas = facts.blobs.get((anchor.path, anchor.blob_sha))
+    if lineas is None:
+        return None, "blob no verificado por el adaptador"
+    a, b = anchor.range
+    if not (
+        isinstance(a, int)
+        and isinstance(b, int)
+        and not isinstance(a, bool)
+        and not isinstance(b, bool)
+        and 1 <= a <= b <= len(lineas)
+    ):
+        return None, "rango fuera del blob"
+    extracto = "\n".join(lineas[a - 1 : b])
+    if hashlib.sha256(extracto.encode("utf-8")).hexdigest() != anchor.excerpt_digest:
+        return None, "el digest del extracto no coincide"
+    return anchor, None
 
 
 def _rutas_posibles(observation, facts):
@@ -928,6 +959,33 @@ def match_finding(previous, observation, facts):
     """
     rutas = _rutas_posibles(observation, facts)
     titulo = observation.title.casefold()
+
+    # F0 r2: el ancla validada manda antes que el título (mismo blob con el
+    # digest del extracto, o rango que se solape en el mismo archivo, prueban
+    # identidad aunque el título se reformule). Con varios candidatos en la
+    # misma ubicación gana el de id más viejo: son el mismo problema ya
+    # registrado y no se crea duplicado. Los descartados entran aquí: el
+    # aceptador los conserva sin revivirlos.
+    ancla_obs, _ = _ancla_verificada(observation.primary_anchor, facts)
+    if ancla_obs is not None:
+        candidatos = []
+        for f in previous:
+            ancla_previa, _ = _ancla_verificada(f.primary_anchor, facts)
+            if ancla_previa is None:
+                continue
+            if ancla_previa.path != ancla_obs.path:
+                continue
+            if ancla_previa.blob_sha != ancla_obs.blob_sha:
+                continue
+            exacto = ancla_previa.excerpt_digest == ancla_obs.excerpt_digest
+            a1, b1 = ancla_previa.range
+            a2, b2 = ancla_obs.range
+            solapa = a1 <= b2 and a2 <= b1
+            if exacto or solapa:
+                candidatos.append(f)
+        if candidatos:
+            elegido = min(candidatos, key=lambda f: finding_number(f.id) or 0)
+            return MatchExisting(id=elegido.id)
     previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
     # candidatos fuertes: título+ruta (incluye descartados: si la observación
     # es de un descartado, matchea Existing y el aceptador lo conserva sin
@@ -989,12 +1047,20 @@ def accept_report(current, plan, report):
             tocados.add(fid)
             evidencia = tuple(obs.evidence)
             reverting = _cambio_pertinente(previo, revertidas)
-            if isinstance(previo.status, StatusResolved) and not reverting:
-                estado = previo.status  # la resolución por reversión se conserva
-            elif reverting:
+            if reverting:
                 estado = StatusResolved(
                     at_sha=plan.revision.head_sha if plan.revision else None
                 )
+            elif (
+                isinstance(previo.status, StatusResolved)
+                and obs.claim == OPEN
+                and _cambio_pertinente(previo, cambiadas)
+            ):
+                estado = StatusOpen()  # regresión con cambio pertinente: se reabre
+            elif isinstance(previo.status, StatusResolved):
+                estado = (
+                    previo.status
+                )  # la resolución se conserva sin cambio que la rompa
             elif obs.claim == RESOLVED and not _cambio_pertinente(previo, cambiadas):
                 evidencia = evidencia + (
                     EvidenceUnverified(

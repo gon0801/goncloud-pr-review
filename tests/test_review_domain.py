@@ -1118,9 +1118,17 @@ def _hallazgo_locado(
 
 
 class AnclasComoIdentidad(unittest.TestCase):
-    D1 = "d1" * 32
-    D2 = "d2" * 32
-    BLOB = {("src/app.py", "a" * 40): tuple(f"línea {i}\n" for i in range(1, 31))}
+    LINEAS = tuple(f"línea {i}" for i in range(1, 31))
+    BLOB = {("src/app.py", "a" * 40): tuple(f"línea {i}" for i in range(1, 31))}
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOB)
+
+    def digest(self, rango):
+        import hashlib
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
 
     def test_b1_descarte_con_ancla_reformulada_no_reaparece(self):
         previos = [
@@ -1128,7 +1136,7 @@ class AnclasComoIdentidad(unittest.TestCase):
                 "F1",
                 "la entrada no se valida",
                 (2, 2),
-                self.D1,
+                self.digest((2, 2)),
                 estado=domain.StatusDismissed(command_id=None),
             ),
             domain.Finding(
@@ -1141,24 +1149,26 @@ class AnclasComoIdentidad(unittest.TestCase):
         ]
         obs = _observacion(
             "la entrada del formulario no se valida (reformulado)",
-            primary_anchor=_ancla_locada_en((2, 3), self.D1),
+            primary_anchor=_ancla_locada_en((2, 3), self.digest((2, 3))),
         )
         self.assertEqual(
-            domain.match_finding(previos, obs, self.BLOB),
+            domain.match_finding(previos, obs, self.hechos()),
             domain.MatchExisting(id="F1"),
         )
 
     def test_b1_ancla_estable_no_crea_duplicados_entre_pushes(self):
         previos = [
-            _hallazgo_locado("F1", "bug x", (10, 20), self.D1),
-            _hallazgo_locado("F3", "bug x (reformulado)", (12, 18), self.D1),
+            _hallazgo_locado("F1", "bug x", (10, 20), self.digest((10, 20))),
+            _hallazgo_locado(
+                "F3", "bug x (reformulado)", (12, 18), self.digest((12, 18))
+            ),
         ]
         obs = _observacion(
             "bug x (otra vez reformulado)",
-            primary_anchor=_ancla_locada_en((10, 20), self.D1),
+            primary_anchor=_ancla_locada_en((10, 20), self.digest((10, 20))),
         )
         self.assertEqual(
-            domain.match_finding(previos, obs, self.BLOB),
+            domain.match_finding(previos, obs, self.hechos()),
             domain.MatchExisting(id="F1"),
         )
 
@@ -1168,13 +1178,13 @@ class AnclasComoIdentidad(unittest.TestCase):
                 "F1",
                 "la entrada no se valida",
                 (2, 2),
-                self.D1,
+                self.digest((2, 2)),
                 estado=domain.StatusDismissed(command_id=None),
             ),
         ]
         obs = _observacion(
             "la entrada del formulario no se valida (reformulado)",
-            primary_anchor=_ancla_locada_en((2, 3), self.D1),
+            primary_anchor=_ancla_locada_en((2, 3), self.digest((2, 3))),
         )
         plan = domain.ReviewPlan(
             revision=domain.Revision(
@@ -1182,7 +1192,7 @@ class AnclasComoIdentidad(unittest.TestCase):
             ),
             changed_paths=("src/app.py",),
         )
-        report = domain.validar_reporte([obs], domain.UNKNOWN, self.BLOB)
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
         transicion = domain.accept_report(
             domain.Snapshot(
                 schema=2,
@@ -1212,7 +1222,7 @@ class AnclasComoIdentidad(unittest.TestCase):
                 excerpt_digest="f" * 64,
             ),
         )
-        report = domain.validar_reporte([obs], domain.UNKNOWN, self.BLOB)
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
         self.assertTrue(report.rechazadas)
         self.assertIsInstance(
             report.observations[0].primary_anchor,
