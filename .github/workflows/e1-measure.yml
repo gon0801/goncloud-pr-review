@@ -3,7 +3,9 @@
 # 1) no existe paso de publicación (prepare/install/run solamente) y
 # 2) el GITHUB_TOKEN del workflow sólo tiene contents: read, sin permiso de
 #    escritura en PRs, así que ni siquiera podría comentar.
-# El secreto AI_REVIEW_API_KEY sólo viaja como env del paso "run".
+# El secreto de la ruta elegida sólo viaja como env del paso "run" de esa
+# ruta; la validación temprana lo compara contra vacío sin leer su valor y
+# una ruta nunca cae a la llave de la otra.
 # No dispara ai-review.yml: ese sólo corre en eventos pull_request.
 name: E1 measure
 
@@ -22,6 +24,13 @@ on:
       caso:
         description: "Etiqueta del caso del corpus (p. ej. pr2)"
         required: true
+      proveedor:
+        description: "Proveedor del revisor; claves de PROVIDERS en review.py"
+        type: choice
+        default: opencode-go
+        options:
+          - opencode-go
+          - deepseek
 
 permissions:
   contents: read
@@ -35,6 +44,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Validar proveedor y ruta de secreto
+        id: proveedor
+        env:
+          PROVEEDOR_RAW: ${{ inputs.proveedor }}
+          HAY_AI_REVIEW: ${{ secrets.AI_REVIEW_API_KEY != '' }}
+          HAY_DEEPSEEK: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: |
+          proveedor="$(printf '%s' "$PROVEEDOR_RAW" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          case "$proveedor" in
+            opencode-go)
+              if [ "$HAY_AI_REVIEW" != "true" ]; then
+                echo "::error::AI_REVIEW_API_KEY no está configurada; la ruta opencode-go la requiere" >&2
+                exit 1
+              fi
+              ;;
+            deepseek)
+              if [ "$HAY_DEEPSEEK" != "true" ]; then
+                echo "::error::DEEPSEEK_API_KEY no está configurada; la ruta deepseek la requiere y no cae a AI_REVIEW_API_KEY" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::proveedor fuera de allowlist: $proveedor (opciones: opencode-go, deepseek)" >&2
+              exit 1
+              ;;
+          esac
+          echo "nombre=$proveedor" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -87,13 +124,24 @@ jobs:
 
       - name: Install
         env:
-          PROVIDER: opencode-go
+          PROVIDER: ${{ steps.proveedor.outputs.nombre }}
         run: python3 "$RUNNER_TEMP/reviewer/review.py" install
 
-      - name: Run (medición)
+      - name: Run (medición, opencode-go)
+        if: steps.proveedor.outputs.nombre == 'opencode-go'
         env:
           API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
           PROVIDER: opencode-go
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr }}
+          ATTEMPTS: "2"
+        run: python3 "$RUNNER_TEMP/reviewer/review.py" run --prompt "$RUNNER_TEMP/reviewer/prompt.md"
+
+      - name: Run (medición, deepseek)
+        if: steps.proveedor.outputs.nombre == 'deepseek'
+        env:
+          API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: deepseek
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr }}
           ATTEMPTS: "2"
