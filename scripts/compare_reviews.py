@@ -206,8 +206,8 @@ def main():
         if o["obs"]["costo_usd"] is not None
     ]
 
-    def identidad(clave):
-        return f"{clave[0]}/{clave[1]}/{clave[2]}/intento={clave[3]}"
+    def orden_clave(clave):
+        return (clave[0], clave[1], clave[2], str(clave[3]))
 
     duraciones = [
         o["obs"]["duracion_s"]
@@ -236,10 +236,16 @@ def main():
         },
         "defectos_conocidos": defectos_informe,
         "falsos_resueltos": falsos_resueltos,
-        "cobertura_declarada": {
-            identidad(k): v["obs"]["cobertura"]
-            for k, v in sorted(vistas.items(), key=lambda kv: identidad(kv[0]))
-        },
+        "cobertura_declarada": [
+            {
+                "caso": k[0],
+                "producto": k[1],
+                "configuracion": k[2],
+                "intento": k[3],
+                "cobertura": v["obs"]["cobertura"],
+            }
+            for k, v in sorted(vistas.items(), key=lambda kv: orden_clave(kv[0]))
+        ],
         "tiempo": {
             "duracion_total_s": round(sum(duraciones), 3) if duraciones else None,
             "duracion_desconocidas": len(vistas) - len(duraciones),

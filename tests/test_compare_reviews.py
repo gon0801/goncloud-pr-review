@@ -119,7 +119,15 @@ class Comparador(unittest.TestCase):
         self.assertEqual(informe["defectos_conocidos"]["omitidos"], [])
         self.assertEqual(
             informe["cobertura_declarada"],
-            {"c1/revisor local/v1/intento=1": "complete"},
+            [
+                {
+                    "caso": "c1",
+                    "producto": "revisor local",
+                    "configuracion": "v1",
+                    "intento": 1,
+                    "cobertura": "complete",
+                }
+            ],
         )
         self.assertEqual(informe["tiempo"]["duracion_total_s"], 120.5)
         self.assertEqual(informe["tiempo"]["turnos_total"], 9)
@@ -323,6 +331,44 @@ class ClaveMultiProducto(unittest.TestCase):
         r, _ = correr(corpus, {"observaciones": [o1, o2]}, judg)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("F1", r.stderr)
+
+    def test_coberturas_con_barra_no_colisionan_y_el_orden_es_determinista(self):
+        corpus = {"casos": [caso_simple("c1")]}
+        o1 = obs_simple("c1", "F1")
+        o1["producto"] = "a/b"
+        o1["configuracion"] = "c"
+        o2 = obs_simple("c1", "G1")
+        o2["producto"] = "a"
+        o2["configuracion"] = "b/c"
+        judg = {
+            "adjudicaciones": [
+                {"caso": "c1", "hallazgo": "F1", "veredicto": "valid"},
+                {"caso": "c1", "hallazgo": "G1", "veredicto": "valid"},
+            ],
+            "defectos": {},
+        }
+        r, informe = correr(corpus, {"observaciones": [o1, o2]}, judg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(informe["observaciones"], 2)
+        self.assertEqual(
+            informe["cobertura_declarada"],
+            [
+                {
+                    "caso": "c1",
+                    "producto": "a",
+                    "configuracion": "b/c",
+                    "intento": 1,
+                    "cobertura": "complete",
+                },
+                {
+                    "caso": "c1",
+                    "producto": "a/b",
+                    "configuracion": "c",
+                    "intento": 1,
+                    "cobertura": "complete",
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -71,7 +71,9 @@ recuperación que calcular.
   rechazan con salida 2.
 - La adjudicación es por `(caso, hallazgo)`: un ID de hallazgo no puede
   repetirse entre observaciones del mismo caso (usa IDs distintos por
-  producto); el informe declara cada cobertura por su identidad completa.
+  producto); `cobertura_declarada` es una lista determinista de objetos con
+  `caso`, `producto`, `configuracion`, `intento` y `cobertura`, sin serializar
+  la identidad a una cadena.
 - Sólo se comparan salidas del mismo SHA: base y head de la observación deben
   ser exactamente los del corpus, o el comparador rechaza el par.
 - No hay verdad de referencia externa: la adjudicación humana es la entrada,
