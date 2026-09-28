@@ -4109,3 +4109,72 @@ class PersistenciaSinPerdida(unittest.TestCase):
         self.assertIn("conservada", body, "aviso visible")
         self.assertIn(review.CAUTION_MARK, body)
         self.assertIn("Texto previo.", body)
+
+
+class DesbordeSinMemoriaPrevia(unittest.TestCase):
+    """M1 r3 (B3): desborde sin sticky o con sticky de sólo aviso no truena."""
+
+    def modelo_de_60(self):
+        hallazgos = [
+            {
+                "id": "F-new",
+                "file": f"src/nuevo_{i}.py",
+                "line": i,
+                "severity": "Medium",
+                "title": f"bug nuevo z ñ {i} en el flujo de cobro de la pasarela de pagos con reintentos y reembolsos",
+                "state": "open",
+            }
+            for i in range(1, 61)
+        ]
+        return {
+            "result": review.FINDINGS_PREFIX
+            + json.dumps({"findings": hallazgos, "next": 61}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        }
+
+    def publicar(self, comments):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps(self.modelo_de_60()))
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"])
+                )
+            )
+            with mock.patch.dict(
+                os.environ, {"REPO": "x/y", "PR_NUMBER": "1", "HEAD_SHA": "c" * 40}
+            ):
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+                with (
+                    mock.patch.object(
+                        review, "fetch_all_comments", return_value=comments
+                    ),
+                    mock.patch.object(review, "sh"),
+                ):
+                    review.cmd_publish(argparse.Namespace(work=str(work)))
+            return json.loads((work / "comment.json").read_text())["body"]
+
+    def test_b3_desborde_sin_sticky_publica_banner_sin_memoria(self):
+        body = self.publicar([])
+        self.assertIn(review.MARKER, body)
+        self.assertIn("conservada", body)
+        self.assertIn(review.CAUTION_MARK, body)
+        self.assertNotIn(review.SHA_PREFIX, body, "sin memoria no se marca SHA")
+        self.assertNotIn(review.COMPLETION_PREFIX, body, "no se confirma cobertura")
+        self.assertNotIn("bug nuevo z", body, "no publica la memoria que no cupo")
+
+    def test_b3_desborde_con_sticky_solo_aviso(self):
+        sticky_body = (
+            review.MARKER
+            + "\n"
+            + review.CAUTION_MARK
+            + "\n> **No se pudo revisar el commit abcdef0:** falla de infraestructura."
+        )
+        sticky = {"id": 8, "user": "github-actions[bot]", "body": sticky_body}
+        body = self.publicar([sticky])
+        self.assertIn(review.MARKER, body)
+        self.assertIn("conservada", body)
+        self.assertIn(review.CAUTION_MARK, body)
+        self.assertNotIn(review.SHA_PREFIX, body)
+        self.assertNotIn(review.COMPLETION_PREFIX, body)
+        self.assertNotIn("bug nuevo z", body)
