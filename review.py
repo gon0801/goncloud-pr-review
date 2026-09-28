@@ -1604,9 +1604,18 @@ def cmd_install(args):
         ):
             venv = litellm_venv()
             stage = venv
-            ensure_litellm_venv(venv)
-            with open(os.environ["GITHUB_PATH"], "a") as fh:
-                fh.write(f"{venv / 'bin'}\n")
+            try:
+                ensure_litellm_venv(venv)
+            except (subprocess.CalledProcessError, OSError) as exc:
+                if provider["via_proxy"]:
+                    raise
+                shutil.rmtree(venv, ignore_errors=True)
+                print(
+                    f"::warning::ai-review: no se pudo instalar LiteLLM para el respaldo ({exc})"
+                )
+            else:
+                with open(os.environ["GITHUB_PATH"], "a") as fh:
+                    fh.write(f"{venv / 'bin'}\n")
     except (subprocess.CalledProcessError, OSError) as exc:
         # Drop only the half-built piece: actions/cache saves this dir after the job under a
         # key that is never rewritten, so a broken copy (or an empty dir) would be restored
@@ -1712,29 +1721,32 @@ def cmd_run(args):
     attempt_timeout = int(
         os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
     )
-    quota_exhausted = run_with_provider(
+    primary_failure = run_with_provider(
         name, key, cmd, work, result_path, attempt_timeout, deadline
     )
-    if quota_exhausted:
+    if primary_failure:
+        primary_reason = (
+            f"{name} agotó su cuota"
+            if primary_failure == "quota"
+            else f"el proxy de {name} no arrancó"
+        )
         fallback_key = os.environ.get("FALLBACK_API_KEY", "")
         if not fallback_key:
             soft_fail(
                 result_path,
-                f"{name} agotó su cuota; falta FALLBACK_API_KEY para usar el otro proveedor",
+                f"{primary_reason}; falta FALLBACK_API_KEY para usar el otro proveedor",
             )
             return
         fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
         if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
             soft_fail(
                 result_path,
-                f"{name} agotó su cuota; no queda tiempo para probar {fallback_name}",
+                f"{primary_reason}; no queda tiempo para probar {fallback_name}",
             )
             return
-        print(
-            f"ai-review: {name} agotó su cuota; se cambia a {fallback_name}", flush=True
-        )
+        print(f"ai-review: {primary_reason}; se cambia a {fallback_name}", flush=True)
         cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
-        fallback_quota_exhausted = run_with_provider(
+        fallback_failure = run_with_provider(
             fallback_name,
             fallback_key,
             cmd,
@@ -1743,8 +1755,17 @@ def cmd_run(args):
             attempt_timeout,
             deadline,
         )
-        if fallback_quota_exhausted:
-            soft_fail(result_path, "ambos proveedores agotaron su cuota")
+        if fallback_failure:
+            if primary_failure == fallback_failure == "quota":
+                reason = "ambos proveedores agotaron su cuota"
+            else:
+                fallback_reason = (
+                    f"{fallback_name} agotó su cuota"
+                    if fallback_failure == "quota"
+                    else f"el proxy del respaldo {fallback_name} no arrancó"
+                )
+                reason = f"{primary_reason}; {fallback_reason}"
+            soft_fail(result_path, reason)
         else:
             result = json.loads(result_path.read_text())
             if ERROR_KEY not in result:
@@ -1760,8 +1781,7 @@ def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadli
         session = f"{env('REPO')}#{env('PR_NUMBER')}-{os.environ.get('GITHUB_RUN_ID', 'local')}"
         started = start_proxy(work, provider, key, session)
         if started is None:
-            soft_fail(result_path, "el proxy LiteLLM no arrancó")
-            return False
+            return "proxy-failed"
         proxy, base_url, token = started
         auth = {"ANTHROPIC_AUTH_TOKEN": token}
     else:
@@ -1795,7 +1815,11 @@ def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadli
     )
 
     try:
-        return run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
+        return (
+            "quota"
+            if run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
+            else None
+        )
     finally:
         if proxy:
             proxy.terminate()

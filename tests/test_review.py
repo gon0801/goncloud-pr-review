@@ -1036,6 +1036,37 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn(review.ERROR_KEY, result)
 
+    def test_primary_proxy_failure_uses_direct_deepseek_fallback(self):
+        proc, calls, result, _, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            litellm_script=FAKE_LITELLM_CRASH,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-flash[1m]"]
+        )
+        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["review_provider"], "deepseek")
+
+    def test_fallback_proxy_failure_names_both_failed_providers(self):
+        quota = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            quota,
+            provider="deepseek",
+            FALLBACK_API_KEY="sk-go-key",
+            litellm_script=FAKE_LITELLM_CRASH,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("deepseek", result[review.ERROR_KEY])
+        self.assertIn("proxy", result[review.ERROR_KEY])
+
     def test_max_turns_is_kept_as_partial_result(self):
         proc, calls, result, _, _ = self.run_agent(
             {"result": "", "subtype": "error_max_turns", "is_error": True}
@@ -1298,6 +1329,39 @@ class Install(unittest.TestCase):
             self.assertEqual(
                 path_file.read_text(), f"{prefix / 'bin'}\n{venv / 'bin'}\n"
             )
+
+    def test_failed_fallback_proxy_install_does_not_disable_direct_deepseek(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prefix = tmp / "prefix"
+            (prefix / "bin").mkdir(parents=True)
+            claude = prefix / "bin" / "claude"
+            claude.write_text(
+                '#!/usr/bin/env python3\nprint("2.1.282 (Claude Code)")\n'
+            )
+            claude.chmod(0o755)
+            path_file = tmp / "github_path"
+            path_file.write_text("")
+            venv = tmp / "venv"
+            env = dict(
+                os.environ,
+                PROVIDER="deepseek",
+                FALLBACK_ENABLED="true",
+                CLAUDE_PREFIX=str(prefix),
+                LITELLM_VENV=str(venv),
+                GITHUB_PATH=str(path_file),
+            )
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(
+                    review,
+                    "ensure_litellm_venv",
+                    side_effect=subprocess.CalledProcessError(1, "pip"),
+                ),
+            ):
+                review.cmd_install(argparse.Namespace(work=str(tmp / "work")))
+            self.assertFalse((tmp / "work" / "install_error.txt").exists())
+            self.assertEqual(path_file.read_text(), f"{prefix / 'bin'}\n")
 
     def test_warm_cache_skips_npm_and_pip(self):
         with tempfile.TemporaryDirectory() as tmp:
