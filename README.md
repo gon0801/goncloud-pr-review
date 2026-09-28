@@ -8,8 +8,8 @@ Cada repo lleva un workflow chico (`.github/workflows/ai-review.yml`, copia de `
 
 1. **Gate.** Busca el comentario fijo del bot en el PR. Si ya revisó exactamente ese commit, termina sin gastar tokens.
 2. **Prepare.** Calcula el diff contra el merge-base y saca lockfiles, binarios, `dist/`, `build/` y `vendor/` de la raíz, `node_modules/` a cualquier profundidad, y lo que el repo agregue en `exclude`. Ordena lo restante con el código primero, luego config y al final docs. Si el diff pasa de `max_diff_bytes`, lo que no cabe queda listado como no revisado. También precalcula sin gastar turnos quién usa los símbolos cambiados, qué pruebas los mencionan y las convenciones del repo.
-3. **Install.** Instala Claude Code y LiteLLM con la versión fijada. La caché solo se comparte dentro del mismo PR (así la acota GitHub): la primera revisión de cada PR instala en frío (~45 s) y las siguientes la reusan. El entorno de LiteLLM en caché se prueba antes de usarlo y se reconstruye si no arranca con el Python de la máquina. Si la instalación falla, no tumba el check: sigue el mismo camino suave que cualquier otra falla de infraestructura.
-4. **Review.** Corre `claude -p` con `--restricted --safe-mode --strict-mcp-config --tools Read,Grep,Glob` y un tope de 60 turnos (80 si el diff pasa de 20 archivos o 300 KB; 30 en un push incremental chico). No puede ejecutar código, escribir archivos, salir a la red, ni leer fuera del checkout y del directorio de trabajo. También ignora los settings, hooks, MCP y CLAUDE.md que traiga el PR. Con OpenCode Go, Claude Code habla con un proxy LiteLLM local (versión fijada) que traduce a `/chat/completions`, porque Go solo sirve DeepSeek en formato OpenAI. Solo el proxy tiene la llave; Claude Code recibe un token desechable por corrida. Si falla por algo transitorio, reintenta una vez; si es 400/401/403/404, no reintenta salvo el error de historial `reasoning_content` de OpenCode Go descrito en Problemas comunes. Ninguna de estas fallas tumba el check en rojo: si el equipo del repo no puede arreglarlas (falta la llave, el proxy no arrancó, el proveedor está caído), el job termina en verde con una anotación amarilla y Publish agrega el aviso "No se pudo revisar..." sin marcar el commit como revisado.
+3. **Install.** Instala Claude Code y LiteLLM con la versión fijada. La caché solo se comparte dentro del mismo PR (así la acota GitHub): la primera revisión de cada PR instala en frío (~45 s) y las siguientes la reusan. El entorno de LiteLLM en caché se prueba antes de usarlo y se reconstruye si no arranca con el Python de la máquina. Si solo el respaldo necesita LiteLLM y su instalación falla, la revisión directa sigue disponible. Una falla de la instalación necesaria para el proveedor principal deja un aviso sin tumbar el check.
+4. **Review.** Corre `claude -p` con `--restricted --safe-mode --strict-mcp-config --tools Read,Grep,Glob` y un tope de 60 turnos (80 si el diff pasa de 20 archivos o 300 KB; 30 en un push incremental chico). No puede ejecutar código, escribir archivos, salir a la red, ni leer fuera del checkout y del directorio de trabajo. También ignora los settings, hooks, MCP y CLAUDE.md que traiga el PR. Con OpenCode Go, Claude Code habla con un proxy LiteLLM local (versión fijada) que traduce a `/chat/completions`, porque Go solo sirve DeepSeek en formato OpenAI. Solo el proxy tiene la llave; Claude Code recibe un token desechable por corrida. Los errores de cuota o saldo (HTTP 402/429, o 400/403 con mensaje de cuota) y un fallo al iniciar el proxy cambian al otro proveedor si hay llave de respaldo; la revisión empieza de cero. Otros errores transitorios se reintentan una vez; los 400/401/403/404 restantes no se reintentan salvo el error de historial `reasoning_content` descrito en Problemas comunes. Si ningún proveedor puede completar la revisión, el job queda verde con una anotación amarilla y Publish agrega el aviso "No se pudo revisar..." sin marcar el commit como revisado.
 5. **Publish.** Edita el comentario fijo del PR, o lo crea si no existe. El comentario lleva un marcador oculto con el SHA revisado. Antes de publicar se borra del texto cualquier aparición de la API key o del token. Si el paso anterior falló por algo de infraestructura, este commit no se marca como revisado: si ya había un comentario de una revisión anterior, se le agrega arriba un aviso "No se pudo revisar el commit..." sin tocar la revisión anterior; si no había comentario, se crea uno solo con el aviso. Así la próxima vez (otro push o un "Re-run jobs") se vuelve a intentar sobre este mismo commit.
 
 El prompt de review vive en `prompt.md`. Cada repo puede agregar reglas propias en `.github/ai-review.md`, y esas reglas se leen de la rama base, no del PR. Así un PR no puede cambiar las reglas con las que se le revisa.
@@ -26,11 +26,12 @@ Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_fo
 
 ```bash
 scripts/set-secret.sh gon0801/mi-repo          # pide la key una vez, sin eco
+SECRET_NAME=DEEPSEEK_API_KEY scripts/set-secret.sh gon0801/mi-repo  # llave de respaldo
 scripts/install.sh gon0801/mi-repo             # abre el PR con el workflow
 EXCLUDE=$'data/**\nout/**' scripts/install.sh gon0801/mi-repo   # con exclusiones extra
 ```
 
-El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/auth) o la de DeepSeek (platform.deepseek.com), según el proveedor. En una cuenta personal los secrets van repo por repo.
+`AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración, `DEEPSEEK_API_KEY` guarda la llave de la API directa de DeepSeek y la plantilla la pasa como respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal, hay que sustituir también `fallback_api_key` por `${{ secrets.OPENCODE_GO_API_KEY }}` y guardar allí una llave de OpenCode Go.
 
 ## Operación
 
@@ -44,13 +45,13 @@ El único secret es `AI_REVIEW_API_KEY`: la llave de OpenCode Go (opencode.ai/au
 
 ## Proveedor y costo
 
-**Ahora: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Go cuenta peticiones en ventanas de 5 horas, semana y mes. DeepSeek V4.1 Flash da unas 6,500 peticiones cada 5 horas y 32,500 al mes con la promoción 4× que termina el 27 de septiembre de 2026; sin ella, una cuarta parte. Una revisión gasta unas 20 a 80 peticiones. Cuando la cuota se agota, el check queda en verde con un aviso amarillo hasta que la ventana se renueva, y el merge no se bloquea.
+**Principal: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Si OpenCode responde con un error de cuota o saldo y `DEEPSEEK_API_KEY` está configurado, la revisión comienza de nuevo con la API directa de DeepSeek. El comentario identifica el proveedor que completó la revisión. Si falta la llave de respaldo o ambos proveedores agotan su cuota, el check queda en verde con un aviso amarillo sin marcar el commit como revisado.
 
-**Destino: `provider: deepseek`, la API de DeepSeek, sin cuotas y pagando por uso.** Para cambiar:
+**Alternativa: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal:
 
 1. Carga saldo en platform.deepseek.com y crea una llave.
 2. Corre `scripts/set-secret.sh` con la llave nueva en los mismos repos.
-3. Cambia el default de `provider` en `action.yml` a `deepseek`. Ese proveedor habla formato Anthropic directo, sin proxy.
+3. Pasa `provider: deepseek` en el workflow y usa esa llave como `AI_REVIEW_API_KEY`. Para conservar el respaldo en sentido contrario, guarda la llave de OpenCode Go con `SECRET_NAME=OPENCODE_GO_API_KEY scripts/set-secret.sh gon0801/mi-repo` y cambia el input a `fallback_api_key: ${{ secrets.OPENCODE_GO_API_KEY }}`.
 
 Con la API de DeepSeek ($0.30/M de entrada, $0.006/M en caché, $1.20/M de salida en hora pico, la mitad fuera de pico), una revisión típica cuesta unos $0.05, y el mes queda en $50 a $150 para ~2,000 revisiones. Cada comentario trae en "Alcance de la revisión" los turnos (usados/tope) y los tokens de esa revisión, y con la API de DeepSeek también el costo aproximado. Los repos públicos no gastan minutos de Actions; en los privados, cada revisión toma unos 4 a 9 minutos del plan según el tamaño del diff.
 
@@ -58,7 +59,7 @@ Con la API de DeepSeek ($0.30/M de entrada, $0.006/M en caché, $1.20/M de salid
 
 Las fallas que el repo no puede arreglar (falta la llave, el proxy no arrancó, el binario de Claude Code no se instaló, el proveedor está caído, un error permanente del API) nunca tumban el check en rojo ni lo dejan "omitido": el job termina en verde con una anotación amarilla (`::warning::ai-review: ...` en el log del paso "Review"), y si ya había una revisión previa de este PR, el comentario fijo le agrega arriba un aviso "No se pudo revisar el commit..." sin borrar la revisión anterior. El commit no queda marcado como revisado, así que el siguiente push (o un "Re-run jobs") lo vuelve a intentar.
 
-Con OpenCode Go, el HTTP 400 que pide devolver `reasoning_content` indica que el proveedor rechazó el historial de razonamiento de la conversación. El bot puede iniciar una conversación nueva dentro del límite de intentos y del tiempo disponible. Si vuelve a fallar, el aviso identifica ese problema; los demás errores 400 y los errores 401, 403 y 404 siguen sin reintentarse.
+Con OpenCode Go, el HTTP 400 que pide devolver `reasoning_content` indica que el proveedor rechazó el historial de razonamiento de la conversación. El bot puede iniciar una conversación nueva dentro del límite de intentos y del tiempo disponible. Si vuelve a fallar, el aviso identifica ese problema. Los HTTP 402/429 y los 400/403 con mensaje de cuota prueban el respaldo; los demás 400 y los 401, 403 y 404 no se reintentan.
 
 | Síntoma | Causa probable |
 |---|---|

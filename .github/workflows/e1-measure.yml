@@ -1,0 +1,176 @@
+# E1a: medición del revisor sobre un caso del corpus, sin publicar nada.
+# Garantía de no publicación, por diseño, en dos capas:
+# 1) no existe paso de publicación (prepare/install/run solamente) y
+# 2) el GITHUB_TOKEN del workflow sólo tiene contents: read, sin permiso de
+#    escritura en PRs, así que ni siquiera podría comentar.
+# El secreto de la ruta elegida sólo viaja como env del paso "run" de esa
+# ruta; la validación temprana lo compara contra vacío sin leer su valor y
+# una ruta nunca cae a la llave de la otra.
+# No dispara ai-review.yml: ese sólo corre en eventos pull_request.
+name: E1 measure
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Número de PR del corpus"
+        required: true
+      head:
+        description: "SHA de 40 hex de la punta revisada"
+        required: true
+      base:
+        description: "SHA de 40 hex del estado de main al merge"
+        required: true
+      caso:
+        description: "Etiqueta del caso del corpus (p. ej. pr2)"
+        required: true
+      proveedor:
+        description: "Proveedor del revisor; claves de PROVIDERS en review.py"
+        type: choice
+        default: opencode-go
+        options:
+          - opencode-go
+          - deepseek
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e1-measure-${{ inputs.caso }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validar proveedor y ruta de secreto
+        id: proveedor
+        env:
+          PROVEEDOR_RAW: ${{ inputs.proveedor }}
+          HAY_AI_REVIEW: ${{ secrets.AI_REVIEW_API_KEY != '' }}
+          HAY_DEEPSEEK: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: |
+          proveedor="$(printf '%s' "$PROVEEDOR_RAW" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          case "$proveedor" in
+            opencode-go)
+              if [ "$HAY_AI_REVIEW" != "true" ]; then
+                echo "::error::AI_REVIEW_API_KEY no está configurada; la ruta opencode-go la requiere" >&2
+                exit 1
+              fi
+              ;;
+            deepseek)
+              if [ "$HAY_DEEPSEEK" != "true" ]; then
+                echo "::error::DEEPSEEK_API_KEY no está configurada; la ruta deepseek la requiere y no cae a AI_REVIEW_API_KEY" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::proveedor fuera de allowlist: $proveedor (opciones: opencode-go, deepseek)" >&2
+              exit 1
+              ;;
+          esac
+          echo "nombre=$proveedor" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: SHAs cortos para nombres
+        id: sha
+        run: |
+          HEAD="${{ inputs.head }}"
+          echo "corto=${HEAD:0:8}" >> "$GITHUB_OUTPUT"
+
+      - name: Revisor fijo fuera del árbol medido
+        run: |
+          mkdir -p "$RUNNER_TEMP/reviewer"
+          cp review.py prompt.md "$RUNNER_TEMP/reviewer/"
+
+      - name: Mover el árbol al head del PR y verificar SHAs
+        run: |
+          git cat-file -e "${{ inputs.head }}^{commit}" 2>/dev/null || \
+            git fetch --no-tags --quiet origin "pull/${{ inputs.pr }}/head"
+          git cat-file -e "${{ inputs.head }}^{commit}"
+          git cat-file -e "${{ inputs.base }}^{commit}"
+          git checkout --detach "${{ inputs.head }}"
+
+      - name: Evento fiel para prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr }}" \
+            --jq '{pull_request:{title:.title,body:.body}}' > /tmp/e1-event.json
+
+      - name: Preparar diff y contexto
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+          BASE_SHA: ${{ inputs.base }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr }}
+          GITHUB_EVENT_PATH: /tmp/e1-event.json
+        run: python3 "$RUNNER_TEMP/reviewer/review.py" prepare --prompt "$RUNNER_TEMP/reviewer/prompt.md"
+
+      - name: Python version for the install cache key
+        id: py
+        run: echo "version=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache install (Claude Code npm prefix and LiteLLM venv)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ai-review
+          key: ai-review-install-${{ runner.os }}-py${{ steps.py.outputs.version }}-claude-2.1.282-litellm-1.102.1
+
+      - name: Install
+        env:
+          PROVIDER: ${{ steps.proveedor.outputs.nombre }}
+        run: python3 "$RUNNER_TEMP/reviewer/review.py" install
+
+      - name: Run (medición, opencode-go)
+        if: steps.proveedor.outputs.nombre == 'opencode-go'
+        env:
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          PROVIDER: opencode-go
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr }}
+          ATTEMPTS: "2"
+        run: python3 "$RUNNER_TEMP/reviewer/review.py" run --prompt "$RUNNER_TEMP/reviewer/prompt.md"
+
+      - name: Run (medición, deepseek)
+        if: steps.proveedor.outputs.nombre == 'deepseek'
+        env:
+          API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: deepseek
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr }}
+          ATTEMPTS: "2"
+        run: python3 "$RUNNER_TEMP/reviewer/review.py" run --prompt "$RUNNER_TEMP/reviewer/prompt.md"
+
+      - name: Resumen (sin contenido de hallazgos)
+        env:
+          CASO: ${{ inputs.caso }}
+          HEAD: ${{ inputs.head }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          work = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "ai-review"
+          r = json.loads((work / "result.json").read_text())
+          resumen = {
+              "caso": os.environ["CASO"],
+              "head": os.environ["HEAD"],
+              "subtype": r.get("subtype"),
+              "turnos": r.get("num_turns"),
+          }
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write("```json\n" + json.dumps(resumen, indent=2) + "\n```\n")
+          PY
+
+      - name: Subir salidas del caso
+        uses: actions/upload-artifact@v4
+        with:
+          name: e1-salida-${{ inputs.caso }}-${{ steps.sha.outputs.corto }}
+          path: |
+            ${{ runner.temp }}/ai-review/result.json
+            ${{ runner.temp }}/ai-review/manifest.json
