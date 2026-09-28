@@ -1,0 +1,443 @@
+{
+  "meta": {
+    "que_es": "correspondencia hoja↔fuente de la adjudicación ciega",
+    "advertencia": "ningún participante de la adjudicación debe abrir este archivo; sólo lo audita el operador al cierre",
+    "semilla": 20260927
+  },
+  "filas": [
+    {
+      "blind_id": "H-001",
+      "caso": "pr24",
+      "producto": "revisor",
+      "hallazgo_id": "pr24-R01",
+      "procedencia": "run 36374928480"
+    },
+    {
+      "blind_id": "H-002",
+      "caso": "pr9",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr9-C02",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-003",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R01",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-004",
+      "caso": "pr13",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr13-C02",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-005",
+      "caso": "pr2",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr2-C02",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-006",
+      "caso": "pr25",
+      "producto": "revisor",
+      "hallazgo_id": "pr25-R01",
+      "procedencia": "original-conservada"
+    },
+    {
+      "blind_id": "H-007",
+      "caso": "pr22",
+      "producto": "revisor",
+      "hallazgo_id": "pr22-R01",
+      "procedencia": "run 36374878301"
+    },
+    {
+      "blind_id": "H-008",
+      "caso": "pr2",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr2-C01",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-009",
+      "caso": "pr2",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr2-C03",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-010",
+      "caso": "pr4",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr4-C03",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-011",
+      "caso": "pr9",
+      "producto": "revisor",
+      "hallazgo_id": "pr9-R01",
+      "procedencia": "run 36374343611"
+    },
+    {
+      "blind_id": "H-012",
+      "caso": "pr28",
+      "producto": "revisor",
+      "hallazgo_id": "pr28-R02",
+      "procedencia": "run 36374993883"
+    },
+    {
+      "blind_id": "H-013",
+      "caso": "pr30",
+      "producto": "revisor",
+      "hallazgo_id": "pr30-R04",
+      "procedencia": "run 36375033109"
+    },
+    {
+      "blind_id": "H-014",
+      "caso": "pr13",
+      "producto": "revisor",
+      "hallazgo_id": "pr13-R01",
+      "procedencia": "run 36374583653"
+    },
+    {
+      "blind_id": "H-015",
+      "caso": "pr9",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr9-C03",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-016",
+      "caso": "pr14",
+      "producto": "revisor",
+      "hallazgo_id": "pr14-R01",
+      "procedencia": "run 36374607020"
+    },
+    {
+      "blind_id": "H-017",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R02",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-018",
+      "caso": "pr2",
+      "producto": "revisor",
+      "hallazgo_id": "pr2-R03",
+      "procedencia": "run 36373925421"
+    },
+    {
+      "blind_id": "H-019",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R06",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-020",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R04",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-021",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R05",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-022",
+      "caso": "pr31",
+      "producto": "revisor",
+      "hallazgo_id": "pr31-R03",
+      "procedencia": "run 36375108760"
+    },
+    {
+      "blind_id": "H-023",
+      "caso": "pr4",
+      "producto": "revisor",
+      "hallazgo_id": "pr4-R04",
+      "procedencia": "run 36374294882"
+    },
+    {
+      "blind_id": "H-024",
+      "caso": "pr29",
+      "producto": "revisor",
+      "hallazgo_id": "pr29-R02",
+      "procedencia": "run 36375014298"
+    },
+    {
+      "blind_id": "H-025",
+      "caso": "pr10",
+      "producto": "revisor",
+      "hallazgo_id": "pr10-R02",
+      "procedencia": "run 36374370549"
+    },
+    {
+      "blind_id": "H-026",
+      "caso": "pr28",
+      "producto": "revisor",
+      "hallazgo_id": "pr28-R03",
+      "procedencia": "run 36374993883"
+    },
+    {
+      "blind_id": "H-027",
+      "caso": "pr28",
+      "producto": "revisor",
+      "hallazgo_id": "pr28-R04",
+      "procedencia": "run 36374993883"
+    },
+    {
+      "blind_id": "H-028",
+      "caso": "pr13",
+      "producto": "revisor",
+      "hallazgo_id": "pr13-R02",
+      "procedencia": "run 36374583653"
+    },
+    {
+      "blind_id": "H-029",
+      "caso": "pr2",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr2-C04",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-030",
+      "caso": "pr27",
+      "producto": "revisor",
+      "hallazgo_id": "pr27-R02",
+      "procedencia": "original-conservada"
+    },
+    {
+      "blind_id": "H-031",
+      "caso": "pr13",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr13-C01",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-032",
+      "caso": "pr20",
+      "producto": "revisor",
+      "hallazgo_id": "pr20-R01",
+      "procedencia": "run 36374653444"
+    },
+    {
+      "blind_id": "H-033",
+      "caso": "pr4",
+      "producto": "revisor",
+      "hallazgo_id": "pr4-R03",
+      "procedencia": "run 36374294882"
+    },
+    {
+      "blind_id": "H-034",
+      "caso": "pr9",
+      "producto": "revisor",
+      "hallazgo_id": "pr9-R02",
+      "procedencia": "run 36374343611"
+    },
+    {
+      "blind_id": "H-035",
+      "caso": "pr30",
+      "producto": "revisor",
+      "hallazgo_id": "pr30-R02",
+      "procedencia": "run 36375033109"
+    },
+    {
+      "blind_id": "H-036",
+      "caso": "pr2",
+      "producto": "revisor",
+      "hallazgo_id": "pr2-R02",
+      "procedencia": "run 36373925421"
+    },
+    {
+      "blind_id": "H-037",
+      "caso": "pr30",
+      "producto": "revisor",
+      "hallazgo_id": "pr30-R01",
+      "procedencia": "run 36375033109"
+    },
+    {
+      "blind_id": "H-038",
+      "caso": "pr8",
+      "producto": "revisor",
+      "hallazgo_id": "pr8-R01",
+      "procedencia": "run 36374321749"
+    },
+    {
+      "blind_id": "H-039",
+      "caso": "pr2",
+      "producto": "revisor",
+      "hallazgo_id": "pr2-R05",
+      "procedencia": "run 36373925421"
+    },
+    {
+      "blind_id": "H-040",
+      "caso": "pr30",
+      "producto": "revisor",
+      "hallazgo_id": "pr30-R03",
+      "procedencia": "run 36375033109"
+    },
+    {
+      "blind_id": "H-041",
+      "caso": "pr26",
+      "producto": "revisor",
+      "hallazgo_id": "pr26-R01",
+      "procedencia": "original-conservada"
+    },
+    {
+      "blind_id": "H-042",
+      "caso": "pr2",
+      "producto": "revisor",
+      "hallazgo_id": "pr2-R01",
+      "procedencia": "run 36373925421"
+    },
+    {
+      "blind_id": "H-043",
+      "caso": "pr10",
+      "producto": "revisor",
+      "hallazgo_id": "pr10-R01",
+      "procedencia": "run 36374370549"
+    },
+    {
+      "blind_id": "H-044",
+      "caso": "pr22",
+      "producto": "revisor",
+      "hallazgo_id": "pr22-R03",
+      "procedencia": "run 36374878301"
+    },
+    {
+      "blind_id": "H-045",
+      "caso": "pr24",
+      "producto": "revisor",
+      "hallazgo_id": "pr24-R02",
+      "procedencia": "run 36374928480"
+    },
+    {
+      "blind_id": "H-046",
+      "caso": "pr29",
+      "producto": "revisor",
+      "hallazgo_id": "pr29-R01",
+      "procedencia": "run 36375014298"
+    },
+    {
+      "blind_id": "H-047",
+      "caso": "pr4",
+      "producto": "revisor",
+      "hallazgo_id": "pr4-R01",
+      "procedencia": "run 36374294882"
+    },
+    {
+      "blind_id": "H-048",
+      "caso": "pr2",
+      "producto": "revisor",
+      "hallazgo_id": "pr2-R04",
+      "procedencia": "run 36373925421"
+    },
+    {
+      "blind_id": "H-049",
+      "caso": "pr24",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr24-C01",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-050",
+      "caso": "pr24",
+      "producto": "revisor",
+      "hallazgo_id": "pr24-R03",
+      "procedencia": "run 36374928480"
+    },
+    {
+      "blind_id": "H-051",
+      "caso": "pr19",
+      "producto": "revisor",
+      "hallazgo_id": "pr19-R01",
+      "procedencia": "run 36374630332"
+    },
+    {
+      "blind_id": "H-052",
+      "caso": "pr4",
+      "producto": "revisor",
+      "hallazgo_id": "pr4-R02",
+      "procedencia": "run 36374294882"
+    },
+    {
+      "blind_id": "H-053",
+      "caso": "pr27",
+      "producto": "revisor",
+      "hallazgo_id": "pr27-R01",
+      "procedencia": "original-conservada"
+    },
+    {
+      "blind_id": "H-054",
+      "caso": "pr28",
+      "producto": "revisor",
+      "hallazgo_id": "pr28-R01",
+      "procedencia": "run 36374993883"
+    },
+    {
+      "blind_id": "H-055",
+      "caso": "pr9",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr9-C01",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-056",
+      "caso": "pr4",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr4-C01",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    },
+    {
+      "blind_id": "H-057",
+      "caso": "pr13",
+      "producto": "revisor",
+      "hallazgo_id": "pr13-R03",
+      "procedencia": "run 36374583653"
+    },
+    {
+      "blind_id": "H-058",
+      "caso": "pr19",
+      "producto": "revisor",
+      "hallazgo_id": "pr19-R02",
+      "procedencia": "run 36374630332"
+    },
+    {
+      "blind_id": "H-059",
+      "caso": "pr24",
+      "producto": "revisor",
+      "hallazgo_id": "pr24-R04",
+      "procedencia": "run 36374928480"
+    },
+    {
+      "blind_id": "H-060",
+      "caso": "pr29",
+      "producto": "revisor",
+      "hallazgo_id": "pr29-R03",
+      "procedencia": "run 36375014298"
+    },
+    {
+      "blind_id": "H-061",
+      "caso": "pr22",
+      "producto": "revisor",
+      "hallazgo_id": "pr22-R02",
+      "procedencia": "run 36374878301"
+    },
+    {
+      "blind_id": "H-062",
+      "caso": "pr4",
+      "producto": "coderabbit",
+      "hallazgo_id": "pr4-C02",
+      "procedencia": "comentarios existentes en el SHA exacto"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "base": "2a0e7d80796b1c5ae74a91f7d700f28b5b85004e",
+  "head": "9bf2c3d18724c021bd53ff8df223b58273b2a027",
+  "reviewed": [
+    "tests/test_review.py",
+    "docs/evidence/reviewer/P0.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 13244,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

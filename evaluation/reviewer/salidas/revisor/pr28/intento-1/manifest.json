@@ -1,0 +1,18 @@
+{
+  "base": "21780a27503967dd0f7327ac5e128c565310f958",
+  "head": "164fc79b56dacbd7a93fa8f049f4a72fcba16b8d",
+  "reviewed": [
+    "scripts/run_test_shard.py",
+    "tests/test_test_shards.py",
+    ".github/workflows/ci.yml",
+    "docs/evidence/reviewer/Q0.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 16174,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

@@ -1,0 +1,18 @@
+{
+  "base": "93959b6ed5a99c3e693c6ca8244b07b9ed26fe7e",
+  "head": "af485362302d140e7f5a36de05a6d891e8d51a27",
+  "reviewed": [
+    "scripts/compare_reviews.py",
+    "tests/test_compare_reviews.py",
+    "docs/evidence/reviewer/E0.md",
+    "evaluation/reviewer/README.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 29460,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

@@ -147,7 +147,7 @@ Los comandos se habilitan al instalar su workflow en U1 y se deshabilitan retira
 
 ## E1. Congelar la medición inicial
 
-**Archivos:** crea `evaluation/reviewer/corpus.json`, `evaluation/reviewer/judgments.jsonl` y `docs/evidence/reviewer/E1.md`.
+**Archivos:** crea `evaluation/reviewer/corpus.json`, `evaluation/reviewer/judgments.json` (un único objeto JSON, mismo contrato que `--judgments` de E0) y `docs/evidence/reviewer/E1.md`.
 **Entrada:** E0 y salidas capturadas con acceso autorizado. **Salida:** corpus y baseline congelados.
 
 - [ ] Selecciona 30 PRs, con al menos diez pares de pushes. Incluye casos limpios, renombres, reversiones, cortes anteriores y cambios entre módulos.

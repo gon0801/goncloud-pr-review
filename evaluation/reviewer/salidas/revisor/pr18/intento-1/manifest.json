@@ -1,0 +1,15 @@
+{
+  "base": "b805a5756903df24b2154845472095ffe80aa422",
+  "head": "8bf6bd89be5c4e14a6517c8d2ad6415f523e2153",
+  "reviewed": [
+    ".gitignore"
+  ],
+  "excluded": [],
+  "diff_bytes": 147,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}
