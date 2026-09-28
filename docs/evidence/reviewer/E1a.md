@@ -42,7 +42,7 @@ Misma secuencia que `action.yml` sin `gate` ni publicación: `prepare` → `inst
 - No corre `gate` (medición fresca por dispatch).
 - No corre `publish` y no tiene alcance para hacerlo: publica cero comentarios.
 - No dispara `ai-review.yml` (éste sólo corre en `pull_request`).
-- No imprime ni transmite el valor de ningún secreto: la validación sólo los compara contra vacío y cada ruta pasa el suyo como env de su paso `run`.
+- Esta enmienda no ejecuta mediciones ni imprime o publica valores de secretos. Cuando se ejecuta una medición, `run` usa la llave para autenticar la solicitud y la transmite al proveedor seleccionado: la validación sólo compara los secretos contra vacío y cada ruta pasa el suyo como env de su paso `run`.
 
 ## TDD
 
