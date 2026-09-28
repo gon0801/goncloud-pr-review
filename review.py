@@ -1866,6 +1866,26 @@ def quota_error(result):
     )
 
 
+# F0: identidad y evidencia. El dominio trae match_finding / accept_report /
+# validar_reporte; el adaptador construye los RepositoryFacts con Git. El modo
+# `finding_identity=anchors` requiere estado v2 y se activa sólo en el CIERRE:
+# desactivado (por defecto) el camino de memoria es el legado de siempre.
+FINDING_IDENTITY = "titles"
+
+
+def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None):
+    """RepositoryFacts que el adaptador verifica con Git (F0)."""
+    return review_domain.RepositoryFacts(
+        revision=review_domain.Revision(
+            base_sha=manifest.get("base"), head_sha=manifest.get("head")
+        ),
+        changed_paths=tuple(manifest.get("reviewed", []) or []),
+        reverted_paths=tuple(reverted_files or ()),
+        renames=tuple(renames or ()),
+        blobs=dict(blobs or {}),
+    )
+
+
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
     """Merge previous state with the model's block. Broken block: keep last parseable (B6).
 

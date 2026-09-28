@@ -744,7 +744,7 @@ def _observacion(titulo, ruta="src/app.py", **kw):
 
 class IdentidadDeHallazgos(unittest.TestCase):
     def hechos(self, renames=()):
-        return domain.RepositoryFacts(renames=dict(renames))
+        return domain.RepositoryFacts(renames=tuple(renames))
 
     def previos(self):
         return [
@@ -853,7 +853,7 @@ class IdentidadDeHallazgos(unittest.TestCase):
 
 
 class CitasYEvidencia(unittest.TestCase):
-    BLOB = ("def pagar():\n", "    uso del IVA sin validar\n", "    return total\n")
+    BLOB = ("def pagar():", "    uso del IVA sin validar", "    return total")
 
     def hechos(self):
         return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): self.BLOB})
@@ -879,7 +879,7 @@ class CitasYEvidencia(unittest.TestCase):
     def test_cita_valida_queda_etiquetada_como_ubicacion_verificada(self):
         import hashlib
 
-        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         report = domain.validar_reporte(
             [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
         )
@@ -892,12 +892,20 @@ class CitasYEvidencia(unittest.TestCase):
             [self.observacion_con_cita("d" * 64)], domain.UNKNOWN, self.hechos()
         )
         self.assertTrue(report.rechazadas)
-        self.assertEqual(report.observations[0].evidence, [])
+        tipos = [type(e) for e in report.observations[0].evidence]
+        self.assertNotIn(
+            domain.EvidenceSource, tipos, "la cita rechazada no queda como evidencia"
+        )
+        self.assertIn(
+            domain.EvidenceUnverified,
+            tipos,
+            "lo no comprobable queda etiquetado aparte",
+        )
 
     def test_afirmacion_sin_evidencia_comprobable_queda_etiquetada(self):
         import hashlib
 
-        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         report = domain.validar_reporte(
             [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
         )
@@ -907,7 +915,7 @@ class CitasYEvidencia(unittest.TestCase):
     def test_cita_existente_con_interpretacion_falsa_no_marca_reproducido(self):
         import hashlib
 
-        digest = hashlib.sha256(self.BLOB[1].strip().encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         previos = [
             domain.Finding(
                 id="F1",

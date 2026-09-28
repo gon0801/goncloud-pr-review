@@ -13,9 +13,10 @@ camino con pérdida: si el estado no cabe en el tope de 8000 bytes UTF-8 se
 devuelve CapacityExceeded y el llamador conserva el último estado válido.
 """
 
+import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 FINDINGS_PREFIX = "<!-- ai-review:findings="
 FINDINGS_SUFFIX = " -->"
@@ -770,3 +771,305 @@ def encode_snapshot(snapshot):
     if needed > FINDINGS_MAX_BYTES:
         return CapacityExceeded(limit=FINDINGS_MAX_BYTES, needed=needed)
     return bloque
+
+
+# ---- F0: identidad, evidencia y resolución ----
+
+
+@dataclass
+class Observation:
+    """Lo que el modelo reporta por hallazgo, antes de validar."""
+
+    title: str
+    severity: str
+    primary_anchor: object
+    related_anchors: list = field(default_factory=list)
+    cause_hint: str | None = None
+    evidence: list = field(default_factory=list)
+    claim: str = OPEN
+
+
+@dataclass
+class MatchExisting:
+    id: str
+
+
+@dataclass
+class MatchNew:
+    pass
+
+
+@dataclass
+class MatchAmbiguous:
+    ids: tuple
+
+
+@dataclass
+class RepositoryFacts:
+    """Hechos del repositorio que el adaptador verifica con Git.
+
+    El dominio no ejecuta comandos: recibe la revisión, el delta real,
+    correspondencias de renombres confirmadas (pares ruta_nueva -> ruta_vieja)
+    y los blobs ya leídos (por (ruta, blob_sha)) para validar las citas.
+    """
+
+    revision: Revision | None = None
+    changed_paths: tuple = ()
+    reverted_paths: tuple = ()
+    renames: tuple = ()
+    blobs: dict = field(default_factory=dict)
+
+
+@dataclass
+class ReviewPlan:
+    revision: Revision | None = None
+    basis_generation: int = 0
+    mode: str = "full"
+    previous_sha: str | None = None
+    changed_paths: tuple = ()
+    obligations: tuple = ()
+    context_refs: tuple = ()
+    exclusions: tuple = ()
+
+
+@dataclass
+class ReviewPolicy:
+    """Filtros, presupuestos, digest de reglas y controles de activación."""
+
+    finding_identity: str = "titles"
+    findings_max_count: int = FINDINGS_MAX_COUNT
+    findings_max_bytes: int = FINDINGS_MAX_BYTES
+    rules_digest: str = ""
+    exclude_patterns: tuple = ()
+    allow_inline_comments: bool = False
+
+
+@dataclass
+class ValidatedReport:
+    """El reporte del modelo con las citas ya validadas contra los blobs.
+
+    `observations` trae la evidencia filtrada: las citas verificadas quedan
+    como `EvidenceSource`; lo no comprobable viaja etiquetado aparte como
+    `EvidenceUnverified`; las citas rechazadas se listan en `rechazadas`.
+    """
+
+    facts: RepositoryFacts
+    observations: list
+    claimed_coverage: str = UNKNOWN
+    rechazadas: tuple = ()
+
+
+def _ruta_primaria(algo):
+    anchor = getattr(algo, "primary_anchor", None)
+    return anchor.path if anchor is not None else ""
+
+
+def validar_reporte(observaciones, cobertura, facts):
+    """Valida ruta, blob, rango y digest del extracto contra los blobs que el
+    adaptador verificó. Una cita que no verifica se rechaza (y no queda como
+    evidencia); las afirmaciones sin evidencia comprobable viajan etiquetadas
+    aparte como EvidenceUnverified. La ubicación verificada prueba que la cita
+    existe, nunca que el diagnóstico sea correcto.
+    """
+    observadas, rechazadas = [], []
+    for i, obs in enumerate(observaciones):
+        evidencia = []
+        for e in obs.evidence:
+            if isinstance(e, EvidenceSource) and isinstance(e.anchor, AnchorLocated):
+                lineas = facts.blobs.get((e.anchor.path, e.anchor.blob_sha))
+                if lineas is None:
+                    rechazadas.append((i, "blob no verificado por el adaptador"))
+                    continue
+                a, b = e.anchor.range
+                if not (
+                    isinstance(a, int)
+                    and isinstance(b, int)
+                    and not isinstance(a, bool)
+                    and not isinstance(b, bool)
+                    and 1 <= a <= b <= len(lineas)
+                ):
+                    rechazadas.append((i, "rango fuera del blob"))
+                    continue
+                extracto = "\n".join(lineas[a - 1 : b])
+                digest = hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+                if digest != e.anchor.excerpt_digest:
+                    rechazadas.append((i, "el digest del extracto no coincide"))
+                    continue
+                evidencia.append(e)
+            else:
+                evidencia.append(e)
+        observadas.append(replace(obs, evidence=tuple(evidencia)))
+    return ValidatedReport(
+        facts=facts,
+        observations=observadas,
+        claimed_coverage=cobertura,
+        rechazadas=tuple(rechazadas),
+    )
+
+
+def _rutas_posibles(observation, facts):
+    ruta = _ruta_primaria(observation)
+    rutas = {ruta}
+    for nueva, vieja in facts.renames:
+        if ruta == nueva:
+            rutas.add(vieja)
+    return rutas
+
+
+def match_finding(previous, observation, facts):
+    """Coincidencia determinista, sin similitud semántica.
+
+    Manda título+ruta (con renombres confirmados). Título y causa propuesta
+    son presentación/pista, no identidad. Un solo candidato en la ruta consigue
+    el id aunque el título cambie; dos o más candidatos plausibles devuelven
+    Ambiguous sin fusionar. Los descartes nunca se adoptan como nuevos: si la
+    observación corresponde a un descartado, matchea Existing y el aceptador
+    lo conserva tal cual.
+    """
+    rutas = _rutas_posibles(observation, facts)
+    titulo = observation.title.casefold()
+    previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
+    # candidatos fuertes: título+ruta (incluye descartados: si la observación
+    # es de un descartado, matchea Existing y el aceptador lo conserva sin
+    # revivirlo). El desempate débil por ruta sólo considera vigentes: un
+    # descartado jamás adopta un reporte que no lo identifica.
+    fuertes = [f for f in previos_todos if f.title.casefold() == titulo]
+    if len(fuertes) == 1:
+        return MatchExisting(id=fuertes[0].id)
+    if len(fuertes) > 1:
+        return MatchAmbiguous(ids=tuple(sorted(f.id for f in fuertes)))
+    previos = [f for f in previos_todos if not isinstance(f.status, StatusDismissed)]
+    if len(previos) == 1:
+        return MatchExisting(id=previos[0].id)
+    if len(previos) > 1:
+        causa = (observation.cause_hint or "").casefold()
+        con_causa = (
+            [f for f in previos if (f.cause_hint or "").casefold() == causa]
+            if causa
+            else []
+        )
+        if len(con_causa) == 1:
+            return MatchExisting(id=con_causa[0].id)
+        return MatchAmbiguous(ids=tuple(sorted(f.id for f in previos)))
+    return MatchNew()
+
+
+def _cambio_pertinente(finding, cambiadas):
+    rutas = {_ruta_primaria(finding)} | {a.path for a in finding.related_anchors}
+    return bool(rutas & set(cambiadas))
+
+
+def accept_report(current, plan, report):
+    """Acepta el reporte validado y devuelve la Transition del estado.
+
+    Requiere estado v2 (schema 2): en legado devuelve Keep. El programa asigna
+    los ids; título y causa son mutables. Resolver exige cambio pertinente o
+    reversión exacta; la evaluación del modelo queda etiquetada como
+    UnverifiedClaim. Un match Ambiguous entra como hallazgo separado con la
+    indicación de posible duplicado, sin fusionar. Los descartes nunca
+    reaparecen.
+    """
+    if current.schema != 2:
+        return Keep(reason="el reconocimiento de identidad requiere estado v2")
+    facts = report.facts
+    revertidas = set(facts.reverted_paths)
+    cambiadas = set(plan.changed_paths) | revertidas
+    findings = list(current.findings)
+    por_id = {f.id: f for f in findings if f.id}
+    tocados, next_id = set(), current.next_id
+    for obs in report.observations:
+        match = match_finding(findings, obs, facts)
+        if isinstance(match, MatchExisting):
+            fid = match.id
+            previo = por_id.get(fid)
+            if previo is None or fid in tocados:
+                continue  # primera mención gana (el modelo repitió)
+            if isinstance(previo.status, StatusDismissed):
+                continue  # un descarte confirmado no reaparece
+            tocados.add(fid)
+            evidencia = tuple(obs.evidence)
+            reverting = _cambio_pertinente(previo, revertidas)
+            if isinstance(previo.status, StatusResolved) and not reverting:
+                estado = previo.status  # la resolución por reversión se conserva
+            elif reverting:
+                estado = StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                )
+            elif obs.claim == RESOLVED and not _cambio_pertinente(previo, cambiadas):
+                evidencia = evidencia + (
+                    EvidenceUnverified(
+                        text="el modelo lo evalúa resuelto; sin cambio pertinente registrado"
+                    ),
+                )
+                estado = StatusOpen()
+            elif obs.claim == RESOLVED:
+                estado = StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                )
+            else:
+                estado = StatusOpen()
+            ancla = (
+                obs.primary_anchor
+                if isinstance(obs.primary_anchor, AnchorLocated)
+                else previo.primary_anchor
+            )
+            relacionadas = tuple(obs.related_anchors) or previo.related_anchors
+            findings[findings.index(previo)] = replace(
+                previo,
+                title=obs.title,
+                severity=obs.severity,
+                cause_hint=obs.cause_hint,
+                primary_anchor=ancla,
+                related_anchors=relacionadas,
+                evidence=evidencia,
+                status=estado,
+            )
+            continue
+        if isinstance(match, MatchAmbiguous):
+            causa = "posible duplicado de " + ", ".join(match.ids)
+            obs = replace(
+                obs,
+                cause_hint=(f"{obs.cause_hint}; {causa}" if obs.cause_hint else causa),
+            )
+        else:
+            obs = replace(obs)
+        nueva = Finding(
+            id=f"F{next_id}",
+            title=obs.title,
+            severity=obs.severity,
+            status=StatusOpen(),
+            primary_anchor=obs.primary_anchor,
+            related_anchors=tuple(obs.related_anchors),
+            cause_hint=obs.cause_hint,
+            evidence=tuple(obs.evidence),
+        )
+        next_id += 1
+        findings.append(nueva)
+    for i, f in enumerate(findings):
+        if f.id in tocados or isinstance(f.status, StatusDismissed):
+            continue
+        if _ruta_primaria(f) in revertidas and not isinstance(f.status, StatusResolved):
+            findings[i] = replace(
+                f,
+                status=StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                ),
+            )
+    findings.sort(key=lambda f: finding_number(f.id) or 0)
+    cobertura = report.claimed_coverage
+    if cobertura in ("complete", COMPLETE_CLAIM):
+        completion = COMPLETE_CLAIM
+    elif cobertura in ("partial", PARTIAL):
+        completion = PARTIAL
+    else:
+        completion = UNKNOWN
+    return Replace(
+        snapshot=replace(
+            current,
+            generation=current.generation + 1,
+            revision=plan.revision or current.revision,
+            next_id=next_id,
+            completion=completion,
+            findings=findings,
+        )
+    )
