@@ -1632,3 +1632,142 @@ class MigracionLegadaConAnclasVerificadas(unittest.TestCase):
             domain.match_finding(self.previos(), obs, self.hechos()),
             domain.MatchAmbiguous(ids=("F1",)),
         )
+
+
+# ---- F0 r6: identidad por digest guardado cuando facts sólo trae HEAD ----
+
+
+def _lineas_viejas():
+    lineas = []
+    for i in range(1, 41):
+        if i in (2, 3):
+            lineas.append("uno: la entrada no se valida")
+        elif i in (30, 31):
+            lineas.append("dos: división por cero al exportar")
+        else:
+            lineas.append(f"línea {i}")
+    return tuple(lineas)
+
+
+def _lineas_nuevas():
+    # push 2: los dos extractos sobreviven (corridos a las líneas 12-13 y 32-33)
+    lineas = [f"nuevo {i}" for i in range(1, 41)]
+    lineas[11:13] = ["uno: la entrada no se valida", "uno: la entrada no se valida"]
+    lineas[31:33] = [
+        "dos: división por cero al exportar",
+        "dos: división por cero al exportar",
+    ]
+    return tuple(lineas)
+
+
+class IdentidadSoloBlobsHead(unittest.TestCase):
+    # blob viejo (push 1) y blob HEAD (push 2): los extractos de los dos bugs
+    # sobreviven la edición y quedan en otras líneas del blob nuevo.
+    LINEAS_VIEJAS = _lineas_viejas()
+    LINEAS_NUEVAS = _lineas_nuevas()
+    BLOBS = {("src/app.py", "b" * 40): LINEAS_NUEVAS}  # SÓLO el blob HEAD
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest_viejo(self, rango):
+        import hashlib
+
+        extracto = "\n".join(self.LINEAS_VIEJAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def digest_nuevo(self, rango):
+        import hashlib
+
+        extracto = "\n".join(self.LINEAS_NUEVAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="uno: la entrada no se valida",
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(2, 3),
+                    excerpt_digest=self.digest_viejo((2, 3)),
+                ),
+            ),
+            domain.Finding(
+                id="F2",
+                title="dos: división por cero al exportar",
+                severity="Critical",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(30, 31),
+                    excerpt_digest=self.digest_viejo((30, 31)),
+                ),
+            ),
+        ]
+
+    def observacion(self, titulo, rango, digest, claim=domain.OPEN):
+        return domain.Observation(
+            title=titulo,
+            severity="Critical",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="b" * 40,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+            claim=claim,
+        )
+
+    def test_solo_blobs_head_los_ids_sobreviven_el_segundo_push(self):
+        previos = self.previos()
+        obs1 = self.observacion(
+            "uno: la entrada no se valida (revisado)",
+            (12, 13),
+            self.digest_nuevo((12, 13)),
+        )
+        obs2 = self.observacion(
+            "dos: división por cero al exportar (revisado)",
+            (32, 33),
+            self.digest_nuevo((32, 33)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs1, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(
+            set(por_id), {"F1", "F2"}, "sin F3/F4: los ids persistidos se conservan"
+        )
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+        self.assertEqual(por_id["F2"].title, "dos: división por cero al exportar")
