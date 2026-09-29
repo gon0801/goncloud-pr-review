@@ -92,11 +92,16 @@ CI corre las pruebas y `actionlint`. Este repo se revisa a sí mismo con `.githu
 
 `review_domain.py` concentra la identidad de los hallazgos y la validación de
 evidencia. La política vive en `ReviewPolicy` (filtros, presupuestos, digest
-de reglas y controles de activación); el modo `finding_identity` es `"titles"`
-por defecto y `"anchors"` se activa sólo en el CIERRE con estado v2.
+de reglas y controles de activación); el modo `finding_identity` llega por el
+input de la action (`current` por defecto, `anchors` se activa sólo en el
+CIERRE con estado v2) y se valida en `politica_de_identidad` antes de llamar
+al modelo.
 
 - `match_finding(previous, observation, facts) -> MatchResult`: coincidencia
-  determinista (título+ruta, renombres confirmados de los `RepositoryFacts`).
+  determinista sobre tres grupos de candidatos de la misma ruta (o renombre
+  confirmado): P_loc (anclas verificables contra los blobs), P_loc viejos
+  (blob del push anterior, identidad por digest guardado) y P_leg (legados).
+  Digest manda; el solape de rangos sólo sugiere -> `Ambiguous`.
   Devuelve `Existing(id)`, `New` o `Ambiguous(ids)`; dos candidatos plausibles
   quedan separados sin fusionar. Los descartes nunca se adoptan como nuevos.
 - `validar_reporte(observaciones, cobertura, facts) -> ValidatedReport`:
