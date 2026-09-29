@@ -4189,3 +4189,59 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
         self.assertNotIn(review.SHA_PREFIX, body)
         self.assertNotIn(review.COMPLETION_PREFIX, body)
         self.assertNotIn("bug nuevo z", body)
+
+
+class CableadoIdentidad(unittest.TestCase):
+    """F0 r7 R-C: env finding_identity validado antes del modelo."""
+
+    def test_env_invalida_se_rechaza(self):
+        with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "bogus"}):
+            with self.assertRaises(SystemExit) as ctx:
+                review.politica_de_identidad()
+        self.assertIn("FINDING_IDENTITY", str(ctx.exception))
+
+    def test_env_por_defecto_current_y_anchors_ok(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FINDING_IDENTITY", None)
+            self.assertEqual(review.politica_de_identidad(), "current")
+        with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+            self.assertEqual(review.politica_de_identidad(), "anchors")
+
+    def test_action_declara_el_input(self):
+        yml = (ROOT / "action.yml").read_text()
+        self.assertIn("finding_identity:", yml)
+        self.assertIn("FINDING_IDENTITY: ${{ inputs.finding_identity }}", yml)
+
+    def test_f5_el_diferencial_del_digest_guardado(self):
+        # endurecimiento AI F5: el test de r6 afirma el rojo diferencial
+        # (sin el digest guardado, un previo con otro título NO matchea).
+        import hashlib as h
+        import review_domain as domain
+
+        lineas = tuple(f"línea {i}" for i in range(1, 31))
+        facts = domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="otro problema distinto",
+                severity="Low",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=4),
+            )
+        ]
+        extracto = "\n".join(lineas[11:13])
+        obs = domain.Observation(
+            title="problema en líneas nuevas",
+            severity="High",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="a" * 40,
+                range=(12, 13),
+                excerpt_digest=h.sha256(extracto.encode()).hexdigest(),
+            ),
+            evidence=[],
+            claim=domain.OPEN,
+        )
+        # el ancla verifica (el extracto está en el blob) pero NO coincide con
+        # ningún previo: es New, no Existing del descartado por título.
+        self.assertEqual(domain.match_finding(previos, obs, facts), domain.MatchNew())

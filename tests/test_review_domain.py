@@ -1762,6 +1762,10 @@ class IdentidadSoloBlobsHead(unittest.TestCase):
         )
         self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
         self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+        # F5: aserción diferencial endurecida — la identidad vino del digest
+        # guardado; sin él la observación sería MatchNew (rojo contra dabe615)
+        # y no habría duplicados por orden de mención.
+        self.assertNotIn("F3", por_id, "sin duplicados por orden de mención")
         # el título es presentación mutable: accept lo actualiza desde la
         # observación; lo que no cambia es el id ni el estado.
         self.assertTrue(
@@ -2063,3 +2067,41 @@ class SeveridadDeObservacion(unittest.TestCase):
         transicion = self._aceptar("critico")
         self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
         self.assertIsInstance(domain.encode_snapshot(transicion.snapshot), str)
+
+
+# ---- F0 r7: R-C parser de observaciones (el env lo valida el adaptador) ----
+
+
+class ObservacionDeEntrada(unittest.TestCase):
+    def test_bloque_con_anclas_se_parsea_a_located(self):
+        entrada = {
+            "title": "t",
+            "severity": "high",
+            "file": "a.py",
+            "line": 3,
+            "anchor": {
+                "path": "a.py",
+                "blob_sha": "a" * 40,
+                "range": [3, 4],
+                "excerpt_digest": "x" * 64,
+            },
+            "related_anchors": [
+                {"path": "b.py", "line": 7},
+            ],
+            "evidence": [{"kind": "unverified", "text": "no verificado"}],
+            "claim": "open",
+        }
+        obs = domain.observation_de_entrada(entrada)
+        self.assertIsInstance(obs.primary_anchor, domain.AnchorLocated)
+        self.assertEqual(obs.primary_anchor.blob_sha, "a" * 40)
+        self.assertEqual([type(a) for a in obs.related_anchors], [domain.AnchorLegacy])
+        self.assertEqual([type(e) for e in obs.evidence], [domain.EvidenceUnverified])
+        self.assertEqual(obs.claim, domain.OPEN)
+
+    def test_bloque_legacy_se_parsea_a_anchor_legacy(self):
+        entrada = {"title": "t", "severity": "High", "file": "a.py", "line": 3}
+        obs = domain.observation_de_entrada(entrada)
+        self.assertIsInstance(obs.primary_anchor, domain.AnchorLegacy)
+        self.assertEqual(
+            (obs.primary_anchor.path, obs.primary_anchor.line), ("a.py", 3)
+        )
