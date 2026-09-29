@@ -964,17 +964,29 @@ def match_finding(previous, observation, facts):
 
     ancla_obs, _ = _ancla_verificada(observation.primary_anchor, facts)
     if ancla_obs is not None:
+        # f) el digest igual cuenta como identidad fuerte sólo si el extracto
+        # aparece UNA vez en el blob; un extracto genérico repetido es sólo
+        # candidato plausible -> Ambiguous sin fusionar.
+        lineas_obs = facts.blobs[(ancla_obs.path, ancla_obs.blob_sha)]
+        ini, fin_r = ancla_obs.range
+        extracto_obs = "\n".join(lineas_obs[ini - 1 : fin_r])
+        largo = fin_r - ini + 1
+        apariciones = sum(
+            1
+            for i in range(len(lineas_obs) - largo + 1)
+            if "\n".join(lineas_obs[i : i + largo]) == extracto_obs
+        )
         mismo_digest = [
             f
             for f in previos_todos
             if isinstance(f.primary_anchor, AnchorLocated)
             and f.primary_anchor.excerpt_digest == ancla_obs.excerpt_digest
         ]
-        if len(mismo_digest) == 1:
-            return MatchExisting(id=mismo_digest[0].id)
-        if len(mismo_digest) > 1:
+        if mismo_digest and apariciones == 1:
+            if len(mismo_digest) == 1:
+                return MatchExisting(id=mismo_digest[0].id)
             return MatchAmbiguous(ids=tuple(sorted(f.id for f in mismo_digest)))
-        solapados = []
+        plausibles = {f.id for f in mismo_digest} if apariciones > 1 else set()
         for f in previos_todos:
             ancla_previa, _ = _ancla_verificada(f.primary_anchor, facts)
             if ancla_previa is None:
@@ -984,9 +996,12 @@ def match_finding(previous, observation, facts):
             a1, b1 = ancla_previa.range
             a2, b2 = ancla_obs.range
             if a1 <= b2 and a2 <= b1:
-                solapados.append(f)
-        if solapados:
-            return MatchAmbiguous(ids=tuple(sorted(f.id for f in solapados)))
+                plausibles.add(f.id)
+        if plausibles:
+            return MatchAmbiguous(ids=tuple(sorted(plausibles)))
+        # e) ancla verificada sin candidato fuerte ni plausible: bug nuevo; el
+        # emparejamiento por título+ruta sólo aplica sin ancla verificada.
+        return MatchNew()
 
     fuertes = [f for f in previos_todos if f.title.casefold() == titulo]
     if len(fuertes) == 1:
