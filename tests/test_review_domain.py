@@ -1786,10 +1786,7 @@ class VuelveR6BlobEditado(unittest.TestCase):
         "la entrada valida el IVA tras el refactor" if i == 11 else f"línea {i}"
         for i in range(1, 31)
     )
-    BLOBS = {
-        ("src/app.py", "a" * 40): LINEAS_VIEJAS,
-        ("src/app.py", "b" * 40): LINEAS_NUEVAS,
-    }
+    BLOBS = {("src/app.py", "b" * 40): LINEAS_NUEVAS}  # SÓLO el blob HEAD
 
     def hechos(self):
         return domain.RepositoryFacts(blobs=self.BLOBS)
@@ -1920,12 +1917,11 @@ class SegundaMencion(unittest.TestCase):
         )
         self.assertIsInstance(transicion, domain.Replace)
         por_id = {f.id: f for f in transicion.snapshot.findings}
-        # F1 conserva su id con el contenido de la primera mención...
+        # F1 conserva su id con el contenido de la primera mención; la
+        # segunda entra separada con marca de posible duplicado.
         self.assertEqual(por_id["F1"].title, "bug nuevo X")
-        # ...y la segunda mención no se tira: entra separada con marca.
-        self.assertIn("F3", por_id)
-        self.assertEqual(por_id["F3"].title, "T")
-        self.assertIn("posible duplicado de F1", por_id["F3"].cause_hint)
+        self.assertEqual(por_id["F2"].title, "T")
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
 
 
 class SeveridadNormalizada(unittest.TestCase):
@@ -2015,9 +2011,9 @@ class OrdenDeMenciones(unittest.TestCase):
         )
         self.assertIsInstance(transicion, domain.Replace)
         por_id = {f.id: f for f in transicion.snapshot.findings}
-        # la primera mención gana el id de F1...
+        # la primera mención gana el id de F1; la segunda (duplicado del fid
+        # ya tocado) entra separada con marca de posible duplicado.
         self.assertEqual(por_id["F1"].title, "T")
-        # ...y la segunda no se tira: entra separada con marca de duplicado.
         self.assertIn("F2", por_id)
         self.assertEqual(por_id["F2"].title, "bug nuevo X")
         self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
