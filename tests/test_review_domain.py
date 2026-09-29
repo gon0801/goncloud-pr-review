@@ -1435,3 +1435,91 @@ class IdentidadFuertePorDigest(unittest.TestCase):
             domain.StatusDismissed,
             "el descartado se conserva; no se crea F2 abierto",
         )
+
+
+# ---- F0 r4: ancla verificada sin candidato es nuevo; extracto genérico ----
+
+
+class AnclaVerificadaYExtractoGenerico(unittest.TestCase):
+    LINEAS = tuple(
+        "bug x" if i == 5 else ("return None" if i in (20, 40) else f"línea {i}")
+        for i in range(1, 41)
+    )
+    BLOB = {("src/app.py", "a" * 40): LINEAS}
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOB)
+
+    def digest(self, rango):
+        import hashlib
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hallazgo(self, fid, titulo, rango, digest, estado=domain.StatusOpen()):
+        return domain.Finding(
+            id=fid,
+            title=titulo,
+            severity="Medium",
+            status=estado,
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py", blob_sha="a" * 40, range=rango, excerpt_digest=digest
+            ),
+        )
+
+    def test_e_ancla_verificada_sin_candidato_es_nuevo(self):
+        previos = [self.hallazgo("F1", "bug x", (5, 5), self.digest((5, 5)))]
+        obs = _observacion(
+            "división entre cero",
+            primary_anchor=_ancla_locada_en((30, 31), self.digest((30, 31))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchNew(),
+            "un bug nuevo con ancla verificada no adopta al único vigente del archivo",
+        )
+
+    def test_f_extracto_generico_es_solo_plausible(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "chequeo genérico",
+                (20, 20),
+                self.digest((20, 20)),
+                estado=domain.StatusDismissed(command_id=None),
+            )
+        ]
+        obs = _observacion(
+            "crítico: retorno temprano sin liberar",
+            severity="Critical",
+            primary_anchor=_ancla_locada_en((40, 40), self.digest((40, 40))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"})
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
