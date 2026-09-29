@@ -1267,3 +1267,173 @@ class RegresionDeResuelto(unittest.TestCase):
             domain.StatusOpen,
             "un bug reintroducido con cambio pertinente se reabre",
         )
+
+
+# ---- F0 r3: identidad fuerte por digest; solape sólo sugiere ----
+
+
+class IdentidadFuertePorDigest(unittest.TestCase):
+    LINEAS_A = tuple(f"línea {i}" for i in range(1, 31))
+    LINEAS_B = ("encabezado nuevo",) + LINEAS_A  # el mismo contenido corrido 1 línea
+    BLOBS = {
+        ("src/consulta.sql", "a" * 40): LINEAS_A,
+        ("src/consulta.sql", "b" * 40): LINEAS_B,
+    }
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest(self, lineas, rango):
+        import hashlib
+
+        extracto = "\n".join(lineas[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hallazgo(self, fid, titulo, estado, blob, rango, digest):
+        return domain.Finding(
+            id=fid,
+            title=titulo,
+            severity="Medium",
+            status=estado,
+            primary_anchor=domain.AnchorLocated(
+                path="src/consulta.sql",
+                blob_sha=blob,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+        )
+
+    def observacion(self, titulo, blob, rango, digest):
+        return domain.Observation(
+            title=titulo,
+            severity="Medium",
+            primary_anchor=domain.AnchorLocated(
+                path="src/consulta.sql",
+                blob_sha=blob,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+        )
+
+    def test_a_solape_con_descartada_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "SQL sin límite en el cobro",
+                domain.StatusDismissed(command_id=None),
+                "a" * 40,
+                (5, 8),
+                self.digest(self.LINEAS_A, (5, 8)),
+            )
+        ]
+        obs = self.observacion(
+            "SQL nueva sobre el cobro",
+            "b" * 40,
+            (6, 9),
+            self.digest(self.LINEAS_B, (6, 9)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+
+    def test_b_solape_con_division_por_cero_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "División por cero al exportar",
+                domain.StatusOpen(),
+                "a" * 40,
+                (10, 12),
+                self.digest(self.LINEAS_A, (10, 12)),
+            )
+        ]
+        obs = self.observacion(
+            "División por cero en el reporte nuevo",
+            "a" * 40,
+            (11, 13),
+            self.digest(self.LINEAS_A, (11, 13)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+
+    def test_c_dos_solapados_plausibles_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "bug uno",
+                domain.StatusOpen(),
+                "a" * 40,
+                (4, 6),
+                self.digest(self.LINEAS_A, (4, 6)),
+            ),
+            self.hallazgo(
+                "F2",
+                "bug dos",
+                domain.StatusOpen(),
+                "a" * 40,
+                (5, 9),
+                self.digest(self.LINEAS_A, (5, 9)),
+            ),
+        ]
+        obs = self.observacion(
+            "bug de los rangos",
+            "a" * 40,
+            (4, 9),
+            self.digest(self.LINEAS_A, (4, 9)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def test_d_mismo_digest_con_blob_nuevo_reconoce_el_descartado(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "SQL sin límite en el cobro",
+                domain.StatusDismissed(command_id=None),
+                "a" * 40,
+                (2, 2),
+                self.digest(self.LINEAS_A, (2, 2)),
+            )
+        ]
+        # mismo extracto corrido una línea en el blob nuevo (mismo digest),
+        # con el título reformulado: se reconoce el descartado.
+        obs = self.observacion(
+            "SQL sin límite, reformulado tras la edición",
+            "b" * 40,
+            (3, 3),
+            self.digest(self.LINEAS_B, (3, 3)),
+        )
+        match = domain.match_finding(previos, obs, self.hechos())
+        self.assertEqual(match, domain.MatchExisting(id="F1"))
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/consulta.sql",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual([f.id for f in transicion.snapshot.findings], ["F1"])
+        self.assertIsInstance(
+            transicion.snapshot.findings[0].status,
+            domain.StatusDismissed,
+            "el descartado se conserva; no se crea F2 abierto",
+        )
