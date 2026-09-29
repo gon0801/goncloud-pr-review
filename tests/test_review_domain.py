@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -1775,3 +1776,196 @@ class IdentidadSoloBlobsHead(unittest.TestCase):
         self.assertTrue(
             por_id["F2"].title.startswith("dos: división por cero al exportar")
         )
+
+
+# ---- F0 r7: VUELVE r6 (blob editado), R-A order-drop y R-B severity ----
+
+
+class VuelveR6BlobEditado(unittest.TestCase):
+    def test_descartado_y_abierto_con_blob_editado_no_reaparecen(self):
+        titulo1 = "chequeo de la entrada del formulario"
+        linea_vieja = "entrada sin validar (texto al congelar)"
+        previos = [
+            domain.Finding(
+                id="F1",
+                title=titulo1,
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(10, 10),
+                    excerpt_digest=hashlib.sha256(linea_vieja.encode()).hexdigest(),
+                ),
+            ),
+            domain.Finding(
+                id="F2",
+                title="el cobro no registra el IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/cobro.py",
+                    blob_sha="a" * 40,
+                    range=(20, 21),
+                    excerpt_digest=hashlib.sha256(b"cobro sin IVA").hexdigest(),
+                ),
+            ),
+        ]
+        # la edición crea el blob "b": la línea 10 se edita (texto nuevo ->
+        # digest nuevo) pero el TÍTULO es el mismo; facts sólo trae el blob HEAD.
+        linea_nueva = "la entrada valida el IVA tras el refactor"
+        previos[1].primary_anchor = domain.AnchorLocated(
+            path="src/cobro.py",
+            blob_sha="b" * 40,
+            range=(20, 21),
+            excerpt_digest=hashlib.sha256(b"cobro sin IVA (nuevo)").hexdigest(),
+        )
+        facts = domain.RepositoryFacts(
+            blobs={
+                ("src/app.py", "b" * 40): (linea_nueva,),
+                ("src/cobro.py", "b" * 40): ("cobro sin IVA (nuevo)",),
+            }
+        )
+        obs1 = domain.Observation(
+            title=titulo1,
+            severity="High",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="b" * 40,
+                range=(11, 11),
+                excerpt_digest=hashlib.sha256(linea_nueva.encode()).hexdigest(),
+            ),
+            claim=domain.OPEN,
+        )
+        obs2 = domain.Observation(
+            title="el cobro no registra el IVA",
+            severity="Medium",
+            primary_anchor=domain.AnchorLocated(
+                path="src/cobro.py",
+                blob_sha="b" * 40,
+                range=(20, 21),
+                excerpt_digest=hashlib.sha256(b"cobro sin IVA (nuevo)").hexdigest(),
+            ),
+            claim=domain.OPEN,
+        )
+        # el descartado con el mismo extracto en la misma ruta se reconoce
+        self.assertEqual(
+            domain.match_finding(previos, obs1, facts),
+            domain.MatchExisting(id="F1"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py", "src/cobro.py"),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, facts)
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"}, "sin duplicados nuevos")
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+
+
+class SegundaMencion(unittest.TestCase):
+    def test_b2_la_segunda_mencion_entra_separada_con_marca(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/t.py", line=5),
+            )
+        ]
+        obs_nuevo = _observacion("bug nuevo X", ruta="src/t.py")
+        obs_dup = _observacion("T", ruta="src/t.py")
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/t.py",),
+        )
+        report = domain.validar_reporte(
+            [obs_nuevo, obs_dup], domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        # F1 conserva su id con el contenido de la primera mención...
+        self.assertEqual(por_id["F1"].title, "bug nuevo X")
+        # ...y la segunda mención no se tira: entra separada con marca.
+        self.assertIn("F3", por_id)
+        self.assertEqual(por_id["F3"].title, "T")
+        self.assertIn("posible duplicado de F1", por_id["F3"].cause_hint)
+
+
+class SeveridadNormalizada(unittest.TestCase):
+    def _aceptar(self, severity):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="bug x",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            )
+        ]
+        obs = _observacion("bug x", ruta="src/x.py")
+        obs.severity = severity
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/x.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        return domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+
+    def test_b3_alias_minusculas_se_normaliza(self):
+        transicion = self._aceptar("high")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "High")
+        bloque = domain.encode_snapshot(transicion.snapshot)
+        self.assertIsInstance(bloque, str, "encode sin ValueError")
+
+    def test_b3_invalida_se_degrada_con_marca(self):
+        transicion = self._aceptar("critico")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
+        bloque = domain.encode_snapshot(transicion.snapshot)
+        self.assertIsInstance(bloque, str)
