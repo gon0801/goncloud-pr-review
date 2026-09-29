@@ -1530,3 +1530,109 @@ class AnclaVerificadaYExtractoGenerico(unittest.TestCase):
         self.assertEqual(set(por_id), {"F1", "F2"})
         self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
         self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+
+# ---- F0 r5: tabla completa de matching contra memoria migrada legada ----
+
+
+class MigracionLegadaConAnclasVerificadas(unittest.TestCase):
+    LINEAS = tuple(
+        "falta validar la entrada"
+        if i == 10
+        else ("bug y" if i == 30 else f"línea {i}")
+        for i in range(1, 41)
+    )
+    BLOB = {("src/app.py", "a" * 40): LINEAS}
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOB)
+
+    def digest(self, rango):
+        import hashlib
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def observacion(self, titulo, rango):
+        return domain.Observation(
+            title=titulo,
+            severity="High",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="a" * 40,
+                range=rango,
+                excerpt_digest=self.digest(rango),
+            ),
+            claim=domain.OPEN,
+        )
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="falta validar la entrada",
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="bug y",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=30),
+            ),
+        ]
+
+    def test_b5_migracion_sin_duplicar_descartes_ni_abiertos(self):
+        previos = self.previos()
+        obs1 = self.observacion("falta validar la entrada", (10, 12))
+        obs2 = self.observacion("bug y", (30, 30))
+        self.assertEqual(
+            domain.match_finding(previos, obs1, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=7,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual(
+            [f.id for f in transicion.snapshot.findings],
+            ["F1", "F2"],
+            "sin F3/F4: los ids persistidos se conservan",
+        )
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertIsInstance(
+            por_id["F1"].status,
+            domain.StatusDismissed,
+            "un descarte confirmado no reaparece por una migración",
+        )
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+
+    def test_linea_legada_en_rango_con_otro_titulo_da_ambiguo(self):
+        obs = self.observacion("otra cosa distinta", (10, 12))
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
