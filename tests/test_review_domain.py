@@ -1969,3 +1969,97 @@ class SeveridadNormalizada(unittest.TestCase):
         self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
         bloque = domain.encode_snapshot(transicion.snapshot)
         self.assertIsInstance(bloque, str)
+
+
+# ---- F0 r7: R-A order-drop, R-B severity, R-C cableado ----
+
+
+class OrdenDeMenciones(unittest.TestCase):
+    def test_b5_la_segunda_mencion_entra_separada_con_marca(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/t.py", line=5),
+            )
+        ]
+        obs_t = _observacion("T", ruta="src/t.py")
+        obs_nuevo = _observacion("bug nuevo X", ruta="src/t.py")
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/t.py",),
+        )
+        report = domain.validar_reporte(
+            [obs_t, obs_nuevo], domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        # la primera mención gana el id de F1...
+        self.assertEqual(por_id["F1"].title, "T")
+        # ...y la segunda no se tira: entra separada con marca de duplicado.
+        self.assertIn("F2", por_id)
+        self.assertEqual(por_id["F2"].title, "bug nuevo X")
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+
+class SeveridadDeObservacion(unittest.TestCase):
+    def _aceptar(self, severity):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="bug x",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            )
+        ]
+        obs = _observacion("bug x", ruta="src/x.py")
+        obs.severity = severity
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/x.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        return domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+
+    def test_b6_alias_minusculas_se_normaliza(self):
+        transicion = self._aceptar("high")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "High")
+        # y el encode no revienta con el valor normalizado
+        self.assertIsInstance(domain.encode_snapshot(transicion.snapshot), str)
+
+    def test_b6_invalida_se_degrada_con_marca(self):
+        transicion = self._aceptar("critico")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
+        self.assertIsInstance(domain.encode_snapshot(transicion.snapshot), str)
