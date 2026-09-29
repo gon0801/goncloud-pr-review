@@ -948,49 +948,46 @@ def _rutas_posibles(observation, facts):
 
 
 def match_finding(previous, observation, facts):
-    """Coincidencia determinista, sin similitud semántica.
+    """Coincidencia determinista (F0 r3, dictamen de Claude):
 
-    Manda título+ruta (con renombres confirmados). Título y causa propuesta
-    son presentación/pista, no identidad. Un solo candidato en la ruta consigue
-    el id aunque el título cambie; dos o más candidatos plausibles devuelven
-    Ambiguous sin fusionar. Los descartes nunca se adoptan como nuevos: si la
-    observación corresponde a un descartado, matchea Existing y el aceptador
-    lo conserva tal cual.
+    1) Identidad fuerte: MISMO excerpt_digest en la MISMA ruta (o renombrada
+       confirmada), SIN IMPORTAR el blob_sha — cualquier edición crea un blob
+       nuevo. Incluye descartados: se reconocen y el aceptador los conserva.
+    2) Solape de rango SIN digest igual: sólo candidato PLAUSIBLE, nunca
+       identidad -> Ambiguous con marca de posible duplicado, sin fusionar.
+    3) Título+ruta para hallazgos sin ancla verificada; un solo vigente en la
+       ruta consigue el id aunque el título cambie.
     """
     rutas = _rutas_posibles(observation, facts)
     titulo = observation.title.casefold()
+    previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
 
-    # F0 r2: el ancla validada manda antes que el título (mismo blob con el
-    # digest del extracto, o rango que se solape en el mismo archivo, prueban
-    # identidad aunque el título se reformule). Con varios candidatos en la
-    # misma ubicación gana el de id más viejo: son el mismo problema ya
-    # registrado y no se crea duplicado. Los descartados entran aquí: el
-    # aceptador los conserva sin revivirlos.
     ancla_obs, _ = _ancla_verificada(observation.primary_anchor, facts)
     if ancla_obs is not None:
-        candidatos = []
-        for f in previous:
+        mismo_digest = [
+            f
+            for f in previos_todos
+            if isinstance(f.primary_anchor, AnchorLocated)
+            and f.primary_anchor.excerpt_digest == ancla_obs.excerpt_digest
+        ]
+        if len(mismo_digest) == 1:
+            return MatchExisting(id=mismo_digest[0].id)
+        if len(mismo_digest) > 1:
+            return MatchAmbiguous(ids=tuple(sorted(f.id for f in mismo_digest)))
+        solapados = []
+        for f in previos_todos:
             ancla_previa, _ = _ancla_verificada(f.primary_anchor, facts)
             if ancla_previa is None:
                 continue
-            if ancla_previa.path != ancla_obs.path:
+            if ancla_previa.excerpt_digest == ancla_obs.excerpt_digest:
                 continue
-            if ancla_previa.blob_sha != ancla_obs.blob_sha:
-                continue
-            exacto = ancla_previa.excerpt_digest == ancla_obs.excerpt_digest
             a1, b1 = ancla_previa.range
             a2, b2 = ancla_obs.range
-            solapa = a1 <= b2 and a2 <= b1
-            if exacto or solapa:
-                candidatos.append(f)
-        if candidatos:
-            elegido = min(candidatos, key=lambda f: finding_number(f.id) or 0)
-            return MatchExisting(id=elegido.id)
-    previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
-    # candidatos fuertes: título+ruta (incluye descartados: si la observación
-    # es de un descartado, matchea Existing y el aceptador lo conserva sin
-    # revivirlo). El desempate débil por ruta sólo considera vigentes: un
-    # descartado jamás adopta un reporte que no lo identifica.
+            if a1 <= b2 and a2 <= b1:
+                solapados.append(f)
+        if solapados:
+            return MatchAmbiguous(ids=tuple(sorted(f.id for f in solapados)))
+
     fuertes = [f for f in previos_todos if f.title.casefold() == titulo]
     if len(fuertes) == 1:
         return MatchExisting(id=fuertes[0].id)

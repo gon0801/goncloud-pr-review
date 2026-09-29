@@ -1119,10 +1119,16 @@ def _hallazgo_locado(
 
 class AnclasComoIdentidad(unittest.TestCase):
     LINEAS = tuple(f"línea {i}" for i in range(1, 31))
+    LINEAS_B = LINEAS  # la edición crea un blob nuevo; el extracto sigue verbatim
     BLOB = {("src/app.py", "a" * 40): tuple(f"línea {i}" for i in range(1, 31))}
 
     def hechos(self):
-        return domain.RepositoryFacts(blobs=self.BLOB)
+        return domain.RepositoryFacts(
+            blobs={
+                **self.BLOB,
+                ("src/app.py", "b" * 40): self.LINEAS_B,
+            }
+        )
 
     def digest(self, rango):
         import hashlib
@@ -1130,7 +1136,9 @@ class AnclasComoIdentidad(unittest.TestCase):
         extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
 
-    def test_b1_descarte_con_ancla_reformulada_no_reaparece(self):
+    def test_b1_descarte_reconocido_por_digest_aun_con_titulo_reformulado(self):
+        # la edición crea un blob nuevo, pero el extracto sigue verbatim en la
+        # misma ruta: MISMO digest en la MISMA ruta, sin importar el blob.
         previos = [
             _hallazgo_locado(
                 "F1",
@@ -1139,33 +1147,10 @@ class AnclasComoIdentidad(unittest.TestCase):
                 self.digest((2, 2)),
                 estado=domain.StatusDismissed(command_id=None),
             ),
-            domain.Finding(
-                id="F2",
-                title="otro bug",
-                severity="Low",
-                status=domain.StatusOpen(),
-                primary_anchor=domain.AnchorLegacy(path="src/b.py", line=5),
-            ),
         ]
         obs = _observacion(
             "la entrada del formulario no se valida (reformulado)",
-            primary_anchor=_ancla_locada_en((2, 3), self.digest((2, 3))),
-        )
-        self.assertEqual(
-            domain.match_finding(previos, obs, self.hechos()),
-            domain.MatchExisting(id="F1"),
-        )
-
-    def test_b1_ancla_estable_no_crea_duplicados_entre_pushes(self):
-        previos = [
-            _hallazgo_locado("F1", "bug x", (10, 20), self.digest((10, 20))),
-            _hallazgo_locado(
-                "F3", "bug x (reformulado)", (12, 18), self.digest((12, 18))
-            ),
-        ]
-        obs = _observacion(
-            "bug x (otra vez reformulado)",
-            primary_anchor=_ancla_locada_en((10, 20), self.digest((10, 20))),
+            primary_anchor=_ancla_locada_en((2, 2), self.digest((2, 2)), blob="b" * 40),
         )
         self.assertEqual(
             domain.match_finding(previos, obs, self.hechos()),
@@ -1173,6 +1158,9 @@ class AnclasComoIdentidad(unittest.TestCase):
         )
 
     def test_b1_descarte_con_ancla_compatible_no_genera_nuevo_en_accept(self):
+        # solape SIN digest igual: sólo candidato plausible -> Ambiguous con
+        # marca de posible duplicado, SIN fusionar; el descartado conserva su
+        # estado y no reaparece como abierto.
         previos = [
             _hallazgo_locado(
                 "F1",
@@ -1185,6 +1173,10 @@ class AnclasComoIdentidad(unittest.TestCase):
         obs = _observacion(
             "la entrada del formulario no se valida (reformulado)",
             primary_anchor=_ancla_locada_en((2, 3), self.digest((2, 3))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
         )
         plan = domain.ReviewPlan(
             revision=domain.Revision(
@@ -1207,10 +1199,10 @@ class AnclasComoIdentidad(unittest.TestCase):
             report,
         )
         self.assertIsInstance(transicion, domain.Replace)
-        self.assertEqual([f.id for f in transicion.snapshot.findings], ["F1"])
-        self.assertIsInstance(
-            transicion.snapshot.findings[0].status, domain.StatusDismissed
-        )
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"})
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
 
     def test_b3_ancla_primaria_fuera_del_blob_se_rechaza_y_baja(self):
         obs = _observacion(
@@ -1326,11 +1318,17 @@ class IdentidadFuertePorDigest(unittest.TestCase):
                 self.digest(self.LINEAS_A, (5, 8)),
             )
         ]
+        # contenido NUEVO (el SQL reescrito) en líneas que se solapan con las
+        # de la descartada, con digest propio distinto: plausible, no identidad.
         obs = self.observacion(
             "SQL nueva sobre el cobro",
             "b" * 40,
-            (6, 9),
-            self.digest(self.LINEAS_B, (6, 9)),
+            (5, 8),
+            self.digest(self.LINEAS_B, (5, 8)),
+        )
+        assert (
+            obs.primary_anchor.excerpt_digest
+            != previos[0].primary_anchor.excerpt_digest
         )
         self.assertEqual(
             domain.match_finding(previos, obs, self.hechos()),
