@@ -1544,6 +1544,7 @@ def build_prompt(manifest, work, max_turns):
 
 
 def cmd_run(args):
+    politica_de_identidad()  # F0: rechazo temprano del modo de identidad
     deadline = time.monotonic() + int(
         os.environ.get("REVIEW_BUDGET_SECONDS", REVIEW_BUDGET_SECONDS)
     )
@@ -1870,14 +1871,39 @@ def quota_error(result):
 # validar_reporte; el adaptador construye los RepositoryFacts con Git. El modo
 # `finding_identity=anchors` requiere estado v2 y se activa sólo en el CIERRE:
 # desactivado (por defecto) el camino de memoria es el legado de siempre.
-FINDING_IDENTITY = "titles"
+IDENTIDADES = ("current", "anchors")
 
 
-def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None):
+def politica_de_identidad():
+    """FINDING_IDENTITY del env: current (default) o anchors; lo demás se
+    rechaza antes de llamar al modelo (plan F0)."""
+    valor = (os.environ.get("FINDING_IDENTITY") or "current").strip().lower()
+    if valor not in IDENTIDADES:
+        sys.exit(
+            f"ai-review: FINDING_IDENTITY '{valor}' no admitido; usa current o anchors"
+        )
+    return valor
+
+
+def blobs_de_head(rutas):
+    """Contenido HEAD por ruta (líneas sin salto final) para las citas (F0)."""
+    blobs = {}
+    for ruta in rutas:
+        blob = sh("git", "rev-parse", f"HEAD:{ruta}", check=False).stdout.strip()
+        if not blob:
+            continue
+        contenido = sh("git", "cat-file", "-p", blob, check=False).stdout
+        blobs[(ruta, blob)] = tuple(contenido.splitlines())
+    return blobs
+
+
+def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None, policy_digest=""):
     """RepositoryFacts que el adaptador verifica con Git (F0)."""
     return review_domain.RepositoryFacts(
         revision=review_domain.Revision(
-            base_sha=manifest.get("base"), head_sha=manifest.get("head")
+            base_sha=manifest.get("base"),
+            head_sha=manifest.get("head"),
+            policy_digest=policy_digest,
         ),
         changed_paths=tuple(manifest.get("reviewed", []) or []),
         reverted_paths=tuple(reverted_files or ()),

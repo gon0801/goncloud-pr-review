@@ -32,6 +32,9 @@ inputs:
   bot_login:
     description: Login that github_token posts as; only its comments count as the sticky review
     default: github-actions[bot]
+  finding_identity:
+    description: Identity mode for F0, current (default) or anchors (requires state v2; activation at cierre)
+    default: current
 
 runs:
   using: composite
@@ -108,6 +111,7 @@ runs:
         API_KEY: ${{ inputs.api_key }}
         FALLBACK_API_KEY: ${{ inputs.fallback_api_key }}
         PROVIDER: ${{ inputs.provider }}
+        FINDING_IDENTITY: ${{ inputs.finding_identity }}
         LANGUAGE: ${{ inputs.language }}
         MAX_TURNS: ${{ inputs.max_turns }}
         REPO: ${{ github.repository }}
