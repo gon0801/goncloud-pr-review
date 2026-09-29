@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -713,3 +714,1434 @@ class MedicionDelEstadoEnriquecido(unittest.TestCase):
             domain.encode_snapshot(self.enriquecido(60)), domain.CapacityExceeded
         )
         print(f"M1 medición (bytes UTF-8 de estado enriquecido): {tamanios}")
+
+
+# ---- F0: identidad, evidencia y resolución ----
+
+
+def _ancla_locada(digest, path="src/app.py", blob="a" * 40, rango=(2, 2)):
+    return domain.AnchorLocated(
+        path=path,
+        blob_sha=blob,
+        range=rango,
+        excerpt_digest=digest,
+        symbol_hint=None,
+    )
+
+
+def _observacion(titulo, ruta="src/app.py", **kw):
+    base = dict(
+        title=titulo,
+        severity="High",
+        primary_anchor=domain.AnchorLegacy(path=ruta, line=1),
+        related_anchors=[],
+        cause_hint=None,
+        evidence=[],
+        claim=domain.OPEN,
+    )
+    base.update(kw)
+    return domain.Observation(**base)
+
+
+class IdentidadDeHallazgos(unittest.TestCase):
+    def hechos(self, renames=()):
+        return domain.RepositoryFacts(renames=tuple(renames))
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="Bug del IVA",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="Bug del IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/otro.py", line=20),
+            ),
+            domain.Finding(
+                id="F3",
+                title="Fuga de recurso",
+                severity="Low",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=30),
+            ),
+        ]
+
+    def test_cambio_de_titulo_conserva_id(self):
+        obs = _observacion("El IVA se valida tarde y mal", ruta="src/app.py")
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_desplazamiento_de_lineas_conserva_id(self):
+        obs = _observacion(
+            "Bug del IVA",
+            ruta="src/app.py",
+            primary_anchor=domain.AnchorLegacy(path="src/app.py", line=500),
+        )
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_renombre_confirmado_conserva_id(self):
+        obs = _observacion("Bug del IVA", ruta="src/app_renombrado.py")
+        self.assertEqual(
+            domain.match_finding(
+                self.previos(),
+                obs,
+                self.hechos(renames=(("src/app_renombrado.py", "src/app.py"),)),
+            ),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_dos_bugs_mismo_titulo_en_archivos_distintos_no_se_fusionan(self):
+        previos = [self.previos()[0], self.previos()[1]]
+        obs_a = _observacion("Bug del IVA", ruta="src/app.py")
+        obs_b = _observacion("Bug del IVA", ruta="src/otro.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs_a, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs_b, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+
+    def test_dos_candidatos_plausibles_dan_ambiguo_sin_fusionar(self):
+        # un archivo dividido en dos: la ruta nueva corresponde a dos viejas
+        obs = _observacion("Bug del IVA", ruta="src/iva.py")
+        hechos = self.hechos(
+            renames=(("src/iva.py", "src/app.py"), ("src/iva.py", "src/otro.py"))
+        )
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, hechos),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def test_los_descartes_se_conservan_y_no_reaparecen(self):
+        previos = self.previos()
+        obs_f3 = _observacion("Fuga de recurso", ruta="src/app.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs_f3, self.hechos()),
+            domain.MatchExisting(id="F3"),
+        )
+        plan = domain.ReviewPlan(revision=None, changed_paths=())
+        report = domain.validar_reporte([obs_f3], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(self._snapshot_v2(previos), plan, report)
+        self.assertIsInstance(transicion, domain.Replace)
+        f3 = {f.id: f for f in transicion.snapshot.findings}["F3"]
+        self.assertEqual(f3.status, domain.StatusDismissed(command_id=None))
+
+    def _snapshot_v2(self, findings):
+        return domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=4,
+            completion=domain.UNKNOWN,
+            findings=findings,
+            command_cursor=0,
+        )
+
+
+class CitasYEvidencia(unittest.TestCase):
+    BLOB = ("def pagar():", "    uso del IVA sin validar", "    return total")
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): self.BLOB})
+
+    def observacion_con_cita(self, digest, claim=domain.OPEN):
+        return _observacion(
+            "Uso del IVA sin validar",
+            primary_anchor=_ancla_locada(digest),
+            evidence=[
+                domain.EvidenceSource(
+                    anchor=domain.AnchorLocated(
+                        path="src/app.py",
+                        blob_sha="a" * 40,
+                        range=(2, 2),
+                        excerpt_digest=digest,
+                    )
+                ),
+                domain.EvidenceUnverified(text="se reproduce al pagar sin IVA"),
+            ],
+            claim=claim,
+        )
+
+    def test_cita_valida_queda_etiquetada_como_ubicacion_verificada(self):
+
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
+        report = domain.validar_reporte(
+            [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
+        )
+        self.assertEqual(report.rechazadas, ())
+        fuente = report.observations[0].evidence[0]
+        self.assertIsInstance(fuente, domain.EvidenceSource)
+
+    def test_cita_con_digest_invalido_se_rechaza(self):
+        report = domain.validar_reporte(
+            [self.observacion_con_cita("d" * 64)], domain.UNKNOWN, self.hechos()
+        )
+        self.assertTrue(report.rechazadas)
+        tipos = [type(e) for e in report.observations[0].evidence]
+        self.assertNotIn(
+            domain.EvidenceSource, tipos, "la cita rechazada no queda como evidencia"
+        )
+        self.assertIn(
+            domain.EvidenceUnverified,
+            tipos,
+            "lo no comprobable queda etiquetado aparte",
+        )
+
+    def test_afirmacion_sin_evidencia_comprobable_queda_etiquetada(self):
+
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
+        report = domain.validar_reporte(
+            [self.observacion_con_cita(digest)], domain.UNKNOWN, self.hechos()
+        )
+        tipos = [type(e) for e in report.observations[0].evidence]
+        self.assertIn(domain.EvidenceUnverified, tipos)
+
+    def test_cita_existente_con_interpretacion_falsa_no_marca_reproducido(self):
+
+        digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="Uso del IVA sin validar",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=2),
+            )
+        ]
+        obs = self.observacion_con_cita(digest, claim=domain.RESOLVED)
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=(),  # nada cambió: la cita existe pero no hay arreglo
+        )
+        report = domain.validar_reporte([obs], domain.PARTIAL, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        # r5: contra P_leg, exactamente un candidato con el mismo título
+        # (incluidos los descartados) y ningún otro plausible -> Existing.
+        f1 = transicion.snapshot.findings[0]
+        self.assertEqual(f1.id, "F1")
+        self.assertIsInstance(
+            f1.status, domain.StatusOpen, "la cita validada no marca reproducido"
+        )
+        self.assertTrue(
+            any(isinstance(e, domain.EvidenceSource) for e in f1.evidence),
+            "la ubicación verificada queda como evidencia",
+        )
+        self.assertTrue(
+            any(isinstance(e, domain.EvidenceUnverified) for e in f1.evidence),
+            "la evaluación del modelo queda etiquetada aparte",
+        )
+
+
+class ResolucionConCambioPertinente(unittest.TestCase):
+    def _previo(self, estado=domain.StatusOpen()):
+        return domain.Finding(
+            id="F1",
+            title="bug x",
+            severity="Low",
+            status=estado,
+            primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+        )
+
+    def _aceptar(self, previo, claim, changed, reverted=(), prev_estado=None):
+        obs = _observacion(
+            "bug x",
+            ruta="src/x.py",
+            primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            claim=claim,
+        )
+        hechos = domain.RepositoryFacts(reverted_paths=tuple(reverted))
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=tuple(changed),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=plan.revision,
+            next_id=2,
+            completion=domain.UNKNOWN,
+            findings=[previo],
+            command_cursor=0,
+        )
+        return domain.accept_report(snapshot, plan, report)
+
+    def test_resolver_exige_cambio_pertinente(self):
+        t = self._aceptar(self._previo(), domain.RESOLVED, changed=())
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusOpen)
+
+    def test_resolucion_con_cambio_pertinente(self):
+        t = self._aceptar(self._previo(), domain.RESOLVED, changed=("src/x.py",))
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_resolucion_por_reversion_exacta(self):
+        t = self._aceptar(
+            self._previo(), domain.OPEN, changed=(), reverted=("src/x.py",)
+        )
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_resolucion_previa_por_reversion_se_conserva(self):
+        t = self._aceptar(
+            self._previo(domain.StatusResolved(at_sha="c" * 40)),
+            domain.OPEN,
+            changed=(),
+        )
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_arreglo_en_archivo_relacionado(self):
+        previo = self._previo()
+        previo.related_anchors = [domain.AnchorLegacy(path="tests/test_x.py", line=9)]
+        t = self._aceptar(previo, domain.RESOLVED, changed=("tests/test_x.py",))
+        self.assertIsInstance(t.snapshot.findings[0].status, domain.StatusResolved)
+
+    def test_accept_en_estado_legado_da_keep(self):
+        obs = _observacion("bug x", ruta="src/x.py")
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        legado = domain.Snapshot(
+            schema=1,
+            generation=0,
+            revision=None,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+        plan = domain.ReviewPlan(revision=None, changed_paths=())
+        self.assertIsInstance(domain.accept_report(legado, plan, report), domain.Keep)
+
+
+class NuevosIdsYAmbiguosEnAccept(unittest.TestCase):
+    def test_ambiguo_crea_hallazgo_separado_sin_fusionar(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="Bug del IVA",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="Bug del IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/otro.py", line=20),
+            ),
+        ]
+        # renames son pares (ruta_nueva, ruta_vieja): un archivo dividido
+        # mapea una ruta nueva a dos viejas y eso es lo que hace ambiguo el match.
+        hechos = domain.RepositoryFacts(
+            renames=(("src/iva.py", "src/app.py"), ("src/iva.py", "src/otro.py"))
+        )
+        obs = _observacion("Bug del IVA", ruta="src/iva.py")
+        self.assertEqual(
+            domain.match_finding(previos, obs, hechos),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/iva.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=plan.revision,
+            next_id=3,
+            completion=domain.UNKNOWN,
+            findings=previos,
+            command_cursor=0,
+        )
+        transicion = domain.accept_report(snapshot, plan, report)
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertIn("F3", por_id, "el ambiguo entra separado con id del programa")
+        self.assertIn("posible duplicado", por_id["F3"].cause_hint)
+        self.assertEqual(por_id["F1"].title, "Bug del IVA")
+        self.assertEqual(por_id["F2"].title, "Bug del IVA")
+
+
+# ---- F0 r2: identidad por anclas, regresiones y anclas validadas ----
+
+
+def _ancla_locada_en(rango, digest, path="src/app.py", blob="a" * 40):
+    return domain.AnchorLocated(
+        path=path, blob_sha=blob, range=rango, excerpt_digest=digest
+    )
+
+
+def _hallazgo_locado(
+    fid, titulo, rango, digest, estado=domain.StatusOpen(), ruta="src/app.py"
+):
+    return domain.Finding(
+        id=fid,
+        title=titulo,
+        severity="Medium",
+        status=estado,
+        primary_anchor=domain.AnchorLocated(
+            path=ruta, blob_sha="a" * 40, range=rango, excerpt_digest=digest
+        ),
+    )
+
+
+class AnclasComoIdentidad(unittest.TestCase):
+    LINEAS = tuple(f"línea {i}" for i in range(1, 31))
+    LINEAS_B = LINEAS  # la edición crea un blob nuevo; el extracto sigue verbatim
+    BLOB = {("src/app.py", "a" * 40): tuple(f"línea {i}" for i in range(1, 31))}
+
+    def hechos(self):
+        return domain.RepositoryFacts(
+            blobs={
+                **self.BLOB,
+                ("src/app.py", "b" * 40): self.LINEAS_B,
+            }
+        )
+
+    def digest(self, rango):
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def test_b1_descarte_reconocido_por_digest_aun_con_titulo_reformulado(self):
+        # la edición crea un blob nuevo, pero el extracto sigue verbatim en la
+        # misma ruta: MISMO digest en la MISMA ruta, sin importar el blob.
+        previos = [
+            _hallazgo_locado(
+                "F1",
+                "la entrada no se valida",
+                (2, 2),
+                self.digest((2, 2)),
+                estado=domain.StatusDismissed(command_id=None),
+            ),
+        ]
+        obs = _observacion(
+            "la entrada del formulario no se valida (reformulado)",
+            primary_anchor=_ancla_locada_en((2, 2), self.digest((2, 2)), blob="b" * 40),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+
+    def test_b1_descarte_con_ancla_compatible_no_genera_nuevo_en_accept(self):
+        # solape SIN digest igual: sólo candidato plausible -> Ambiguous con
+        # marca de posible duplicado, SIN fusionar; el descartado conserva su
+        # estado y no reaparece como abierto.
+        previos = [
+            _hallazgo_locado(
+                "F1",
+                "la entrada no se valida",
+                (2, 2),
+                self.digest((2, 2)),
+                estado=domain.StatusDismissed(command_id=None),
+            ),
+        ]
+        obs = _observacion(
+            "la entrada del formulario no se valida (reformulado)",
+            primary_anchor=_ancla_locada_en((2, 3), self.digest((2, 3))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"})
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+    def test_b3_ancla_primaria_fuera_del_blob_se_rechaza_y_baja(self):
+        obs = _observacion(
+            "bug x",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="a" * 40,
+                range=(900, 905),
+                excerpt_digest="f" * 64,
+            ),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        self.assertTrue(report.rechazadas)
+        self.assertIsInstance(
+            report.observations[0].primary_anchor,
+            domain.AnchorLegacy,
+            "el ancla que no verifica no sirve como identidad",
+        )
+
+
+class RegresionDeResuelto(unittest.TestCase):
+    def test_b2_regresion_con_cambio_pertinente_reabre(self):
+        previo = domain.Finding(
+            id="F1",
+            title="bug x",
+            severity="Low",
+            status=domain.StatusResolved(at_sha="c" * 40),
+            primary_anchor=domain.AnchorLegacy(path="src/app.py", line=1),
+        )
+        obs = _observacion("bug x otra vez", ruta="src/app.py", claim=domain.OPEN)
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[previo],
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertIsInstance(
+            transicion.snapshot.findings[0].status,
+            domain.StatusOpen,
+            "un bug reintroducido con cambio pertinente se reabre",
+        )
+
+
+# ---- F0 r3: identidad fuerte por digest; solape sólo sugiere ----
+
+
+class IdentidadFuertePorDigest(unittest.TestCase):
+    LINEAS_A = tuple(f"línea {i}" for i in range(1, 31))
+    LINEAS_B = ("encabezado nuevo",) + LINEAS_A  # el mismo contenido corrido 1 línea
+    BLOBS = {
+        ("src/consulta.sql", "a" * 40): LINEAS_A,
+        ("src/consulta.sql", "b" * 40): LINEAS_B,
+    }
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest(self, lineas, rango):
+
+        extracto = "\n".join(lineas[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hallazgo(self, fid, titulo, estado, blob, rango, digest):
+        return domain.Finding(
+            id=fid,
+            title=titulo,
+            severity="Medium",
+            status=estado,
+            primary_anchor=domain.AnchorLocated(
+                path="src/consulta.sql",
+                blob_sha=blob,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+        )
+
+    def observacion(self, titulo, blob, rango, digest):
+        return domain.Observation(
+            title=titulo,
+            severity="Medium",
+            primary_anchor=domain.AnchorLocated(
+                path="src/consulta.sql",
+                blob_sha=blob,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+        )
+
+    def test_a_solape_con_descartada_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "SQL sin límite en el cobro",
+                domain.StatusDismissed(command_id=None),
+                "a" * 40,
+                (5, 8),
+                self.digest(self.LINEAS_A, (5, 8)),
+            )
+        ]
+        # contenido NUEVO (el SQL reescrito) en líneas que se solapan con las
+        # de la descartada, con digest propio distinto: plausible, no identidad.
+        obs = self.observacion(
+            "SQL nueva sobre el cobro",
+            "b" * 40,
+            (5, 8),
+            self.digest(self.LINEAS_B, (5, 8)),
+        )
+        assert (
+            obs.primary_anchor.excerpt_digest
+            != previos[0].primary_anchor.excerpt_digest
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+
+    def test_b_solape_con_division_por_cero_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "División por cero al exportar",
+                domain.StatusOpen(),
+                "a" * 40,
+                (10, 12),
+                self.digest(self.LINEAS_A, (10, 12)),
+            )
+        ]
+        obs = self.observacion(
+            "División por cero en el reporte nuevo",
+            "a" * 40,
+            (11, 13),
+            self.digest(self.LINEAS_A, (11, 13)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+
+    def test_c_dos_solapados_plausibles_es_ambiguo(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "bug uno",
+                domain.StatusOpen(),
+                "a" * 40,
+                (4, 6),
+                self.digest(self.LINEAS_A, (4, 6)),
+            ),
+            self.hallazgo(
+                "F2",
+                "bug dos",
+                domain.StatusOpen(),
+                "a" * 40,
+                (5, 9),
+                self.digest(self.LINEAS_A, (5, 9)),
+            ),
+        ]
+        obs = self.observacion(
+            "bug de los rangos",
+            "a" * 40,
+            (4, 9),
+            self.digest(self.LINEAS_A, (4, 9)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def test_d_mismo_digest_con_blob_nuevo_reconoce_el_descartado(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "SQL sin límite en el cobro",
+                domain.StatusDismissed(command_id=None),
+                "a" * 40,
+                (2, 2),
+                self.digest(self.LINEAS_A, (2, 2)),
+            )
+        ]
+        # mismo extracto corrido una línea en el blob nuevo (mismo digest),
+        # con el título reformulado: se reconoce el descartado.
+        obs = self.observacion(
+            "SQL sin límite, reformulado tras la edición",
+            "b" * 40,
+            (3, 3),
+            self.digest(self.LINEAS_B, (3, 3)),
+        )
+        match = domain.match_finding(previos, obs, self.hechos())
+        self.assertEqual(match, domain.MatchExisting(id="F1"))
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/consulta.sql",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual([f.id for f in transicion.snapshot.findings], ["F1"])
+        self.assertIsInstance(
+            transicion.snapshot.findings[0].status,
+            domain.StatusDismissed,
+            "el descartado se conserva; no se crea F2 abierto",
+        )
+
+
+# ---- F0 r4: ancla verificada sin candidato es nuevo; extracto genérico ----
+
+
+class AnclaVerificadaYExtractoGenerico(unittest.TestCase):
+    LINEAS = tuple(
+        "bug x" if i == 5 else ("return None" if i in (20, 40) else f"línea {i}")
+        for i in range(1, 41)
+    )
+    BLOB = {("src/app.py", "a" * 40): LINEAS}
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOB)
+
+    def digest(self, rango):
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hallazgo(self, fid, titulo, rango, digest, estado=domain.StatusOpen()):
+        return domain.Finding(
+            id=fid,
+            title=titulo,
+            severity="Medium",
+            status=estado,
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py", blob_sha="a" * 40, range=rango, excerpt_digest=digest
+            ),
+        )
+
+    def test_e_ancla_verificada_sin_candidato_es_nuevo(self):
+        previos = [self.hallazgo("F1", "bug x", (5, 5), self.digest((5, 5)))]
+        obs = _observacion(
+            "división entre cero",
+            primary_anchor=_ancla_locada_en((30, 31), self.digest((30, 31))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchNew(),
+            "un bug nuevo con ancla verificada no adopta al único vigente del archivo",
+        )
+
+    def test_f_extracto_generico_es_solo_plausible(self):
+        previos = [
+            self.hallazgo(
+                "F1",
+                "chequeo genérico",
+                (20, 20),
+                self.digest((20, 20)),
+                estado=domain.StatusDismissed(command_id=None),
+            )
+        ]
+        obs = _observacion(
+            "crítico: retorno temprano sin liberar",
+            severity="Critical",
+            primary_anchor=_ancla_locada_en((40, 40), self.digest((40, 40))),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"})
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+
+# ---- F0 r5: tabla completa de matching contra memoria migrada legada ----
+
+
+class MigracionLegadaConAnclasVerificadas(unittest.TestCase):
+    LINEAS = tuple(
+        "falta validar la entrada"
+        if i == 10
+        else ("bug y" if i == 30 else f"línea {i}")
+        for i in range(1, 41)
+    )
+    BLOB = {("src/app.py", "a" * 40): LINEAS}
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOB)
+
+    def digest(self, rango):
+
+        extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def observacion(self, titulo, rango):
+        return domain.Observation(
+            title=titulo,
+            severity="High",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="a" * 40,
+                range=rango,
+                excerpt_digest=self.digest(rango),
+            ),
+            claim=domain.OPEN,
+        )
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="falta validar la entrada",
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="bug y",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=30),
+            ),
+        ]
+
+    def test_b5_migracion_sin_duplicar_descartes_ni_abiertos(self):
+        previos = self.previos()
+        obs1 = self.observacion("falta validar la entrada", (10, 12))
+        obs2 = self.observacion("bug y", (30, 30))
+        self.assertEqual(
+            domain.match_finding(previos, obs1, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=7,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual(
+            [f.id for f in transicion.snapshot.findings],
+            ["F1", "F2"],
+            "sin F3/F4: los ids persistidos se conservan",
+        )
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertIsInstance(
+            por_id["F1"].status,
+            domain.StatusDismissed,
+            "un descarte confirmado no reaparece por una migración",
+        )
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+
+    def test_linea_legada_en_rango_con_otro_titulo_da_ambiguo(self):
+        obs = self.observacion("otra cosa distinta", (10, 12))
+        self.assertEqual(
+            domain.match_finding(self.previos(), obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1",)),
+        )
+
+
+# ---- F0 r6: identidad por digest guardado cuando facts sólo trae HEAD ----
+
+
+def _lineas_viejas():
+    lineas = []
+    for i in range(1, 41):
+        if i in (2, 3):
+            lineas.append("uno: la entrada no se valida")
+        elif i in (30, 31):
+            lineas.append("dos: división por cero al exportar")
+        else:
+            lineas.append(f"línea {i}")
+    return tuple(lineas)
+
+
+def _lineas_nuevas():
+    # push 2: los dos extractos sobreviven (corridos a las líneas 12-13 y 32-33)
+    lineas = [f"nuevo {i}" for i in range(1, 41)]
+    lineas[11:13] = ["uno: la entrada no se valida", "uno: la entrada no se valida"]
+    lineas[31:33] = [
+        "dos: división por cero al exportar",
+        "dos: división por cero al exportar",
+    ]
+    return tuple(lineas)
+
+
+class IdentidadSoloBlobsHead(unittest.TestCase):
+    # blob viejo (push 1) y blob HEAD (push 2): los extractos de los dos bugs
+    # sobreviven la edición y quedan en otras líneas del blob nuevo.
+    LINEAS_VIEJAS = _lineas_viejas()
+    LINEAS_NUEVAS = _lineas_nuevas()
+    BLOBS = {("src/app.py", "b" * 40): LINEAS_NUEVAS}  # SÓLO el blob HEAD
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest_viejo(self, rango):
+
+        extracto = "\n".join(self.LINEAS_VIEJAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def digest_nuevo(self, rango):
+
+        extracto = "\n".join(self.LINEAS_NUEVAS[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def previos(self):
+        return [
+            domain.Finding(
+                id="F1",
+                title="uno: la entrada no se valida",
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(2, 3),
+                    excerpt_digest=self.digest_viejo((2, 3)),
+                ),
+            ),
+            domain.Finding(
+                id="F2",
+                title="dos: división por cero al exportar",
+                severity="Critical",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(30, 31),
+                    excerpt_digest=self.digest_viejo((30, 31)),
+                ),
+            ),
+        ]
+
+    def observacion(self, titulo, rango, digest, claim=domain.OPEN):
+        return domain.Observation(
+            title=titulo,
+            severity="Critical",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="b" * 40,
+                range=rango,
+                excerpt_digest=digest,
+            ),
+            claim=claim,
+        )
+
+    def test_solo_blobs_head_los_ids_sobreviven_el_segundo_push(self):
+        previos = self.previos()
+        obs1 = self.observacion(
+            "uno: la entrada no se valida (revisado)",
+            (12, 13),
+            self.digest_nuevo((12, 13)),
+        )
+        obs2 = self.observacion(
+            "dos: división por cero al exportar (revisado)",
+            (32, 33),
+            self.digest_nuevo((32, 33)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs1, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py",),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(
+            set(por_id), {"F1", "F2"}, "sin F3/F4: los ids persistidos se conservan"
+        )
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+        # F5: aserción diferencial endurecida — la identidad vino del digest
+        # guardado; sin él la observación sería MatchNew (rojo contra dabe615)
+        # y no habría duplicados por orden de mención.
+        self.assertNotIn("F3", por_id, "sin duplicados por orden de mención")
+        # el título es presentación mutable: accept lo actualiza desde la
+        # observación; lo que no cambia es el id ni el estado.
+        self.assertTrue(
+            por_id["F2"].title.startswith("dos: división por cero al exportar")
+        )
+
+
+# ---- F0 r7: VUELVE r6 (blob editado), R-A order-drop y R-B severity ----
+
+
+class VuelveR6BlobEditado(unittest.TestCase):
+    # blob viejo (push 1) y blob HEAD (push 2, editado): la línea 10 cambió de
+    # texto y se corrió a la 11; el título del hallazgo es el mismo.
+    LINEAS_VIEJAS = tuple(
+        "entrada sin validar (vieja)" if i == 10 else f"línea {i}" for i in range(1, 31)
+    )
+    LINEAS_NUEVAS = tuple(
+        "la entrada valida el IVA tras el refactor" if i == 11 else f"línea {i}"
+        for i in range(1, 31)
+    )
+    BLOBS = {("src/app.py", "b" * 40): LINEAS_NUEVAS}  # SÓLO el blob HEAD
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest(self, lineas, rango):
+
+        extracto = "\n".join(lineas[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def test_descartado_y_abierto_con_blob_editado_no_reaparecen(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="chequeo de la entrada del formulario",
+                severity="High",
+                status=domain.StatusDismissed(command_id=None),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(10, 10),
+                    excerpt_digest=self.digest(self.LINEAS_VIEJAS, (10, 10)),
+                ),
+            ),
+            domain.Finding(
+                id="F2",
+                title="el cobro no registra el IVA",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path="src/cobro.py",
+                    blob_sha="a" * 40,
+                    range=(20, 21),
+                    excerpt_digest=self.digest(self.LINEAS_VIEJAS, (20, 21)),
+                ),
+            ),
+        ]
+        obs1 = domain.Observation(
+            title="chequeo de la entrada del formulario",
+            severity="High",
+            primary_anchor=domain.AnchorLocated(
+                path="src/app.py",
+                blob_sha="b" * 40,
+                range=(11, 11),
+                excerpt_digest=self.digest(self.LINEAS_NUEVAS, (11, 11)),
+            ),
+            claim=domain.OPEN,
+        )
+        obs2 = domain.Observation(
+            title="el cobro no registra el IVA",
+            severity="Medium",
+            primary_anchor=domain.AnchorLocated(
+                path="src/cobro.py",
+                blob_sha="b" * 40,
+                range=(20, 21),
+                excerpt_digest=self.digest(self.LINEAS_NUEVAS, (20, 21)),
+            ),
+            claim=domain.OPEN,
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs1, self.hechos()),
+            domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
+        )
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/app.py", "src/cobro.py"),
+        )
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        self.assertEqual(set(por_id), {"F1", "F2"}, "sin duplicados nuevos")
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+
+
+class SegundaMencion(unittest.TestCase):
+    def test_b2_la_segunda_mencion_entra_separada_con_marca(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/t.py", line=5),
+            )
+        ]
+        obs_nuevo = _observacion("bug nuevo X", ruta="src/t.py")
+        obs_dup = _observacion("T", ruta="src/t.py")
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/t.py",),
+        )
+        report = domain.validar_reporte(
+            [obs_nuevo, obs_dup], domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        # F1 conserva su id con el contenido de la primera mención; la
+        # segunda entra separada con marca de posible duplicado.
+        self.assertEqual(por_id["F1"].title, "bug nuevo X")
+        self.assertEqual(por_id["F2"].title, "T")
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+
+class SeveridadNormalizada(unittest.TestCase):
+    def _aceptar(self, severity):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="bug x",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            )
+        ]
+        obs = _observacion("bug x", ruta="src/x.py")
+        obs.severity = severity
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/x.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        return domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+
+    def test_b3_alias_minusculas_se_normaliza(self):
+        transicion = self._aceptar("high")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "High")
+        bloque = domain.encode_snapshot(transicion.snapshot)
+        self.assertIsInstance(bloque, str, "encode sin ValueError")
+
+    def test_b3_invalida_se_degrada_con_marca(self):
+        transicion = self._aceptar("critico")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
+        bloque = domain.encode_snapshot(transicion.snapshot)
+        self.assertIsInstance(bloque, str)
+
+
+# ---- F0 r7: R-A order-drop, R-B severity, R-C cableado ----
+
+
+class OrdenDeMenciones(unittest.TestCase):
+    def test_b5_la_segunda_mencion_entra_separada_con_marca(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/t.py", line=5),
+            )
+        ]
+        obs_t = _observacion("T", ruta="src/t.py")
+        obs_nuevo = _observacion("bug nuevo X", ruta="src/t.py")
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/t.py",),
+        )
+        report = domain.validar_reporte(
+            [obs_t, obs_nuevo], domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        transicion = domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        por_id = {f.id: f for f in transicion.snapshot.findings}
+        # la primera mención gana el id de F1; la segunda (duplicado del fid
+        # ya tocado) entra separada con marca de posible duplicado.
+        self.assertEqual(por_id["F1"].title, "T")
+        self.assertIn("F2", por_id)
+        self.assertEqual(por_id["F2"].title, "bug nuevo X")
+        self.assertIn("posible duplicado de F1", por_id["F2"].cause_hint)
+
+
+class SeveridadDeObservacion(unittest.TestCase):
+    def _aceptar(self, severity):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="bug x",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/x.py", line=1),
+            )
+        ]
+        obs = _observacion("bug x", ruta="src/x.py")
+        obs.severity = severity
+        plan = domain.ReviewPlan(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            changed_paths=("src/x.py",),
+        )
+        report = domain.validar_reporte([obs], domain.UNKNOWN, domain.RepositoryFacts())
+        return domain.accept_report(
+            domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=plan.revision,
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=previos,
+                command_cursor=0,
+            ),
+            plan,
+            report,
+        )
+
+    def test_b6_alias_minusculas_se_normaliza(self):
+        transicion = self._aceptar("high")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "High")
+        # y el encode no revienta con el valor normalizado
+        self.assertIsInstance(domain.encode_snapshot(transicion.snapshot), str)
+
+    def test_b6_invalida_se_degrada_con_marca(self):
+        transicion = self._aceptar("critico")
+        self.assertEqual(transicion.snapshot.findings[0].severity, "Medium")
+        self.assertIsInstance(domain.encode_snapshot(transicion.snapshot), str)
+
+
+# ---- F0 r7: R-C parser de observaciones (el env lo valida el adaptador) ----
+
+
+class ObservacionDeEntrada(unittest.TestCase):
+    def test_bloque_con_anclas_se_parsea_a_located(self):
+        entrada = {
+            "title": "t",
+            "severity": "high",
+            "file": "a.py",
+            "line": 3,
+            "anchor": {
+                "path": "a.py",
+                "blob_sha": "a" * 40,
+                "range": [3, 4],
+                "excerpt_digest": "x" * 64,
+            },
+            "related_anchors": [
+                {"path": "b.py", "line": 7},
+            ],
+            "evidence": [{"kind": "unverified", "text": "no verificado"}],
+            "claim": "open",
+        }
+        obs = domain.observation_de_entrada(entrada)
+        self.assertIsInstance(obs.primary_anchor, domain.AnchorLocated)
+        self.assertEqual(obs.primary_anchor.blob_sha, "a" * 40)
+        self.assertEqual([type(a) for a in obs.related_anchors], [domain.AnchorLegacy])
+        self.assertEqual([type(e) for e in obs.evidence], [domain.EvidenceUnverified])
+        self.assertEqual(obs.claim, domain.OPEN)
+
+    def test_bloque_legacy_se_parsea_a_anchor_legacy(self):
+        entrada = {"title": "t", "severity": "High", "file": "a.py", "line": 3}
+        obs = domain.observation_de_entrada(entrada)
+        self.assertIsInstance(obs.primary_anchor, domain.AnchorLegacy)
+        self.assertEqual(
+            (obs.primary_anchor.path, obs.primary_anchor.line), ("a.py", 3)
+        )
+
+
+# ---- F0 r8: título único con otro P_leg en el rango observado ----
+
+
+class TituloUnicoConOtroLegadoEnRango(unittest.TestCase):
+    def test_titulo_unico_con_otro_legado_en_rango_da_ambiguo(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="otro",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=11),
+            ),
+        ]
+        obs = _observacion("T", ruta="src/app.py")
+        obs.primary_anchor = domain.AnchorLocated(
+            path="src/app.py",
+            blob_sha="a" * 40,
+            range=(10, 12),
+            excerpt_digest=self.digest((10, 12)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def digest(self, rango):
+        import hashlib
+
+        extracto = "\n".join(f"línea {i}" for i in range(rango[0], rango[1] + 1))
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hechos(self):
+        lineas = tuple(f"línea {i}" for i in range(1, 41))
+        return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})

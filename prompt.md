@@ -107,3 +107,14 @@ COVERAGE: complete
 COVERAGE: partial | <files or parts you could not review, and why>
 
 Use `partial` whenever you did not read the whole diff, or skipped repository files you needed to judge it. Never claim `complete` if you skipped anything. Facts outside the repository that you cannot check offline (third-party APIs, services, library behavior) do not make coverage partial; if one of them carries a concrete risk, report it as a finding instead.
+
+## Anchors and evidence (only when the user message asks for `finding_identity=anchors`)
+
+For each finding in the block, add:
+
+- `"anchor"`: `{"path", "blob_sha", "range": [from, to], "excerpt_digest"}` pointing at the exact lines of the HEAD blob (`git rev-parse HEAD:<path>` for the blob, `git show <blob>` for the content). `excerpt_digest` is the SHA-256 of those lines joined with `\n`, indentation included, no trailing newline. A digest you did not compute that way is rejected.
+- `"evidence"`: what backs the finding. Code you actually located goes as a located anchor. Claims you could NOT verify offline (reproductions, behavior of external services or libraries) must be listed as unverified: never present them as reproduced or tested, the publisher labels them separately.
+- `"claim"` is `open` or `resolved`. Mark `resolved` only when a change in one of the finding's files (or an exact revert) is part of this PR. If what convinced you is your own evaluation, say so in one unverified line: the publisher records it as an evaluation, not as proof.
+- Two bugs with the same title on different files are different findings: anchor each one to its own file. If you cannot tell which previous finding a new one corresponds to, say so explicitly; the publisher keeps them separate instead of guessing.
+
+Without that instruction from the user message, emit the block exactly as before (no anchors, no evidence fields).

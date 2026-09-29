@@ -13,9 +13,10 @@ camino con pérdida: si el estado no cabe en el tope de 8000 bytes UTF-8 se
 devuelve CapacityExceeded y el llamador conserva el último estado válido.
 """
 
+import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 FINDINGS_PREFIX = "<!-- ai-review:findings="
 FINDINGS_SUFFIX = " -->"
@@ -770,3 +771,530 @@ def encode_snapshot(snapshot):
     if needed > FINDINGS_MAX_BYTES:
         return CapacityExceeded(limit=FINDINGS_MAX_BYTES, needed=needed)
     return bloque
+
+
+# ---- F0: identidad, evidencia y resolución ----
+
+
+@dataclass
+class Observation:
+    """Lo que el modelo reporta por hallazgo, antes de validar."""
+
+    title: str
+    severity: str
+    primary_anchor: object
+    related_anchors: list = field(default_factory=list)
+    cause_hint: str | None = None
+    evidence: list = field(default_factory=list)
+    claim: str = OPEN
+
+
+@dataclass
+class MatchExisting:
+    id: str
+
+
+@dataclass
+class MatchNew:
+    pass
+
+
+@dataclass
+class MatchAmbiguous:
+    ids: tuple
+
+
+@dataclass
+class RepositoryFacts:
+    """Hechos del repositorio que el adaptador verifica con Git.
+
+    El dominio no ejecuta comandos: recibe la revisión, el delta real,
+    correspondencias de renombres confirmadas (pares ruta_nueva -> ruta_vieja)
+    y los blobs ya leídos (por (ruta, blob_sha)) para validar las citas.
+    """
+
+    revision: Revision | None = None
+    changed_paths: tuple = ()
+    reverted_paths: tuple = ()
+    renames: tuple = ()
+    blobs: dict = field(default_factory=dict)
+
+
+@dataclass
+class ReviewPlan:
+    revision: Revision | None = None
+    basis_generation: int = 0
+    mode: str = "full"
+    previous_sha: str | None = None
+    changed_paths: tuple = ()
+    obligations: tuple = ()
+    context_refs: tuple = ()
+    exclusions: tuple = ()
+
+
+@dataclass
+class ReviewPolicy:
+    """Filtros, presupuestos, digest de reglas y controles de activación."""
+
+    finding_identity: str = "titles"
+    findings_max_count: int = FINDINGS_MAX_COUNT
+    findings_max_bytes: int = FINDINGS_MAX_BYTES
+    rules_digest: str = ""
+    exclude_patterns: tuple = ()
+    allow_inline_comments: bool = False
+
+
+@dataclass
+class ValidatedReport:
+    """El reporte del modelo con las citas ya validadas contra los blobs.
+
+    `observations` trae la evidencia filtrada: las citas verificadas quedan
+    como `EvidenceSource`; lo no comprobable viaja etiquetado aparte como
+    `EvidenceUnverified`; las citas rechazadas se listan en `rechazadas`.
+    """
+
+    facts: RepositoryFacts
+    observations: list
+    claimed_coverage: str = UNKNOWN
+    rechazadas: tuple = ()
+
+
+def _ruta_primaria(algo):
+    anchor = getattr(algo, "primary_anchor", None)
+    return anchor.path if anchor is not None else ""
+
+
+def validar_reporte(observaciones, cobertura, facts):
+    """Valida ruta, blob, rango y digest del extracto contra los blobs que el
+    adaptador verificó. Una cita que no verifica se rechaza (y no queda como
+    evidencia); las afirmaciones sin evidencia comprobable viajan etiquetadas
+    aparte como EvidenceUnverified. La ubicación verificada prueba que la cita
+    existe, nunca que el diagnóstico sea correcto.
+    """
+    observadas, rechazadas = [], []
+    for i, obs in enumerate(observaciones):
+        primaria, motivo_primaria = _ancla_verificada(obs.primary_anchor, facts)
+        if obs.primary_anchor is not None and not isinstance(
+            obs.primary_anchor, AnchorLocated
+        ):
+            primaria = obs.primary_anchor  # ancla legada: no sirve como identidad
+        elif motivo_primaria:
+            rechazadas.append((i, f"ancla primaria: {motivo_primaria}"))
+            primaria = AnchorLegacy(path=obs.primary_anchor.path, line=None)
+        relacionadas = []
+        for a in obs.related_anchors:
+            verificada, motivo = _ancla_verificada(a, facts)
+            if verificada is None:
+                if motivo:
+                    rechazadas.append((i, f"ancla relacionada: {motivo}"))
+                relacionadas.append(a)
+            else:
+                relacionadas.append(verificada)
+        evidencia = []
+        for e in obs.evidence:
+            if isinstance(e, EvidenceSource) and isinstance(e.anchor, AnchorLocated):
+                verificada, motivo = _ancla_verificada(e.anchor, facts)
+                if verificada is None:
+                    rechazadas.append((i, motivo or "ancla no verificada"))
+                    continue
+                evidencia.append(e)
+            else:
+                evidencia.append(e)
+        observadas.append(
+            replace(
+                obs,
+                primary_anchor=primaria,
+                related_anchors=tuple(relacionadas),
+                evidence=tuple(evidencia),
+            )
+        )
+    return ValidatedReport(
+        facts=facts,
+        observations=observadas,
+        claimed_coverage=cobertura,
+        rechazadas=tuple(rechazadas),
+    )
+
+
+def _ancla_verificada(anchor, facts):
+    """El AnchorLocated verificado contra los blobs, o (None, motivo)."""
+    if not isinstance(anchor, AnchorLocated):
+        return None, None
+    lineas = facts.blobs.get((anchor.path, anchor.blob_sha))
+    if lineas is None:
+        return None, "blob no verificado por el adaptador"
+    a, b = anchor.range
+    if not (
+        isinstance(a, int)
+        and isinstance(b, int)
+        and not isinstance(a, bool)
+        and not isinstance(b, bool)
+        and 1 <= a <= b <= len(lineas)
+    ):
+        return None, "rango fuera del blob"
+    extracto = "\n".join(lineas[a - 1 : b])
+    if hashlib.sha256(extracto.encode("utf-8")).hexdigest() != anchor.excerpt_digest:
+        return None, "el digest del extracto no coincide"
+    return anchor, None
+
+
+def _rutas_posibles(observation, facts):
+    ruta = _ruta_primaria(observation)
+    rutas = {ruta}
+    for nueva, vieja in facts.renames:
+        if ruta == nueva:
+            rutas.add(vieja)
+    return rutas
+
+
+def match_finding(previous, observation, facts):
+    """Coincidencia determinista (F0, acumulada r3-r7).
+
+    Los candidatos de la misma ruta (o de la renombrada confirmada) se
+    separan en P_loc (AnchorLocated verificable contra los blobs), P_loc
+    viejos (Located cuyo blob ya no está en facts.blobs: identidad por
+    digest guardado, F0 r6) y P_leg (AnchorLegacy, o ancla que no verifica).
+
+    Con ancla verificada en la observación:
+    1) Fuerte: mismo excerpt_digest y extracto que aparece UNA sola vez en
+       el blob -> Existing; varios con el mismo digest -> Ambiguous.
+    2) Plausibles en P_loc: mismo digest con extracto repetido, o un rango
+       que se solape.
+    3) Contra P_leg y contra los P_loc viejos: exactamente un candidato con
+       el mismo título (incluidos los descartados) y ningún otro plausible
+       -> Existing. También es plausible un P_leg cuya línea legada cae
+       dentro del rango observado.
+    Cualquier plausible -> Ambiguous sin fusionar. Si no hay ninguno -> New.
+
+    Sin ancla verificada en la observación: lógica de título + ruta (con los
+    descartados identificables por título y no adoptables por ruta sola).
+    """
+    rutas = _rutas_posibles(observation, facts)
+    titulo = observation.title.casefold()
+    previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
+
+    p_loc, p_loc_viejos, p_leg = [], [], []
+    for f in previos_todos:
+        ancla, _ = _ancla_verificada(f.primary_anchor, facts)
+        if ancla is not None:
+            p_loc.append((f, ancla))
+        elif isinstance(f.primary_anchor, AnchorLocated):
+            # blob del push anterior: no verificable ahora, pero el digest
+            # guardado sigue siendo identidad contra el blob HEAD (F0 r6)
+            p_loc_viejos.append(f)
+        else:
+            p_leg.append(f)
+
+    ancla_obs, _ = _ancla_verificada(observation.primary_anchor, facts)
+    if ancla_obs is not None:
+        # f) el digest igual cuenta como identidad fuerte sólo si el extracto
+        # aparece UNA vez en el blob; repetido es sólo plausible.
+        lineas_obs = facts.blobs[(ancla_obs.path, ancla_obs.blob_sha)]
+        ini, fin_r = ancla_obs.range
+        extracto_obs = "\n".join(lineas_obs[ini - 1 : fin_r])
+        largo = fin_r - ini + 1
+        apariciones = sum(
+            1
+            for i in range(len(lineas_obs) - largo + 1)
+            if "\n".join(lineas_obs[i : i + largo]) == extracto_obs
+        )
+
+        mismo_digest = [
+            f for f, ancla in p_loc if ancla.excerpt_digest == ancla_obs.excerpt_digest
+        ]
+        # r6: el digest GUARDADO de un previo cuyo blob ya no está en
+        # facts.blobs también es identidad (el extracto sobrevive la edición).
+        mismo_digest_guardado = [
+            f
+            for f in p_loc_viejos
+            if isinstance(f.primary_anchor, AnchorLocated)
+            and f.primary_anchor.excerpt_digest == ancla_obs.excerpt_digest
+        ]
+        fuertes = mismo_digest + mismo_digest_guardado
+        if fuertes and apariciones == 1:
+            if len(fuertes) == 1:
+                return MatchExisting(id=fuertes[0].id)
+            return MatchAmbiguous(ids=tuple(sorted(f.id for f in fuertes)))
+
+        plausibles = {f.id for f in fuertes} if apariciones > 1 else set()
+        for f, ancla in p_loc:
+            if ancla.excerpt_digest == ancla_obs.excerpt_digest:
+                continue
+            a1, b1 = ancla.range
+            a2, b2 = ancla_obs.range
+            if a1 <= b2 and a2 <= b1:
+                plausibles.add(f.id)
+
+        # r7 VUELVE: los p_loc_viejos participan como P_leg en la regla de
+        # título (un candidato único con el mismo título -> Existing aunque
+        # el blob haya cambiado; varios -> Ambiguous sin fusionar).
+        candidatos_titulo = [
+            f for f in p_leg + p_loc_viejos if f.title.casefold() == titulo
+        ]
+        en_rango = [
+            f
+            for f in p_leg
+            if (
+                (linea := getattr(f.primary_anchor, "line", None)) is not None
+                and not isinstance(linea, bool)
+                and ini <= linea <= fin_r
+            )
+        ]
+        if len(candidatos_titulo) == 1:
+            candidata = candidatos_titulo[0].id
+            otros_en_rango = [f.id for f in en_rango if f.id != candidata]
+            if not plausibles and not otros_en_rango:
+                return MatchExisting(id=candidata)
+        plausibles.update(f.id for f in candidatos_titulo)
+        plausibles.update(f.id for f in en_rango)
+        if plausibles:
+            return MatchAmbiguous(ids=tuple(sorted(plausibles)))
+        return MatchNew()
+
+    # sin ancla verificada en la observación: título + ruta (compatibilidad)
+    fuertes = [f for f in previos_todos if f.title.casefold() == titulo]
+    if len(fuertes) == 1:
+        return MatchExisting(id=fuertes[0].id)
+    if len(fuertes) > 1:
+        return MatchAmbiguous(ids=tuple(sorted(f.id for f in fuertes)))
+    previos = [f for f in previos_todos if not isinstance(f.status, StatusDismissed)]
+    if len(previos) == 1:
+        return MatchExisting(id=previos[0].id)
+    if len(previos) > 1:
+        causa = (observation.cause_hint or "").casefold()
+        con_causa = (
+            [f for f in previos if (f.cause_hint or "").casefold() == causa]
+            if causa
+            else []
+        )
+        if len(con_causa) == 1:
+            return MatchExisting(id=con_causa[0].id)
+        return MatchAmbiguous(ids=tuple(sorted(f.id for f in previos)))
+    return MatchNew()
+
+
+def observation_de_entrada(entry):
+    """Entrada del bloque del modelo -> Observation (camino anchors de F0).
+
+    Transporte puro: la cita/ancla se valida después (validar_reporte) y la
+    severidad se normaliza al aceptar. Sin ancla declarada, la ubicación es
+    la legada (ruta y línea del propio hallazgo).
+    """
+    ancla = entry.get("anchor")
+    if isinstance(ancla, dict) and ancla.get("blob_sha"):
+        rango = ancla.get("range") or [0, 0]
+        primaria = AnchorLocated(
+            path=str(ancla.get("path") or ""),
+            blob_sha=str(ancla.get("blob_sha") or ""),
+            range=(int(rango[0]), int(rango[1])),
+            excerpt_digest=str(ancla.get("excerpt_digest") or ""),
+            symbol_hint=ancla.get("symbol_hint"),
+        )
+    elif isinstance(ancla, dict):
+        primaria = AnchorLegacy(
+            path=str(ancla.get("path") or ""), line=ancla.get("line")
+        )
+    else:
+        primaria = AnchorLegacy(
+            path=str(entry.get("file") or ""), line=entry.get("line")
+        )
+    relacionadas = []
+    for a in entry.get("related_anchors", []) or []:
+        if isinstance(a, dict) and a.get("blob_sha"):
+            r = a.get("range") or [0, 0]
+            relacionadas.append(
+                AnchorLocated(
+                    path=str(a.get("path") or ""),
+                    blob_sha=str(a.get("blob_sha") or ""),
+                    range=(int(r[0]), int(r[1])),
+                    excerpt_digest=str(a.get("excerpt_digest") or ""),
+                )
+            )
+        elif isinstance(a, dict):
+            relacionadas.append(
+                AnchorLegacy(path=str(a.get("path") or ""), line=a.get("line"))
+            )
+    evidencia = [
+        EvidenceUnverified(text=str(ev.get("text") or ""))
+        for ev in entry.get("evidence", []) or []
+        if isinstance(ev, dict) and ev.get("kind") == "unverified"
+    ]
+    claim = RESOLVED if entry.get("claim") == "resolved" else OPEN
+    return Observation(
+        title=str(entry.get("title") or ""),
+        severity=str(entry.get("severity") or ""),
+        primary_anchor=primaria,
+        related_anchors=tuple(relacionadas),
+        cause_hint=entry.get("cause_hint"),
+        evidence=tuple(evidencia),
+        claim=claim,
+    )
+
+
+def _severidad_de(valor):
+    """Severidad canónica de la observación + marca si hubo que degradarla."""
+    texto = str(valor or "").strip()
+    for severidad in SEVERITIES:
+        if texto.lower() == severidad.lower():
+            return severidad, None
+    if not texto:
+        return "Medium", None
+    return "Medium", f"severity {texto!r} no reconocida; degradada a Medium"
+
+
+def _cambio_pertinente(finding, cambiadas):
+    rutas = {_ruta_primaria(finding)} | {a.path for a in finding.related_anchors}
+    return bool(rutas & set(cambiadas))
+
+
+def accept_report(current, plan, report):
+    """Acepta el reporte validado y devuelve la Transition del estado.
+
+    Requiere estado v2 (schema 2): en legado devuelve Keep. El programa asigna
+    los ids; título y causa son mutables. Resolver exige cambio pertinente o
+    reversión exacta; la evaluación del modelo queda etiquetada como
+    UnverifiedClaim. Un match Ambiguous entra como hallazgo separado con la
+    indicación de posible duplicado, sin fusionar. Los descartes nunca
+    reaparecen.
+    """
+    if current.schema != 2:
+        return Keep(reason="el reconocimiento de identidad requiere estado v2")
+    facts = report.facts
+    revertidas = set(facts.reverted_paths)
+    cambiadas = set(plan.changed_paths) | revertidas
+    findings = list(current.findings)
+    por_id = {f.id: f for f in findings if f.id}
+    tocados, next_id = set(), current.next_id
+    for obs in report.observations:
+        severidad, marca_severidad = _severidad_de(obs.severity)
+        match = match_finding(findings, obs, facts)
+        if isinstance(match, MatchExisting):
+            fid = match.id
+            previo = por_id.get(fid)
+            if previo is None:
+                continue
+            if isinstance(previo.status, StatusDismissed):
+                continue  # un descarte confirmado no reaparece
+            severidad, marca_severidad = _severidad_de(obs.severity)
+            if fid in tocados:
+                # R-A: la primera mención gana el id; la segunda entra separada
+                # con marca de posible duplicado, sin perder evidencia ni ancla.
+                causa = f"posible duplicado de {fid}"
+                if obs.cause_hint:
+                    causa = f"{causa}; {obs.cause_hint}"
+                evidencia_dup = tuple(obs.evidence)
+                if marca_severidad:
+                    evidencia_dup = evidencia_dup + (
+                        EvidenceUnverified(text=marca_severidad),
+                    )
+                findings.append(
+                    Finding(
+                        id=f"F{next_id}",
+                        title=obs.title,
+                        severity=severidad,
+                        status=StatusOpen(),
+                        primary_anchor=obs.primary_anchor,
+                        related_anchors=tuple(obs.related_anchors),
+                        cause_hint=causa,
+                        evidence=evidencia_dup,
+                    )
+                )
+                next_id += 1
+                continue
+            tocados.add(fid)
+            evidencia = tuple(obs.evidence)
+            if marca_severidad:
+                evidencia = evidencia + (EvidenceUnverified(text=marca_severidad),)
+            reverting = _cambio_pertinente(previo, revertidas)
+            if reverting:
+                estado = StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                )
+            elif (
+                isinstance(previo.status, StatusResolved)
+                and obs.claim == OPEN
+                and _cambio_pertinente(previo, cambiadas)
+            ):
+                estado = StatusOpen()  # regresión con cambio pertinente: se reabre
+            elif isinstance(previo.status, StatusResolved):
+                estado = (
+                    previo.status
+                )  # la resolución se conserva sin cambio que la rompa
+            elif obs.claim == RESOLVED and not _cambio_pertinente(previo, cambiadas):
+                evidencia = evidencia + (
+                    EvidenceUnverified(
+                        text="el modelo lo evalúa resuelto; sin cambio pertinente registrado"
+                    ),
+                )
+                estado = StatusOpen()
+            elif obs.claim == RESOLVED:
+                estado = StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                )
+            else:
+                estado = StatusOpen()
+            ancla = (
+                obs.primary_anchor
+                if isinstance(obs.primary_anchor, AnchorLocated)
+                else previo.primary_anchor
+            )
+            relacionadas = tuple(obs.related_anchors) or previo.related_anchors
+            findings[findings.index(previo)] = replace(
+                previo,
+                title=obs.title,
+                severity=severidad,
+                cause_hint=obs.cause_hint,
+                primary_anchor=ancla,
+                related_anchors=relacionadas,
+                evidence=evidencia,
+                status=estado,
+            )
+            continue
+        if isinstance(match, MatchAmbiguous):
+            causa = "posible duplicado de " + ", ".join(match.ids)
+            obs = replace(
+                obs,
+                cause_hint=(f"{obs.cause_hint}; {causa}" if obs.cause_hint else causa),
+            )
+        else:
+            obs = replace(obs)
+        nueva = Finding(
+            id=f"F{next_id}",
+            title=obs.title,
+            severity=severidad,
+            status=StatusOpen(),
+            primary_anchor=obs.primary_anchor,
+            related_anchors=tuple(obs.related_anchors),
+            cause_hint=obs.cause_hint,
+            evidence=tuple(obs.evidence),
+        )
+        next_id += 1
+        findings.append(nueva)
+    for i, f in enumerate(findings):
+        if f.id in tocados or isinstance(f.status, StatusDismissed):
+            continue
+        if _ruta_primaria(f) in revertidas and not isinstance(f.status, StatusResolved):
+            findings[i] = replace(
+                f,
+                status=StatusResolved(
+                    at_sha=plan.revision.head_sha if plan.revision else None
+                ),
+            )
+    findings.sort(key=lambda f: finding_number(f.id) or 0)
+    cobertura = report.claimed_coverage
+    if cobertura in ("complete", COMPLETE_CLAIM):
+        completion = COMPLETE_CLAIM
+    elif cobertura in ("partial", PARTIAL):
+        completion = PARTIAL
+    else:
+        completion = UNKNOWN
+    return Replace(
+        snapshot=replace(
+            current,
+            generation=current.generation + 1,
+            revision=plan.revision or current.revision,
+            next_id=next_id,
+            completion=completion,
+            findings=findings,
+        )
+    )
