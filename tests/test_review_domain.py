@@ -2101,3 +2101,47 @@ class ObservacionDeEntrada(unittest.TestCase):
         self.assertEqual(
             (obs.primary_anchor.path, obs.primary_anchor.line), ("a.py", 3)
         )
+
+
+# ---- F0 r8: título único con otro P_leg en el rango observado ----
+
+
+class TituloUnicoConOtroLegadoEnRango(unittest.TestCase):
+    def test_titulo_unico_con_otro_legado_en_rango_da_ambiguo(self):
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="T",
+                severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=10),
+            ),
+            domain.Finding(
+                id="F2",
+                title="otro",
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/app.py", line=11),
+            ),
+        ]
+        obs = _observacion("T", ruta="src/app.py")
+        obs.primary_anchor = domain.AnchorLocated(
+            path="src/app.py",
+            blob_sha="a" * 40,
+            range=(10, 12),
+            excerpt_digest=self.digest((10, 12)),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs, self.hechos()),
+            domain.MatchAmbiguous(ids=("F1", "F2")),
+        )
+
+    def digest(self, rango):
+        import hashlib
+
+        extracto = "\n".join(f"línea {i}" for i in range(rango[0], rango[1] + 1))
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
+    def hechos(self):
+        lineas = tuple(f"línea {i}" for i in range(1, 41))
+        return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
