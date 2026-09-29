@@ -947,25 +947,21 @@ class CitasYEvidencia(unittest.TestCase):
             report,
         )
         self.assertIsInstance(transicion, domain.Replace)
-        # r4: la observación trae ancla verificada sin candidato por ancla ->
-        # entra como hallazgo NUEVO (no adopta al legado por título+ruta).
-        hallazgos = transicion.snapshot.findings
-        f_nuevo = hallazgos[-1]
-        self.assertEqual(f_nuevo.id, "F2")
+        # r5: contra P_leg, exactamente un candidato con el mismo título
+        # (incluidos los descartados) y ningún otro plausible -> Existing.
+        f1 = transicion.snapshot.findings[0]
+        self.assertEqual(f1.id, "F1")
         self.assertIsInstance(
-            f_nuevo.status, domain.StatusOpen, "la cita validada no marca reproducido"
+            f1.status, domain.StatusOpen, "la cita validada no marca reproducido"
         )
         self.assertTrue(
-            any(isinstance(e, domain.EvidenceSource) for e in f_nuevo.evidence),
+            any(isinstance(e, domain.EvidenceSource) for e in f1.evidence),
             "la ubicación verificada queda como evidencia",
         )
         self.assertTrue(
-            any(isinstance(e, domain.EvidenceUnverified) for e in f_nuevo.evidence),
+            any(isinstance(e, domain.EvidenceUnverified) for e in f1.evidence),
             "la evaluación del modelo queda etiquetada aparte",
         )
-        f1 = hallazgos[0]
-        self.assertEqual(f1.id, "F1")
-        self.assertIsInstance(f1.status, domain.StatusOpen, "el legado no se toca")
 
 
 class ResolucionConCambioPertinente(unittest.TestCase):

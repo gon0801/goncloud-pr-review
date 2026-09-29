@@ -948,25 +948,41 @@ def _rutas_posibles(observation, facts):
 
 
 def match_finding(previous, observation, facts):
-    """Coincidencia determinista (F0 r3, dictamen de Claude):
+    """Coincidencia determinista (F0 r5, tabla completa del dictamen).
 
-    1) Identidad fuerte: MISMO excerpt_digest en la MISMA ruta (o renombrada
-       confirmada), SIN IMPORTAR el blob_sha — cualquier edición crea un blob
-       nuevo. Incluye descartados: se reconocen y el aceptador los conserva.
-    2) Solape de rango SIN digest igual: sólo candidato PLAUSIBLE, nunca
-       identidad -> Ambiguous con marca de posible duplicado, sin fusionar.
-    3) Título+ruta para hallazgos sin ancla verificada; un solo vigente en la
-       ruta consigue el id aunque el título cambie.
+    Los candidatos de la misma ruta (o de la renombrada confirmada) se
+    separan en P_loc (AnchorLocated verificable contra los blobs) y P_leg
+    (AnchorLegacy, o ancla que no verifica).
+
+    Con ancla verificada en la observación:
+    1) Fuerte: un P_loc con el mismo digest cuyo extracto aparece UNA sola
+       vez en el blob -> Existing; varios -> Ambiguous.
+    2) Plausibles en P_loc: mismo digest con extracto repetido, o un rango
+       que se solape.
+    3) Contra P_leg: exactamente un candidato con el mismo título (incluidos
+       los descartados) y ningún otro plausible -> Existing. También es
+       plausible un P_leg cuya línea legada cae dentro del rango observado.
+    Cualquier plausible -> Ambiguous sin fusionar. Si no hay ninguno -> New.
+
+    Sin ancla verificada en la observación: lógica de título + ruta (con los
+    descartados identificables por título y no adoptables por ruta sola).
     """
     rutas = _rutas_posibles(observation, facts)
     titulo = observation.title.casefold()
     previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
 
+    p_loc, p_leg = [], []
+    for f in previos_todos:
+        ancla, _ = _ancla_verificada(f.primary_anchor, facts)
+        if ancla is not None:
+            p_loc.append((f, ancla))
+        else:
+            p_leg.append(f)
+
     ancla_obs, _ = _ancla_verificada(observation.primary_anchor, facts)
     if ancla_obs is not None:
         # f) el digest igual cuenta como identidad fuerte sólo si el extracto
-        # aparece UNA vez en el blob; un extracto genérico repetido es sólo
-        # candidato plausible -> Ambiguous sin fusionar.
+        # aparece UNA vez en el blob; repetido es sólo plausible.
         lineas_obs = facts.blobs[(ancla_obs.path, ancla_obs.blob_sha)]
         ini, fin_r = ancla_obs.range
         extracto_obs = "\n".join(lineas_obs[ini - 1 : fin_r])
@@ -976,33 +992,48 @@ def match_finding(previous, observation, facts):
             for i in range(len(lineas_obs) - largo + 1)
             if "\n".join(lineas_obs[i : i + largo]) == extracto_obs
         )
+
         mismo_digest = [
-            f
-            for f in previos_todos
-            if isinstance(f.primary_anchor, AnchorLocated)
-            and f.primary_anchor.excerpt_digest == ancla_obs.excerpt_digest
+            f for f, ancla in p_loc if ancla.excerpt_digest == ancla_obs.excerpt_digest
         ]
         if mismo_digest and apariciones == 1:
             if len(mismo_digest) == 1:
                 return MatchExisting(id=mismo_digest[0].id)
             return MatchAmbiguous(ids=tuple(sorted(f.id for f in mismo_digest)))
+
         plausibles = {f.id for f in mismo_digest} if apariciones > 1 else set()
-        for f in previos_todos:
-            ancla_previa, _ = _ancla_verificada(f.primary_anchor, facts)
-            if ancla_previa is None:
+        for f, ancla in p_loc:
+            if ancla.excerpt_digest == ancla_obs.excerpt_digest:
                 continue
-            if ancla_previa.excerpt_digest == ancla_obs.excerpt_digest:
-                continue
-            a1, b1 = ancla_previa.range
+            a1, b1 = ancla.range
             a2, b2 = ancla_obs.range
             if a1 <= b2 and a2 <= b1:
                 plausibles.add(f.id)
+
+        # contra P_leg: mismo título (incluidos descartados) o línea legada
+        # dentro del rango observado; ambos son plausibles, nunca identidad.
+        mismos_titulo = [f for f in p_leg if f.title.casefold() == titulo]
+        en_rango = [
+            f
+            for f in p_leg
+            if (
+                (linea := getattr(f.primary_anchor, "line", None)) is not None
+                and not isinstance(linea, bool)
+                and ini <= linea <= fin_r
+            )
+        ]
+        if len(mismos_titulo) == 1:
+            candidata = mismos_titulo[0].id
+            otros_en_rango = [f.id for f in en_rango if f.id != candidata]
+            if not plausibles and not otros_en_rango:
+                return MatchExisting(id=candidata)
+        plausibles.update(f.id for f in mismos_titulo)
+        plausibles.update(f.id for f in en_rango)
         if plausibles:
             return MatchAmbiguous(ids=tuple(sorted(plausibles)))
-        # e) ancla verificada sin candidato fuerte ni plausible: bug nuevo; el
-        # emparejamiento por título+ruta sólo aplica sin ancla verificada.
         return MatchNew()
 
+    # sin ancla verificada en la observación: título + ruta (compatibilidad)
     fuertes = [f for f in previos_todos if f.title.casefold() == titulo]
     if len(fuertes) == 1:
         return MatchExisting(id=fuertes[0].id)
