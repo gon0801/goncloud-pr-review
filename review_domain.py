@@ -971,11 +971,15 @@ def match_finding(previous, observation, facts):
     titulo = observation.title.casefold()
     previos_todos = [f for f in previous if _ruta_primaria(f) in rutas]
 
-    p_loc, p_leg = [], []
+    p_loc, p_loc_viejos, p_leg = [], [], []
     for f in previos_todos:
         ancla, _ = _ancla_verificada(f.primary_anchor, facts)
         if ancla is not None:
             p_loc.append((f, ancla))
+        elif isinstance(f.primary_anchor, AnchorLocated):
+            # blob del push anterior: no verificable ahora, pero el digest
+            # guardado sigue siendo identidad contra el blob HEAD (F0 r6)
+            p_loc_viejos.append(f)
         else:
             p_leg.append(f)
 
@@ -996,12 +1000,22 @@ def match_finding(previous, observation, facts):
         mismo_digest = [
             f for f, ancla in p_loc if ancla.excerpt_digest == ancla_obs.excerpt_digest
         ]
-        if mismo_digest and apariciones == 1:
-            if len(mismo_digest) == 1:
-                return MatchExisting(id=mismo_digest[0].id)
-            return MatchAmbiguous(ids=tuple(sorted(f.id for f in mismo_digest)))
+        # r6: el digest GUARDADO de un previo cuyo blob ya no está en
+        # facts.blobs también es identidad (el extracto sobrevive la edición;
+        # unicidad/ambigüedad de la tabla r5 sobre el blob HEAD).
+        mismo_digest_guardado = [
+            f
+            for f in p_loc_viejos
+            if isinstance(f.primary_anchor, AnchorLocated)
+            and f.primary_anchor.excerpt_digest == ancla_obs.excerpt_digest
+        ]
+        fuertes = mismo_digest + mismo_digest_guardado
+        if fuertes and apariciones == 1:
+            if len(fuertes) == 1:
+                return MatchExisting(id=fuertes[0].id)
+            return MatchAmbiguous(ids=tuple(sorted(f.id for f in fuertes)))
 
-        plausibles = {f.id for f in mismo_digest} if apariciones > 1 else set()
+        plausibles = {f.id for f in fuertes} if apariciones > 1 else set()
         for f, ancla in p_loc:
             if ancla.excerpt_digest == ancla_obs.excerpt_digest:
                 continue

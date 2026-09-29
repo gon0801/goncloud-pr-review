@@ -1770,4 +1770,8 @@ class IdentidadSoloBlobsHead(unittest.TestCase):
         )
         self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
         self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
-        self.assertEqual(por_id["F2"].title, "dos: división por cero al exportar")
+        # el título es presentación mutable: accept lo actualiza desde la
+        # observación; lo que no cambia es el id ni el estado.
+        self.assertTrue(
+            por_id["F2"].title.startswith("dos: división por cero al exportar")
+        )
