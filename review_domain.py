@@ -1040,8 +1040,13 @@ def match_finding(previous, observation, facts):
                 and ini <= linea <= fin_r
             )
         ]
-        if len(candidatos_titulo) == 1 and not plausibles:
-            return MatchExisting(id=candidatos_titulo[0].id)
+        if len(candidatos_titulo) == 1:
+            candidata = candidatos_titulo[0].id
+            otros_en_rango = [
+                f["blind_id"] if False else f.id for f in en_rango if f.id != candidata
+            ]
+            if not plausibles and not otros_en_rango:
+                return MatchExisting(id=candidata)
         plausibles.update(f.id for f in candidatos_titulo)
         plausibles.update(f.id for f in en_rango)
         if plausibles:
