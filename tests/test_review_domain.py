@@ -878,7 +878,6 @@ class CitasYEvidencia(unittest.TestCase):
         )
 
     def test_cita_valida_queda_etiquetada_como_ubicacion_verificada(self):
-        import hashlib
 
         digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         report = domain.validar_reporte(
@@ -904,7 +903,6 @@ class CitasYEvidencia(unittest.TestCase):
         )
 
     def test_afirmacion_sin_evidencia_comprobable_queda_etiquetada(self):
-        import hashlib
 
         digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         report = domain.validar_reporte(
@@ -914,7 +912,6 @@ class CitasYEvidencia(unittest.TestCase):
         self.assertIn(domain.EvidenceUnverified, tipos)
 
     def test_cita_existente_con_interpretacion_falsa_no_marca_reproducido(self):
-        import hashlib
 
         digest = hashlib.sha256(self.BLOB[1].rstrip("\n").encode("utf-8")).hexdigest()
         previos = [
@@ -1135,7 +1132,6 @@ class AnclasComoIdentidad(unittest.TestCase):
         )
 
     def digest(self, rango):
-        import hashlib
 
         extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
@@ -1280,7 +1276,6 @@ class IdentidadFuertePorDigest(unittest.TestCase):
         return domain.RepositoryFacts(blobs=self.BLOBS)
 
     def digest(self, lineas, rango):
-        import hashlib
 
         extracto = "\n".join(lineas[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
@@ -1455,7 +1450,6 @@ class AnclaVerificadaYExtractoGenerico(unittest.TestCase):
         return domain.RepositoryFacts(blobs=self.BLOB)
 
     def digest(self, rango):
-        import hashlib
 
         extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
@@ -1545,7 +1539,6 @@ class MigracionLegadaConAnclasVerificadas(unittest.TestCase):
         return domain.RepositoryFacts(blobs=self.BLOB)
 
     def digest(self, rango):
-        import hashlib
 
         extracto = "\n".join(self.LINEAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
@@ -1672,13 +1665,11 @@ class IdentidadSoloBlobsHead(unittest.TestCase):
         return domain.RepositoryFacts(blobs=self.BLOBS)
 
     def digest_viejo(self, rango):
-        import hashlib
 
         extracto = "\n".join(self.LINEAS_VIEJAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
 
     def digest_nuevo(self, rango):
-        import hashlib
 
         extracto = "\n".join(self.LINEAS_NUEVAS[rango[0] - 1 : rango[1]])
         return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
@@ -1782,20 +1773,40 @@ class IdentidadSoloBlobsHead(unittest.TestCase):
 
 
 class VuelveR6BlobEditado(unittest.TestCase):
+    # blob viejo (push 1) y blob HEAD (push 2, editado): la línea 10 cambió de
+    # texto y se corrió a la 11; el título del hallazgo es el mismo.
+    LINEAS_VIEJAS = tuple(
+        "entrada sin validar (vieja)" if i == 10 else f"línea {i}" for i in range(1, 31)
+    )
+    LINEAS_NUEVAS = tuple(
+        "la entrada valida el IVA tras el refactor" if i == 11 else f"línea {i}"
+        for i in range(1, 31)
+    )
+    BLOBS = {
+        ("src/app.py", "a" * 40): LINEAS_VIEJAS,
+        ("src/app.py", "b" * 40): LINEAS_NUEVAS,
+    }
+
+    def hechos(self):
+        return domain.RepositoryFacts(blobs=self.BLOBS)
+
+    def digest(self, lineas, rango):
+
+        extracto = "\n".join(lineas[rango[0] - 1 : rango[1]])
+        return hashlib.sha256(extracto.encode("utf-8")).hexdigest()
+
     def test_descartado_y_abierto_con_blob_editado_no_reaparecen(self):
-        titulo1 = "chequeo de la entrada del formulario"
-        linea_vieja = "entrada sin validar (texto al congelar)"
         previos = [
             domain.Finding(
                 id="F1",
-                title=titulo1,
+                title="chequeo de la entrada del formulario",
                 severity="High",
                 status=domain.StatusDismissed(command_id=None),
                 primary_anchor=domain.AnchorLocated(
                     path="src/app.py",
                     blob_sha="a" * 40,
                     range=(10, 10),
-                    excerpt_digest=hashlib.sha256(linea_vieja.encode()).hexdigest(),
+                    excerpt_digest=self.digest(self.LINEAS_VIEJAS, (10, 10)),
                 ),
             ),
             domain.Finding(
@@ -1807,33 +1818,18 @@ class VuelveR6BlobEditado(unittest.TestCase):
                     path="src/cobro.py",
                     blob_sha="a" * 40,
                     range=(20, 21),
-                    excerpt_digest=hashlib.sha256(b"cobro sin IVA").hexdigest(),
+                    excerpt_digest=self.digest(self.LINEAS_VIEJAS, (20, 21)),
                 ),
             ),
         ]
-        # la edición crea el blob "b": la línea 10 se edita (texto nuevo ->
-        # digest nuevo) pero el TÍTULO es el mismo; facts sólo trae el blob HEAD.
-        linea_nueva = "la entrada valida el IVA tras el refactor"
-        previos[1].primary_anchor = domain.AnchorLocated(
-            path="src/cobro.py",
-            blob_sha="b" * 40,
-            range=(20, 21),
-            excerpt_digest=hashlib.sha256(b"cobro sin IVA (nuevo)").hexdigest(),
-        )
-        facts = domain.RepositoryFacts(
-            blobs={
-                ("src/app.py", "b" * 40): (linea_nueva,),
-                ("src/cobro.py", "b" * 40): ("cobro sin IVA (nuevo)",),
-            }
-        )
         obs1 = domain.Observation(
-            title=titulo1,
+            title="chequeo de la entrada del formulario",
             severity="High",
             primary_anchor=domain.AnchorLocated(
                 path="src/app.py",
                 blob_sha="b" * 40,
                 range=(11, 11),
-                excerpt_digest=hashlib.sha256(linea_nueva.encode()).hexdigest(),
+                excerpt_digest=self.digest(self.LINEAS_NUEVAS, (11, 11)),
             ),
             claim=domain.OPEN,
         )
@@ -1844,14 +1840,17 @@ class VuelveR6BlobEditado(unittest.TestCase):
                 path="src/cobro.py",
                 blob_sha="b" * 40,
                 range=(20, 21),
-                excerpt_digest=hashlib.sha256(b"cobro sin IVA (nuevo)").hexdigest(),
+                excerpt_digest=self.digest(self.LINEAS_NUEVAS, (20, 21)),
             ),
             claim=domain.OPEN,
         )
-        # el descartado con el mismo extracto en la misma ruta se reconoce
         self.assertEqual(
-            domain.match_finding(previos, obs1, facts),
+            domain.match_finding(previos, obs1, self.hechos()),
             domain.MatchExisting(id="F1"),
+        )
+        self.assertEqual(
+            domain.match_finding(previos, obs2, self.hechos()),
+            domain.MatchExisting(id="F2"),
         )
         plan = domain.ReviewPlan(
             revision=domain.Revision(
@@ -1859,7 +1858,7 @@ class VuelveR6BlobEditado(unittest.TestCase):
             ),
             changed_paths=("src/app.py", "src/cobro.py"),
         )
-        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, facts)
+        report = domain.validar_reporte([obs1, obs2], domain.UNKNOWN, self.hechos())
         transicion = domain.accept_report(
             domain.Snapshot(
                 schema=2,
@@ -1877,6 +1876,7 @@ class VuelveR6BlobEditado(unittest.TestCase):
         por_id = {f.id: f for f in transicion.snapshot.findings}
         self.assertEqual(set(por_id), {"F1", "F2"}, "sin duplicados nuevos")
         self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
 
 
 class SegundaMencion(unittest.TestCase):
