@@ -80,11 +80,40 @@ El usuario autorizó escribir el diseño y el plan, no implementar. Todos los bl
 | M0 | Dominio y lector compatible de memoria. | Legacy y v2 conservan IDs, descartes y cursor; corrupción no equivale a vacío. | Q0 | cc:done (PR #37, merge 1174b60; evidencia docs/evidence/reviewer/M0.md; residuales r2/r3 consumidos por M1 salvo schema:1 explicito -> Future(1), abierto) |
 | M1 | Persistencia sin pérdida silenciosa. | Desborde no avanza SHA ni pierde estado; retorno a lector compatible probado. | M0 | cc:done (PR #38, merge 08286ef; evidencia docs/evidence/reviewer/M1.md; prueba real state_schema:v2 OK sobre 2d06702; escritura v2 desactivada por defecto; 11 residuales Claude r4 + AI + CodeRabbit al pie) |
 | F0 | Identidad y evidencia de hallazgos. | IDs estables en movimientos comprobados; ambigüedad no fusiona bugs. | M1 | cc:done con desvío declarado (PR #39, merge 538bcf7; evidencia docs/evidence/reviewer/F0.md; prueba real dos-bugs-igual-titulo OK con finding_identity=anchors; default current; anchors declarado, no cableado al pipeline; DESVÍO: la identidad por anchors inerte hasta cablear el pipeline y habilitar escritura v2 — la garantía de no-fusión por título no está viva en producción; residuales r1-r8 + AI F1-F9 + CodeRabbit al pie) |
-| D0 | Experimento de delta real. | Cumple los criterios de calidad y ahorro del plan, o queda desactivado. | F0, E1 | cc:TODO |
-| C0 | Experimento de contexto selectivo. | Mejora un caso confirmado entre archivos sin degradar calidad, o queda desactivado. | F0, E1 | cc:TODO |
+| D0 | Experimento de delta real. | Cumple los criterios de calidad y ahorro del plan, o queda desactivado. | F0, E1 | reemplazada por el plan 2026-10-05 (T14, T15, T07-T08 y T10, T09) |
+| C0 | Experimento de contexto selectivo. | Mejora un caso confirmado entre archivos sin degradar calidad, o queda desactivado. | F0, E1 | reemplazada por el plan 2026-10-05 (T14, T15, T07-T08 y T10, T09) |
 | C1 | Reglas por carpeta. | Precedencia y límites comprobados; reglas leídas de la base confiable. | C0 | cc:TODO |
 | C2 | Evidencia de CI. | Checks del SHA exacto y degradación explícita ante permisos insuficientes. | C0 | cc:TODO |
-| U0 | Publicación serializada. | Carreras reproducibles no pierden decisiones confirmadas. | M1, F0 | cc:TODO |
-| U1 | Comandos en comentarios. | Explicar, descartar y revisar funcionan sin push y respetan permisos e idempotencia. | U0 | cc:TODO |
+| U0 | Publicación serializada. | Carreras reproducibles no pierden decisiones confirmadas. | M1, F0 | reemplazada por el plan 2026-10-05 (T14, T15, T07-T08 y T10, T09) |
+| U1 | Comandos en comentarios. | Explicar, descartar y revisar funcionan sin push y respetan permisos e idempotencia. | U0 | reemplazada por el plan 2026-10-05 (T14, T15, T07-T08 y T10, T09) |
 | X0 | Decidir continuación por archivos. | Medición del umbral y decisión o subplan, sin implementación automática. | E1 y medición posterior | Condicionado |
 | X1 | Decidir comentarios inline. | Evidencia de necesidad y aceptación del cambio de contrato visible. | U1 y evaluación de uso | Condicionado |
+
+## Corrección y cierre del revisor (plan 2026-10-05)
+
+Diseño: [Arquitectura de correcciones](docs/reviewer-corrections-architecture.md). Plan: [Plan de correcciones 2026-10-05](docs/superpowers/plans/2026-10-05-revisor-correcciones.md).
+
+Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por claw; T16 (piloto en repos reales y mediciones pagadas) espera su go.
+
+| Tarea | Bloque | Entregable | Depende de | Estado |
+|---|---|---|---|---|
+| T01 | R0 | Rutas Git exactas | Base verificada | cc:TODO |
+| T02 | R0 | Búsqueda de contexto con resultado explícito | T01 | cc:TODO |
+| T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:TODO |
+| T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:TODO |
+| T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:TODO |
+| T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:TODO |
+| T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:TODO |
+| T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:TODO |
+| T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:TODO |
+| T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:TODO |
+| T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
+| T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
+| T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:TODO |
+| T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:TODO |
+| T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:TODO |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
+
+### Residuales
+
+| Origen | Nota | Estado |
