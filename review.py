@@ -726,13 +726,18 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
             prose = trim_utf8(prose, disponible_bytes, aviso)
         parts.append(prose)
         parts += scope
-        return "\n".join(parts)
+        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    if not manifest["reviewed"]:
+        review = (
+            review
+            or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
+        )
     if len(review) > COMMENT_LIMIT:
         review = (
             review[:COMMENT_LIMIT]
             + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
         )
-    parts.append(review or "_El revisor no devolvió texto._")
+    parts += [review or "_El revisor no devolvió texto._", ""]
     parts += scope
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
@@ -781,7 +786,7 @@ def compose_with_findings(
     if budget is not None and len(block.encode("utf-8")) > budget.comment_max_bytes:
         budget = None
     budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
-    if len(review) > budget_prosa:
+    if budget is None and len(review) > budget_prosa:
         review = (
             review[:budget_prosa]
             + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
@@ -828,21 +833,6 @@ def compose_with_findings(
         "</details>",
     ]
     if budget is not None:
-        parts += ["", "## Detalle del revisor", "", "", ""]
-        alcance = scope_lines(result, manifest, provider)
-        if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
-            alcance.insert(
-                0,
-                f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
-                f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
-            )
-        parts += [
-            "<details><summary>Alcance de la revisión</summary>",
-            "",
-            *alcance,
-            "",
-            "</details>",
-        ]
         i_prosa = parts.index("## Detalle del revisor") + 2
         sin_prosa = "\n".join(parts[:i_prosa] + parts[i_prosa + 1 :])
         disponible_bytes = max(
@@ -855,7 +845,7 @@ def compose_with_findings(
         if len(review.encode("utf-8")) > disponible_bytes:
             review = trim_utf8(review, disponible_bytes, aviso)
         parts[i_prosa] = review
-        return "\n".join(parts)
+        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 

@@ -2697,6 +2697,144 @@ class CheckpointCapacity(unittest.TestCase):
             "el checkpoint confirmado viaja completo",
         )
 
+    def test_estructura_con_budget_sin_duplicados(self):
+        findings = {
+            "merged": [
+                {
+                    "id": "F1",
+                    "file": "a.py",
+                    "line": 1,
+                    "severity": "Low",
+                    "title": "t",
+                    "state": "open",
+                }
+            ],
+            "new_ids": [],
+            "block": domain.encode_snapshot(
+                domain.Snapshot(
+                    schema=2,
+                    generation=1,
+                    revision=domain.Revision(
+                        base_sha="b" * 40,
+                        head_sha="c" * 40,
+                        policy_digest="d" * 64,
+                    ),
+                    next_id=2,
+                    completion=domain.PARTIAL,
+                    findings=[
+                        domain.Finding(
+                            id="F1",
+                            title="t",
+                            severity="Low",
+                            status=domain.StatusOpen(),
+                            primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                        )
+                    ],
+                    command_cursor=0,
+                )
+            ),
+            "model_ok": True,
+        }
+        snapshot_chico = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=2,
+            completion=domain.PARTIAL,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title="t",
+                    severity="Low",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                )
+            ],
+            command_cursor=0,
+        )
+        findings_block = domain.encode_snapshot(snapshot_chico)
+        findings["block"] = findings_block
+        args = (
+            {
+                "result": "COVERAGE: complete\n"
+                + (
+                    "texto del revisor y detalles largos con muchísimo relleno adicional "
+                    * 5000
+                )
+            },
+            {"mode": "full", "reason": "no-prev", "reviewed": ["a.py"], "excluded": []},
+        )
+        for nombre, budget in (
+            ("sin budget", None),
+            (
+                "con budget",
+                domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
+            ),
+        ):
+            with self.subTest(rama=nombre):
+                out = review.compose(
+                    *args,
+                    sha="e" * 40,
+                    provider="opencode-go",
+                    findings=findings,
+                    budget=budget,
+                )
+                self.assertEqual(out.count("## Detalle del revisor"), 1)
+                self.assertEqual(out.count("Alcance de la revisión"), 1)
+                if budget is not None:
+                    detalle = out[out.index("## Detalle del revisor") :]
+                    self.assertIn(
+                        "_(Revisión recortada al presupuesto de capacidad.)_",
+                        detalle,
+                        "la prosa recortada y su aviso viven en Detalle",
+                    )
+
+    def test_sin_revisables_publica_el_mensaje_y_coincide_con_la_base(self):
+        doradas = [
+            (
+                {"result": ""},
+                {
+                    "mode": "full",
+                    "reason": "no-prev",
+                    "reviewed": [],
+                    "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
+                },
+                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:complete -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\nNo hay archivos revisables en este PR (todo quedó excluido por filtro).\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 0 archivo(s)\n- Excluidos: 1\n  - `dist/x.js` (filtro dist/**)\n\n</details>",
+            ),
+            (
+                {"result": "COVERAGE: partial\ntexto del revisor"},
+                {
+                    "mode": "full",
+                    "reason": "no-prev",
+                    "reviewed": ["a.py"],
+                    "excluded": [],
+                },
+                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:partial -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n> [!WARNING]\n> **Revisión incompleta:** el revisor no declaró su cobertura.\n\nCOVERAGE: partial\ntexto del revisor\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 1 archivo(s)\n\n</details>",
+            ),
+        ]
+        for resultado, manifest, dorada in doradas:
+            with self.subTest(reviewed=len(manifest["reviewed"])):
+                out = review.compose(
+                    resultado,
+                    manifest,
+                    sha="e" * 40,
+                    provider="opencode-go",
+                )
+                self.assertEqual(out, dorada, "byte-idéntico a la base")
+
+    def test_mensaje_sin_revisables_con_findings_vacios(self):
+        findings = {"merged": [], "new_ids": [], "block": "", "model_ok": True}
+        out = review.compose(
+            {"result": ""},
+            {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+        )
+        self.assertIn("No hay archivos revisables", out)
+
     def test_frontera_exacta_del_perfil_propuesto(self):
         """T05: 40000 bytes exactos se aceptan; 40001 se rechazan."""
         perfil = domain.StorageBudget(
@@ -2767,7 +2905,7 @@ class CheckpointCapacity(unittest.TestCase):
             ],
         )
         checado = None
-        while True:
+        for _ in range(200):
             intento = domain.encode_snapshot(desbordado, perfil)
             if isinstance(intento, domain.CapacityExceeded):
                 checado = intento
