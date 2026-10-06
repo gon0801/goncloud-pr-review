@@ -1880,8 +1880,8 @@ class Commit:
 
 def _podar(current, target_json):
     """Al crear una solicitud nueva: fuera las superseded de otros targets y
-    los tombstones finished salvo el más reciente (el presupuesto del bloque
-    es compartido con los hallazgos y el contador nunca retrocede).
+    los tombstones finished (el presupuesto del bloque es compartido con los
+    hallazgos y el contador nunca retrocede).
     """
     return [
         r

@@ -370,6 +370,55 @@ class RequestTransitions(unittest.TestCase):
         self.assertIsInstance(sin_revision, domain.Commit)
         self.assertEqual(sin_revision.snapshot.completion, domain.UNKNOWN)
 
+    def test_cada_campo_de_vigencia_se_discrimina(self):
+        """Cambiar un solo campo de vigencia vence la solicitud: sin hallazgos
+        acreditados, cobertura unknown y reexpedición con el target nuevo."""
+        for campo, valor in (
+            ("head_sha", "e" * 40),
+            ("base_sha", "9" * 40),
+            ("policy_digest", "9" * 64),
+        ):
+            with self.subTest(campo=campo):
+                estado = snapshot_base()
+                creada = domain.reconcile(
+                    estado,
+                    domain.RequestReview(origin=PUSH, target=TARGET),
+                    hechos(),
+                    POLICY,
+                )
+                revision = domain.Revision(
+                    base_sha="b" * 40,
+                    head_sha="c" * 40,
+                    policy_digest="d" * 64,
+                )
+                setattr(revision, campo, valor)
+                observacion = domain.Observation(
+                    title="Fuga",
+                    severity="High",
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                    claim=domain.OPEN,
+                )
+                vencido = domain.reconcile(
+                    creada.snapshot,
+                    domain.ReportReady(
+                        origin=domain.Origin(kind="push", run_id=11),
+                        request_id=1,
+                        run_id=11,
+                        attempt=1,
+                        observaciones=(observacion,),
+                        cobertura=domain.COMPLETE_CLAIM,
+                    ),
+                    hechos(revision),
+                    POLICY,
+                )
+                self.assertIsInstance(vencido, domain.Commit)
+                self.assertEqual(vencido.snapshot.completion, domain.UNKNOWN)
+                self.assertEqual(vencido.snapshot.findings, [])
+                self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
+                self.assertEqual(
+                    vencido.snapshot.pending_requests[0].target[campo], valor
+                )
+
     def test_observacion_rechazada_no_crashea_y_no_acredita(self):
         """CodeRabbit r1: la frontera valida el artifact antes de aceptar."""
         estado = snapshot_base()
@@ -790,6 +839,14 @@ class ResultAuthentication(unittest.TestCase):
                 )
                 self.assertIsInstance(rechazado, review.Rejected)
 
+        with self.subTest(caso="attempt"):
+            rechazado = review.authenticate_result(
+                self._metadata(attempt=2),
+                self._artifact(attempt=1),
+                self._contexto(),
+            )
+            self.assertIsInstance(rechazado, review.Rejected)
+
         for nombre, over in {
             "request": {"request_id": 42},
             "pr_head": {"pr_head_sha": "1" * 40},
@@ -972,6 +1029,64 @@ class CoordinadorCli(unittest.TestCase):
         self.assertEqual(len(falso.patches), 1)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.pending_requests, [])
+
+    def test_sticky_legado_crea_solicitud_y_conserva_hallazgos(self):
+
+        legado = domain.serialize_findings(
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": "a.py",
+                        "line": 1,
+                        "severity": "High",
+                        "title": "bug",
+                        "state": "open",
+                    }
+                ],
+                "next": 2,
+                "seen": 4,
+            }
+        )
+        cuerpo = f"{review.MARKER}\n{review.SHA_PREFIX}{'e' * 40} -->\n{legado}"
+        falso = _ComentarioFalso([{"id": 7, "body": cuerpo, "user": "bot"}])
+        despachados = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._entorno(tmp):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(
+                        review,
+                        "despachar_worker",
+                        side_effect=lambda s, **kw: despachados.append(s.id),
+                    ):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        self.assertEqual(len(falso.patches), 1)
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual([r.id for r in carga.snapshot.pending_requests], [1])
+        self.assertEqual(
+            [f.title for f in carga.snapshot.findings],
+            ["bug"],
+            "los hallazgos del legado sobreviven a la migración",
+        )
+        self.assertEqual(carga.snapshot.command_cursor, 4)
+        self.assertEqual(despachados, [1])
+
+    def test_sticky_sin_bloque_admite_trabajo(self):
+        """El banner de falla es ausencia real de memoria."""
+        cuerpo = f"{review.MARKER}\n> [!CAUTION]\n> No se pudo revisar"
+        falso = _ComentarioFalso([{"id": 7, "body": cuerpo, "user": "bot"}])
+        despachados = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._entorno(tmp):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(
+                        review,
+                        "despachar_worker",
+                        side_effect=lambda s, **kw: despachados.append(s.id),
+                    ):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        self.assertEqual(despachados, [1])
 
     def test_base_ausente_falla_alto(self):
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(snapshot_base())}])
