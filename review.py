@@ -1076,9 +1076,10 @@ def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None)
     Streams `git grep -z -l` and applies the candidate filter BEFORE the limit,
     so a capped search can never swallow candidates that a later filter would
     have kept. The result states what happened: Complete (the stream ended or
-    the designed limit was reached), Truncated (a ceiling was hit, maybe with
-    zero paths), Failed (git errored). Only an empty Complete means "the
-    search found nothing".
+    the designed limit was reached and no match had to be skipped), Truncated
+    (a ceiling was hit or non-UTF-8 matches had to be skipped, maybe with zero
+    paths), Failed (git errored). Only an empty Complete means "the search
+    found nothing".
     """
     if not patterns:
         return SearchComplete(())
@@ -1103,7 +1104,7 @@ def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None)
             proc.wait()
             proc.stdout.close()
 
-        accepted, examined, tail = [], 0, b""
+        accepted, examined, tail, skipped = [], 0, b"", 0
         reason, limit_hit = None, False
         while reason is None and not limit_hit:
             left = deadline - time.monotonic()
@@ -1129,6 +1130,7 @@ def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None)
                 try:
                     path = raw.decode("utf-8")
                 except UnicodeDecodeError:
+                    skipped += 1
                     continue
                 if predicate is not None and not predicate(path):
                     continue
@@ -1138,16 +1140,19 @@ def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None)
                     break
         if reason is not None or limit_hit:
             stop_proc()
-            if reason is not None:
-                return SearchTruncated(tuple(accepted), reason)
-            return SearchComplete(tuple(accepted))
-        code = proc.wait()
-        if code not in (0, 1):
-            errors.seek(0)
-            detail = errors.read().decode("utf-8", "backslashreplace").strip()
+        else:
+            code = proc.wait()
+            if code not in (0, 1):
+                errors.seek(0)
+                detail = errors.read().decode("utf-8", "backslashreplace").strip()
+                proc.stdout.close()
+                return SearchFailed(detail or f"git grep terminó con código {code}")
             proc.stdout.close()
-            return SearchFailed(detail or f"git grep terminó con código {code}")
-        proc.stdout.close()
+        if skipped:
+            omitted = f"{skipped} ruta(s) no UTF-8 omitida(s)"
+            reason = f"{reason}; {omitted}" if reason else omitted
+        if reason is not None:
+            return SearchTruncated(tuple(accepted), reason)
         return SearchComplete(tuple(accepted))
 
 
@@ -1240,10 +1245,16 @@ def build_tests(reviewed):
         patterns = [p for p in (stem, name) if len(p) >= 3]
         result = grep_files(patterns, TESTS_MAX_RESULTS, predicate=looks_like_test)
         if isinstance(result, SearchFailed):
-            return f"(La búsqueda de pruebas falló: {result.reason})\n"
+            return trim_utf8(
+                f"(La búsqueda de pruebas falló: {result.reason})\n",
+                TESTS_MAX_BYTES,
+                "…(recortado por tamaño)…\n",
+            )
         if isinstance(result, SearchTruncated):
             truncated = result.reason
         for match in result.paths:
+            if len(seen) >= TESTS_MAX_RESULTS:
+                break
             if match not in seen:
                 seen.add(match)
                 lines.append(f"- {match} (menciona `{stem}`)")

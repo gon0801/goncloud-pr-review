@@ -1216,7 +1216,11 @@ class PrepareContext(unittest.TestCase):
         with mock.patch.object(
             review,
             "grep_files",
-            side_effect=lambda patterns, limit, **kw: review.SearchComplete(pool),
+            side_effect=lambda patterns, limit, predicate=None, **kw: (
+                review.SearchComplete(
+                    tuple(p for p in pool if predicate is None or predicate(p))[:limit]
+                )
+            ),
         ):
             text = review.build_tests(["src/app.py"])
         self.assertIn("- tests/test_app.py", text)
@@ -4453,6 +4457,40 @@ class ContextSearch(unittest.TestCase):
         self.assertIsInstance(result, review.SearchTruncated)
         self.assertIn("tiempo", result.reason)
 
+    def test_non_utf8_matches_stay_visible(self):
+        wrapper = Path(tempfile.mkdtemp(), "bin")
+        wrapper.mkdir()
+        real = shutil.which("git")
+        script = wrapper / "git"
+        script.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "grep" ]; then\n'
+            "  printf 'tests/test_\\377.py\\0'\n"
+            "  exit 0\n"
+            "fi\n"
+            f'exec "{real}" "$@"\n'
+        )
+        script.chmod(0o755)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, {"src/app.py": "app\n"})
+            os.chdir(Path(tmp, "repo"))
+            try:
+                with mock.patch.dict(
+                    os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
+                ):
+                    result = review.grep_files(["app"], 5)
+                    text = review.build_tests(["src/app.py"])
+                    chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+                    callers = review.build_callers(["src/app.py"], chunks)
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIn("no UTF-8", result.reason)
+        self.assertIn("UTF-8", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
+        self.assertIn("UTF-8", callers)
+        self.assertNotIn("no encontró el texto", callers)
+
     def test_callers_reports_truncated_and_failed(self):
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
         cases = [
@@ -4517,10 +4555,7 @@ class ContextBudgets(unittest.TestCase):
     def test_context_packages_respect_byte_budget(self):
         long_path = "pkg/" + "a" * 120 + "/archivo_con_nombre_largo_{}.py"
         callers_pool = [long_path.format(i) for i in range(30)]
-        tests_pool = [
-            f"tests/test_modulo_con_nombre_muy_largo_para_el_recorte_{i}_xxx.py"
-            for i in range(400)
-        ]
+        tests_pool = [f"tests/test_modulo_{'ñ' * 280}_caso_{i}.py" for i in range(400)]
         chunks = {
             f"src/modulo{i}.py": "".join(
                 f"+def funcion_{n}_con_nombre_largo():\n"
@@ -4541,7 +4576,9 @@ class ContextBudgets(unittest.TestCase):
         callers.encode("utf-8")
         tests.encode("utf-8")
         self.assertIn("recortado", callers)
+        self.assertIn("recortado", tests)
         self.assertNotIn("\ufffd", callers)
+        self.assertNotIn("\ufffd", tests)
 
     def test_conventions_final_serialization_respects_budget(self):
         big = "原文の規約テキストです €\n" * 900
