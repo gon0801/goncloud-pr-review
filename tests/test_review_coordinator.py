@@ -324,6 +324,52 @@ class RequestTransitions(unittest.TestCase):
         self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
         self.assertEqual(segunda.snapshot.request_count, 2)
 
+    def test_vencido_con_viva_del_target_nuevo_reusa_y_no_duplica(self):
+        """Con una solicitud viva del target nuevo, el vencido de la vieja
+        re-despacha la viva en lugar de crear otra."""
+        estado = snapshot_base()
+        primera = domain.reconcile(
+            estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
+        )
+        target_nuevo = domain.ReviewTarget(
+            repository="o/r",
+            pr_number=1,
+            head_sha="e" * 40,
+            base_sha="b" * 40,
+            policy_digest="d" * 64,
+        )
+        # el comando explícito no poda
+        segunda = domain.reconcile(
+            primera.snapshot,
+            domain.AuthorizedCommand(
+                origin=domain.Origin(kind="comando", comment_id=9),
+                target=target_nuevo,
+                action="revisar",
+            ),
+            hechos(),
+            POLICY,
+        )
+        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [1, 2])
+        revision_nueva = domain.Revision(
+            base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
+        )
+        vencido = domain.reconcile(
+            segunda.snapshot,
+            domain.ReportReady(
+                origin=domain.Origin(kind="push", run_id=11),
+                request_id=1,
+                run_id=11,
+                attempt=1,
+                observaciones=(),
+                cobertura=domain.PARTIAL,
+            ),
+            hechos(revision_nueva),
+            POLICY,
+        )
+        self.assertIsInstance(vencido, domain.Commit)
+        self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
+        self.assertEqual([s.id for s in vencido.work_after_commit], [2])
+
     def test_sin_target_o_sin_revision_no_acreditan(self):
         observacion = domain.Observation(
             title="Fuga",
