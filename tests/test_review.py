@@ -4751,6 +4751,768 @@ class CableadoIdentidad(unittest.TestCase):
         # ningún previo: es New, no Existing del descartado por título.
         self.assertEqual(domain.match_finding(previos, obs, facts), domain.MatchNew())
 
+    def _repo_dos_bugs(self, tmp):
+        """Repo real: base -> head1 (dos bugs anclados) -> head2 (edita app.py)."""
+        import hashlib as h
+
+        repo = Path(tmp, "repo")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@t")
+        git(repo, "config", "user.name", "t")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "c0")
+        base = git(repo, "rev-parse", "HEAD")
+        v1 = (
+            "import os\ndef a():\n    pass\nx = 1/0  # fuga\ny = 2\n"
+            "z = 3\nw = 4\neval(input)  # riesgo\nv = 5\nu = 6\n"
+        )
+        (repo / "app.py").write_text(v1)
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "c1")
+        head1 = git(repo, "rev-parse", "HEAD")
+        blob1 = git(repo, "rev-parse", "HEAD:app.py")
+        v2 = v1.replace("    pass\n", "    pass\nq = 0\n")
+        (repo / "app.py").write_text(v2)
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "c2")
+        head2 = git(repo, "rev-parse", "HEAD")
+        blob2 = git(repo, "rev-parse", "HEAD:app.py")
+        lineas1 = v1.splitlines()
+        digest_fuga = h.sha256("\n".join(lineas1[3:4]).encode()).hexdigest()
+        digest_riesgo = h.sha256("\n".join(lineas1[7:8]).encode()).hexdigest()
+        return {
+            "repo": repo,
+            "base": base,
+            "head1": head1,
+            "head2": head2,
+            "blob1": blob1,
+            "blob2": blob2,
+            "digest_fuga": digest_fuga,
+            "digest_riesgo": digest_riesgo,
+        }
+
+    def test_recorrido_anchors_conserva_descarte_y_no_fusiona(self):
+        import hashlib as h
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._repo_dos_bugs(tmp)
+            snapshot = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha=r["base"], head_sha=r["head1"], policy_digest=""
+                ),
+                next_id=3,
+                completion=domain.PARTIAL,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title="Fuga de recurso",
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLocated(
+                            path="app.py",
+                            blob_sha=r["blob1"],
+                            range=(4, 4),
+                            excerpt_digest=r["digest_fuga"],
+                        ),
+                    ),
+                    domain.Finding(
+                        id="F2",
+                        title="Riesgo de eval",
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLocated(
+                            path="app.py",
+                            blob_sha=r["blob1"],
+                            range=(8, 8),
+                            excerpt_digest=r["digest_riesgo"],
+                        ),
+                    ),
+                ],
+                command_cursor=0,
+            )
+            sticky = {"body": domain.encode_snapshot(snapshot)}
+            extracto_fuga = "x = 1/0  # fuga"
+            extracto_riesgo = "eval(input)  # riesgo"
+            modelo = (
+                domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "title": "Fuga de recurso reformulada",
+                                "severity": "High",
+                                "state": "open",
+                                "file": "app.py",
+                                "line": 5,
+                                "anchor": {
+                                    "path": "app.py",
+                                    "blob_sha": r["blob2"],
+                                    "range": [5, 5],
+                                    "excerpt_digest": h.sha256(
+                                        extracto_fuga.encode()
+                                    ).hexdigest(),
+                                },
+                            },
+                            {
+                                "title": "Riesgo de eval",
+                                "severity": "High",
+                                "state": "open",
+                                "file": "app.py",
+                                "line": 9,
+                                "anchor": {
+                                    "path": "app.py",
+                                    "blob_sha": r["blob2"],
+                                    "range": [9, 9],
+                                    "excerpt_digest": h.sha256(
+                                        extracto_riesgo.encode()
+                                    ).hexdigest(),
+                                },
+                            },
+                            {
+                                "title": "Defecto tres",
+                                "severity": "Low",
+                                "state": "open",
+                                "file": "src/otro.py",
+                                "line": 1,
+                            },
+                        ],
+                        "next": 3,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+                + "\n\nCOVERAGE: complete\n"
+            )
+            resultado = {"result": modelo}
+            manifest = {
+                "base": r["base"],
+                "head": r["head2"],
+                "mode": "incremental",
+                "prev_sha": r["head1"],
+                "changed_files": ["app.py"],
+                "reviewed": ["otro.py"],
+                "excluded": [],
+            }
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+                cwd = os.getcwd()
+                os.chdir(r["repo"])
+                try:
+                    with mock.patch.object(
+                        review,
+                        "collect_dismissals",
+                        return_value=({"F1"}, False, 7),
+                    ):
+                        out = review.build_findings(
+                            resultado, manifest, sticky, "o/r", 1, "bot", []
+                        )
+                    hechos = review.hechos_de_repo(manifest, set())
+                finally:
+                    os.chdir(cwd)
+            self.assertIsNone(
+                out.get("keep"), "anchors pasa por la aceptación del dominio"
+            )
+            self.assertEqual(
+                hechos.changed_paths,
+                ("app.py",),
+                "los hechos usan el delta real, no `reviewed`",
+            )
+            carga = domain.read_snapshot(out["block"])
+            self.assertIsInstance(carga, domain.Valid)
+            snap = carga.snapshot
+            por_id = {f.id: f for f in snap.findings}
+            self.assertEqual(
+                [f.id for f in snap.findings], ["F1", "F2", "F3"], "IDs estables"
+            )
+            self.assertIsInstance(
+                por_id["F1"].status,
+                domain.StatusDismissed,
+                "el descarte sobrevive al título nuevo y al ancla movida",
+            )
+            self.assertEqual(por_id["F1"].status.command_id, 7)
+            self.assertEqual(
+                por_id["F1"].title,
+                "Fuga de recurso",
+                "un descartado no revive ni se renombra",
+            )
+            self.assertIsInstance(por_id["F2"].status, domain.StatusOpen)
+            self.assertEqual(por_id["F2"].title, "Riesgo de eval")
+            self.assertEqual(por_id["F3"].title, "Defecto tres")
+            self.assertEqual(
+                snap.revision.head_sha,
+                r["head2"],
+                "el resultado conserva su SHA real",
+            )
+            self.assertEqual(
+                out["completion"],
+                domain.COMPLETE_CLAIM,
+            )
+            cuerpo = review.compose(
+                resultado,
+                manifest,
+                sha=r["head2"],
+                provider="opencode-go",
+                findings=out,
+            )
+            self.assertIn(
+                f"{review.COMPLETION_PREFIX}{r['head2']}:complete -->",
+                cuerpo,
+                "el marcador visible nace del mismo valor persistido",
+            )
+
+    def test_excluidos_budget_o_encoding_degradan_la_cobertura(self):
+        """Un diff incompleto no acredita complete ni en el marcador."""
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "a.py").write_text("uno\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            head = (
+                base  # delta real vacío y calculado: la única omisión es la exclusión
+            )
+            manifest = {
+                "base": base,
+                "head": head,
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["a.py"],
+                "excluded": [{"path": "gen/big.js", "reason": "budget"}],
+            }
+            sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
+            bloque = (
+                domain.FINDINGS_PREFIX
+                + '{"findings": [], "next": 1}'
+                + domain.FINDINGS_SUFFIX
+            )
+            resultado = {
+                "result": f"{bloque}\n\nCOVERAGE: complete\n",
+                "subtype": "success",
+            }
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                out = review.build_findings(
+                    resultado, manifest, sticky, "o/r", 1, "bot", []
+                )
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(
+            out["completion"],
+            domain.PARTIAL,
+            "archivo excluido por budget: omisión obligatoria, no complete",
+        )
+        cuerpo = review.compose(
+            resultado, manifest, sha=head, provider="opencode-go", findings=out
+        )
+        self.assertIn(f"{review.COMPLETION_PREFIX}{head[:7]}", cuerpo)
+        self.assertIn(":partial -->", cuerpo)
+
+    def test_bloque_ausente_no_confirma_cobertura(self):
+        """model_ok falso (sin bloque) degrada la cobertura completa."""
+        import review_domain as domain
+
+        sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
+        resultado = {"result": "solo prosa.\n\nCOVERAGE: complete\n"}
+        manifest = {
+            "base": "b" * 40,
+            "head": "c" * 40,
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": ["a.py"],
+            "excluded": [],
+        }
+        out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
+        self.assertFalse(out["model_ok"])
+        self.assertEqual(out["completion"], domain.UNKNOWN)
+        cuerpo = review.compose(
+            resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
+        )
+        self.assertIn(f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
+
+    @staticmethod
+    def _memoria_v2_chica(domain):
+        return domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="0" * 40, policy_digest=""
+            ),
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+
+    def test_hechos_sin_shas_validos_registran_omision(self):
+        hechos = review.hechos_de_repo(
+            {
+                "base": "x",
+                "head": "y",
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["a.py"],
+                "excluded": [],
+            },
+            set(),
+        )
+        self.assertEqual(hechos.omissions, ("delta real no calculable",))
+        self.assertFalse(hechos.delta_calculado)
+
+    def test_delta_incremental_entre_revisiones(self):
+        """El delta real en incremental es prev_sha..head."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "a.py").write_text("uno\n")
+            (repo / "b.py").write_text("uno\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "a.py").write_text("dos\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "push1")
+            prev = git(repo, "rev-parse", "HEAD")
+            (repo / "b.py").write_text("dos\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "push2")
+            head = git(repo, "rev-parse", "HEAD")
+            manifest = {
+                "base": base,
+                "head": head,
+                "prev_sha": prev,
+                "mode": "incremental",
+                "changed_files": ["b.py"],
+                "reviewed": ["b.py"],
+                "excluded": [],
+            }
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                hechos = review.hechos_de_repo(manifest, set())
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(hechos.changed_paths, ("b.py",))
+        self.assertEqual(hechos.omissions, ())
+
+    def test_delta_real_con_ruta_no_representable_no_reventa(self):
+
+        class Proc:
+            returncode = 0
+            stdout = b"caf\xe9.py\x00ok.py\x00"
+
+        with mock.patch.object(review, "shb", return_value=Proc()):
+            rutas, omisiones, calculado = review.delta_real("a" * 40, "b" * 40)
+        self.assertEqual(rutas, ("ok.py",))
+        self.assertEqual(omisiones, ("ruta no representable en el delta: 1",))
+        self.assertTrue(calculado)
+
+    @staticmethod
+    def _sticky_sin_linea(domain, schema):
+        base = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+        snapshot = domain.snapshot_a_v3(base) if schema == 3 else base
+        encoded = domain.encode_snapshot(snapshot)
+        return {"body": encoded.block if schema == 3 else encoded}
+
+    def test_hallazgo_sin_linea_se_persiste_en_v2_y_v3(self):
+        import review_domain as domain
+
+        modelo = (
+            domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "title": "Dependencia sin fijar",
+                            "file": "requirements.txt",
+                            "line": 0,
+                            "severity": "Low",
+                            "state": "open",
+                        }
+                    ],
+                    "next": 1,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+            + "\n\nCOVERAGE: partial\n"
+        )
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                sticky = self._sticky_sin_linea(domain, schema)
+                manifest = {
+                    "base": "b" * 40,
+                    "head": "c" * 40,
+                    "mode": "full",
+                    "reason": "no-prev",
+                    "reviewed": ["requirements.txt"],
+                    "excluded": [],
+                }
+                out = review.build_findings(
+                    {"result": modelo}, manifest, sticky, "o/r", 1, "bot", []
+                )
+                self.assertIsNone(out.get("keep"))
+                carga = domain.read_snapshot(out["block"])
+                self.assertIsInstance(carga, domain.Valid)
+                self.assertEqual(
+                    [f.title for f in carga.snapshot.findings],
+                    ["Dependencia sin fijar"],
+                )
+                self.assertIsNone(carga.snapshot.findings[0].primary_anchor.line)
+
+    def test_runtime_cortado_degrada_la_cobertura(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "a.py").write_text("uno\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
+            bloque = (
+                domain.FINDINGS_PREFIX
+                + '{"findings": [], "next": 1}'
+                + domain.FINDINGS_SUFFIX
+            )
+            resultado = {
+                "result": f"{bloque}\n\nCOVERAGE: complete\n",
+                "subtype": "error_max_turns",
+            }
+            manifest = {
+                "base": base,
+                "head": base,
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["a.py"],
+                "excluded": [],
+            }
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                out = review.build_findings(
+                    resultado, manifest, sticky, "o/r", 1, "bot", []
+                )
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(out["completion"], domain.PARTIAL)
+        cuerpo = review.compose(
+            resultado, manifest, sha=base, provider="opencode-go", findings=out
+        )
+        self.assertIn(":partial -->", cuerpo)
+
+    def test_rerun_mismo_sha_no_resuelve_con_git_real(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "a.py").write_text("uno\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "a.py").write_text("dos\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "head")
+            head = git(repo, "rev-parse", "HEAD")
+            sticky = {
+                "body": domain.encode_snapshot(
+                    domain.Snapshot(
+                        schema=2,
+                        generation=2,
+                        revision=domain.Revision(
+                            base_sha=base, head_sha=head, policy_digest=""
+                        ),
+                        next_id=2,
+                        completion=domain.PARTIAL,
+                        findings=[
+                            domain.Finding(
+                                id="F1",
+                                title="Fuga",
+                                severity="High",
+                                status=domain.StatusOpen(),
+                                primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                            )
+                        ],
+                        command_cursor=0,
+                    )
+                )
+            }
+            bloque = (
+                domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "id": "F1",
+                                "title": "Fuga",
+                                "file": "a.py",
+                                "line": 1,
+                                "severity": "High",
+                                "state": "resolved",
+                            }
+                        ],
+                        "next": 2,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+                + "\n\nCOVERAGE: partial\n"
+            )
+            manifest = {
+                "base": base,
+                "head": head,
+                "prev_sha": head,
+                "mode": "full",
+                "reason": "same-sha",
+                "reviewed": ["a.py"],
+                "excluded": [],
+            }
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                out = review.build_findings(
+                    {"result": bloque}, manifest, sticky, "o/r", 1, "bot", []
+                )
+            finally:
+                os.chdir(cwd)
+            self.assertIsNone(out.get("keep"))
+            carga = domain.read_snapshot(out["block"])
+            self.assertIsInstance(carga, domain.Valid)
+            f1 = {f.id: f for f in carga.snapshot.findings}["F1"]
+            self.assertIsInstance(f1.status, domain.StatusOpen)
+
+    def test_el_marcador_visible_nace_de_la_cobertura_persistida(self):
+        import review_domain as domain
+
+        findings = {
+            "merged": [],
+            "new_ids": [],
+            "block": "",
+            "model_ok": True,
+            "completion": domain.PARTIAL,
+        }
+        cuerpo = review.compose(
+            {"result": ""},
+            {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+        )
+        self.assertIn(
+            f"{review.COMPLETION_PREFIX}{'e' * 40}:partial -->",
+            cuerpo,
+        )
+
+    def test_cita_sobre_ruta_del_delta_ausente_del_manifiesto_verifica(self):
+        """CodeRabbit r1: la identidad no se pierde por falta del manifiesto."""
+        import hashlib as h
+
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._repo_dos_bugs(tmp)
+            snapshot = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha=r["base"], head_sha=r["head1"], policy_digest=""
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title="Fuga de recurso",
+                        severity="High",
+                        status=domain.StatusDismissed(command_id=None),
+                        primary_anchor=domain.AnchorLocated(
+                            path="app.py",
+                            blob_sha=r["blob1"],
+                            range=(4, 4),
+                            excerpt_digest=r["digest_fuga"],
+                        ),
+                    )
+                ],
+                command_cursor=0,
+            )
+            sticky = {"body": domain.encode_snapshot(snapshot)}
+            extracto_fuga = "x = 1/0  # fuga"
+            modelo = (
+                domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "title": "Fuga de recurso reformulada",
+                                "severity": "High",
+                                "state": "open",
+                                "file": "app.py",
+                                "line": 5,
+                                "anchor": {
+                                    "path": "app.py",
+                                    "blob_sha": r["blob2"],
+                                    "range": [5, 5],
+                                    "excerpt_digest": h.sha256(
+                                        extracto_fuga.encode()
+                                    ).hexdigest(),
+                                },
+                            }
+                        ],
+                        "next": 2,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+                + "\n\nCOVERAGE: complete\n"
+            )
+            manifest = {
+                "base": r["base"],
+                "head": r["head2"],
+                "mode": "incremental",
+                "prev_sha": r["head1"],
+                "changed_files": [],
+                "reviewed": [],
+                "excluded": [],
+            }
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+                cwd = os.getcwd()
+                os.chdir(r["repo"])
+                try:
+                    out = review.build_findings(
+                        {"result": modelo}, manifest, sticky, "o/r", 1, "bot", []
+                    )
+                finally:
+                    os.chdir(cwd)
+            self.assertIsNone(out.get("keep"))
+            carga = domain.read_snapshot(out["block"])
+            self.assertIsInstance(carga, domain.Valid)
+            self.assertEqual(
+                [f.id for f in carga.snapshot.findings],
+                ["F1"],
+                "la cita sobre la ruta del delta verifica aunque el manifiesto no la liste",
+            )
+            self.assertIsInstance(
+                carga.snapshot.findings[0].status,
+                domain.StatusDismissed,
+                "el descartado se reconoce por digest y no revive ni se duplica",
+            )
+
+    def test_blobs_previos_para_verificar_anclas_persistidas(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._repo_dos_bugs(tmp)
+            snapshot = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha=r["base"], head_sha=r["head1"], policy_digest=""
+                ),
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title="Fuga de recurso",
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLocated(
+                            path="app.py",
+                            blob_sha=r["blob1"],
+                            range=(4, 4),
+                            excerpt_digest=r["digest_fuga"],
+                        ),
+                    )
+                ],
+                command_cursor=0,
+            )
+            manifest = {
+                "base": r["base"],
+                "head": r["head2"],
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["app.py"],
+                "excluded": [],
+            }
+            policy = review.politica_de_revision(manifest, identidad="anchors")
+            cwd = os.getcwd()
+            os.chdir(r["repo"])
+            try:
+                blobs = review.blobs_para_aceptar(snapshot, manifest, policy)
+            finally:
+                os.chdir(cwd)
+            self.assertIn(
+                ("app.py", r["blob1"]),
+                blobs,
+                "el blob anterior de la ancla persistida se carga para verificar",
+            )
+            self.assertIn(
+                ("app.py", r["blob2"]), blobs, "el blob HEAD para citas nuevas"
+            )
+
+    def test_los_hechos_usan_el_delta_real_y_no_reviewed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "a.py").write_text("uno\n")
+            (repo / "b.py").write_text("uno\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "b.py").write_text("dos\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "head")
+            head = git(repo, "rev-parse", "HEAD")
+            manifest = {
+                "base": base,
+                "head": head,
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["a.py"],
+                "excluded": [],
+            }
+            cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                hechos = review.hechos_de_repo(manifest, set())
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(
+            hechos.changed_paths,
+            ("b.py",),
+            "changed_paths nace del delta real, nunca de `reviewed`",
+        )
+        self.assertEqual(hechos.revision.head_sha, head)
+
 
 def prepare_manifest(tmp, repo, base, head, max_diff_bytes="1500000"):
     event = Path(tmp, "event.json")

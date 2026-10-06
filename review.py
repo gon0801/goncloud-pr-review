@@ -3,7 +3,9 @@
 
 import argparse
 import dataclasses
+from dataclasses import replace
 import fnmatch
+import hashlib
 import html
 import json
 import os
@@ -646,6 +648,13 @@ def scope_lines(result, manifest, provider):
     return scope
 
 
+def _marcador_cobertura(warnings, findings):
+    derivada = findings.get("completion") if findings else None
+    if derivada is not None:
+        return "complete" if derivada == review_domain.COMPLETE_CLAIM else "partial"
+    return "partial" if warnings else "complete"
+
+
 def compose(result, manifest, *, sha, provider, findings=None, budget=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
@@ -693,7 +702,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
-        f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->",
+        f"{COMPLETION_PREFIX}{sha}:{_marcador_cobertura(warnings, findings)} -->",
     ]
     if findings is not None:
         parts.append(findings["block"])
@@ -797,7 +806,7 @@ def compose_with_findings(
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
-        f"{COMPLETION_PREFIX}{sha}:{'partial' if warnings else 'complete'} -->",
+        f"{COMPLETION_PREFIX}{sha}:{_marcador_cobertura(warnings, findings)} -->",
         block,
         title,
         "",
@@ -2081,9 +2090,9 @@ def quota_error(result):
 
 
 # F0: identidad y evidencia. El dominio trae match_finding / accept_report /
-# validar_reporte; el adaptador construye los RepositoryFacts con Git. El modo
-# `finding_identity=anchors` requiere estado v2 y se activa sólo en el CIERRE:
-# con identidad anchors el camino de memoria nueva llega en T06 (por defecto current ya actualiza v2/v3 vía T04).
+# validar_reporte; el adaptador construye los RepositoryFacts con Git. Ambas
+# identidades (current y anchors) pasan por la aceptación del dominio; la
+# emisión de anclas por el modelo llega con la activación del CIERRE.
 IDENTIDADES = ("current", "anchors")
 
 
@@ -2098,6 +2107,21 @@ def politica_de_identidad():
     return valor
 
 
+def politica_de_revision(manifest=None, identidad=None):
+    """La identidad externa `current` se adapta al valor interno antiguo
+    `titles` en la frontera de compatibilidad."""
+    externa = identidad or politica_de_identidad()
+    return review_domain.ReviewPolicy(
+        finding_identity="anchors" if externa == "anchors" else "titles",
+        diff_mode=(manifest or {}).get("mode", "full"),
+    )
+
+
+def digest_de_politica(policy):
+    canon = json.dumps(sorted(dataclasses.asdict(policy).items()), sort_keys=True)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
 def blobs_de_head(rutas):
     """Contenido HEAD por ruta (líneas sin salto final) para las citas (F0)."""
     blobs = {}
@@ -2110,31 +2134,131 @@ def blobs_de_head(rutas):
     return blobs
 
 
-def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None, policy_digest=""):
-    """RepositoryFacts que el adaptador verifica con Git (F0)."""
+def _sha_hexa(valor):
+    valor = valor or ""
+    return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
+
+
+def delta_real(desde, head):
+    """Delta real desde..head: (rutas decodificables, omisiones, calculado)."""
+    try:
+        proc = shb("git", "diff", "--name-only", "-z", desde, head, check=False)
+    except Exception:
+        return (), ("delta real no calculable",), False
+    if proc.returncode != 0:
+        return (), ("delta real no calculable",), False
+    rutas, ilegibles = [], 0
+    for rec in proc.stdout.split(b"\0"):
+        if not rec:
+            continue
+        try:
+            rutas.append(rec.decode("utf-8"))
+        except UnicodeDecodeError:
+            ilegibles += 1
+    omisiones = ()
+    if ilegibles:
+        omisiones = (f"ruta no representable en el delta: {ilegibles}",)
+    return tuple(rutas), omisiones, True
+
+
+def hechos_de_repo(
+    manifest, reverted_files, renames=(), blobs=None, policy_digest="", omissions=()
+):
+    """RepositoryFacts que el adaptador verifica con Git.
+
+    `changed_paths` es el delta real entre revisiones (prev_sha..head con
+    prev_sha hex40, en cualquier modo; base..head en el resto); sin SHAs
+    hex40 o con delta no calculable cae al alcance del manifiesto y la
+    omisión queda registrada para degradar la cobertura.
+    """
+    base, head = manifest.get("base"), manifest.get("head")
+    omissions = tuple(omissions or ())
+    desde = base
+    if _sha_hexa(manifest.get("prev_sha")):
+        desde = manifest["prev_sha"]
+    calculado = False
+    if _sha_hexa(desde) and _sha_hexa(head):
+        delta, omis_delta, calculado = delta_real(desde, head)
+        omissions = omissions + omis_delta
+        if not calculado:
+            delta = tuple(review_domain.rutas_de_cambio(manifest))
+    else:
+        delta = tuple(review_domain.rutas_de_cambio(manifest))
+        omissions = omissions + ("delta real no calculable",)
     return review_domain.RepositoryFacts(
         revision=review_domain.Revision(
-            base_sha=manifest.get("base"),
-            head_sha=manifest.get("head"),
+            base_sha=base,
+            head_sha=head,
             policy_digest=policy_digest,
         ),
-        changed_paths=tuple(manifest.get("reviewed", []) or []),
+        changed_paths=delta,
+        delta_calculado=calculado,
         reverted_paths=tuple(reverted_files or ()),
         renames=tuple(renames or ()),
         blobs=dict(blobs or {}),
+        omissions=omissions,
     )
 
 
-def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments):
-    """Escritor compatible (T04): memoria v2/v3 válida, identidad current.
+def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
+    """Blobs de HEAD y de las anclas localizadas persistidas, para aceptar
+    con identidad `anchors`. Las rutas del delta real van también: una cita
+    sobre un archivo cambiado ausente del manifiesto no debe degradar a
+    coincidencia por título."""
+    if policy.finding_identity != "anchors":
+        return {}
+    rutas = sorted(
+        set(manifest.get("reviewed", []) or [])
+        | set(review_domain.rutas_de_cambio(manifest))
+        | set(rutas_delta)
+    )
+    blobs = blobs_de_head(rutas)
+    for ancla in anclas_locadas(snapshot):
+        if (ancla.path, ancla.blob_sha) in blobs:
+            continue
+        try:
+            contenido = sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
+        except Exception:
+            continue
+        if contenido:
+            blobs[(ancla.path, ancla.blob_sha)] = tuple(contenido.splitlines())
+    return blobs
+
+
+def anclas_locadas(snapshot):
+    vistas = []
+    for f in snapshot.findings:
+        for ancla in [
+            f.primary_anchor,
+            *f.related_anchors,
+            *[
+                e.anchor
+                for e in f.evidence
+                if isinstance(e, review_domain.EvidenceSource)
+            ],
+        ]:
+            if isinstance(ancla, review_domain.AnchorLocated):
+                vistas.append(ancla)
+    return vistas
+
+
+def actualizar_memoria_valida(
+    load, result, manifest, repo, pr, login, comments, policy=None
+):
+    """Escritor compatible: memoria v2/v3 válida, identidad de la política
+    normalizada.
 
     Conserva el schema del estado, aplica los descartes de comentarios,
     avanza la revisión a la del manifiesto cuando head y base son hex40, e
-    integra las observaciones del
-    modelo con el matching compatible. Desborde: Keep, como en M1.
+    integra las observaciones del modelo por la aceptación del dominio con
+    los hechos reales (delta, blobs, reversiones). Desborde: Keep.
     """
+    policy = policy or politica_de_revision(manifest)
     snapshot = load.snapshot
-    model = parse_model_findings((result or {}).get("result") or "")
+    model = parse_model_findings(
+        (result or {}).get("result") or "",
+        conservar_anclas=policy.finding_identity == "anchors",
+    )
     try:
         dismiss_ids, dismiss_all, seen = collect_dismissals(
             repo, pr, login, comments, snapshot.command_cursor
@@ -2158,25 +2282,64 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
         "complete": review_domain.COMPLETE_CLAIM,
         "partial": review_domain.PARTIAL,
     }.get(cobertura, review_domain.UNKNOWN)
-
-    def _hexa(valor):
-        valor = valor or ""
-        return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
+    runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
+    if model is None:
+        # sin bloque del modelo, la cobertura declarada no está respaldada
+        cobertura = review_domain.UNKNOWN
+    excluidos = manifest.get("excluded", []) or []
+    omisiones_alcance = tuple(
+        f"archivo excluido ({e.get('reason')}): {e.get('path')}"
+        for e in excluidos
+        if e.get("reason") in ("budget", "encoding")
+    )
 
     head = manifest.get("head")
     revision = None
-    if _hexa(head) and _hexa(manifest.get("base")):
+    if _sha_hexa(head) and _sha_hexa(manifest.get("base")):
         revision = review_domain.Revision(
             base_sha=manifest.get("base"),
             head_sha=head,
             policy_digest="",
         )
+    facts = hechos_de_repo(
+        manifest,
+        set(),
+        policy_digest=digest_de_politica(policy),
+    )
+    blobs = blobs_para_aceptar(
+        snapshot, manifest, policy, rutas_delta=facts.changed_paths
+    )
+    revertidas = set()
+    if revision is not None:
+        cambiadas = set(review_domain.rutas_de_cambio(manifest)) | set(
+            manifest.get("reviewed", []) or []
+        )
+        abiertas = {
+            review_domain._ruta_primaria(f)
+            for f in snapshot.findings
+            if isinstance(f.status, review_domain.StatusOpen)
+        }
+        candidatos = sorted(abiertas & cambiadas)
+        if candidatos:
+            try:
+                revertidas = files_matching_base(candidatos, manifest["base"], head)
+            except Exception:
+                revertidas = set()
+    facts = replace(
+        facts,
+        reverted_paths=tuple(revertidas),
+        blobs=blobs,
+        omissions=facts.omissions + omisiones_alcance,
+    )
     plan = review_domain.ReviewPlan(
         revision=revision,
         changed_paths=review_domain.rutas_de_cambio(manifest),
+        previous_sha=manifest.get("prev_sha"),
+        delivered=tuple(manifest.get("reviewed", []) or []),
+        policy=policy,
     )
     report = review_domain.validar_reporte(
-        observaciones, cobertura, review_domain.RepositoryFacts()
+        observaciones, cobertura, facts, runtime_terminado=runtime_terminado
     )
     decision = review_domain.accept_report(snapshot, plan, report)
     if isinstance(decision, review_domain.Keep):
@@ -2209,25 +2372,27 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
         "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
         "block": encoded.block if snapshot.schema == 3 else encoded,
         "model_ok": model is not None,
+        "completion": decision.snapshot.completion,
     }
 
 
-def build_findings(result, manifest, sticky, repo, pr, login, comments):
+def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=None):
     """Merge previous state with the model's block. Broken block: keep last parseable (B6).
 
-    Memoria v2/v3 válida con identidad `current`: se actualiza conservando
-    su schema (T04, escritor compatible); versiones futuras, memoria
-    inválida y el camino `anchors` se conservan (Keep), y el legado sigue
-    su propio camino de siempre.
+    Memoria v2/v3 válida pasa por la aceptación del dominio con la política
+    normalizada (`current` coincidencia compatible, `anchors` la de F0).
+    Versiones futuras y memoria inválida se conservan (Keep); el legado
+    sigue su propio camino de siempre.
     """
+    policy = policy or politica_de_revision(manifest)
     load = (
         review_domain.read_snapshot(sticky["body"])
         if sticky
         else review_domain.Missing()
     )
-    if isinstance(load, review_domain.Valid) and politica_de_identidad() == "current":
+    if isinstance(load, review_domain.Valid):
         return actualizar_memoria_valida(
-            load, result, manifest, repo, pr, login, comments
+            load, result, manifest, repo, pr, login, comments, policy
         )
     model = parse_model_findings((result or {}).get("result") or "")
     if isinstance(load, (review_domain.Valid, review_domain.Future)):

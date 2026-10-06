@@ -2939,3 +2939,216 @@ class CheckpointCapacity(unittest.TestCase):
         self.assertEqual(descartado.status.command_id, 12)
         self.assertEqual(confirmado.request_count, 2)
         self.assertEqual([r.command_id for r in confirmado.receipts], [12, 11])
+
+
+class ReportBoundary(unittest.TestCase):
+    """Formas inválidas tipadas, resolución por hechos reales y cobertura."""
+
+    def _snapshot_v2(self, findings):
+        return domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=max((domain.finding_number(f.id) or 0) for f in findings) + 1
+            if findings
+            else 1,
+            completion=domain.UNKNOWN,
+            findings=list(findings),
+            command_cursor=0,
+        )
+
+    def _fuga(self, ruta="src/fuga.py", relacionadas=()):
+        return domain.Finding(
+            id="F1",
+            title="Fuga de recurso",
+            severity="High",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path=ruta, line=3),
+            related_anchors=list(relacionadas),
+        )
+
+    def test_malformed_ranges_are_typed_errors(self):
+        base = {
+            "title": "t",
+            "severity": "High",
+            "file": "a.py",
+            "line": 3,
+            "state": "open",
+            "anchor": {
+                "path": "a.py",
+                "blob_sha": "a" * 40,
+                "excerpt_digest": "x" * 64,
+            },
+        }
+        casos = [
+            ("rango corto", {"range": [3]}),
+            ("rango no numérico", {"range": [3, "x"]}),
+            ("rango booleano", {"range": [True, 3]}),
+            ("rango invertido", {"range": [4, 2]}),
+        ]
+        for nombre, anexo in casos:
+            with self.subTest(caso=nombre):
+                entrada = dict(base, anchor=dict(base["anchor"], **anexo))
+                salida = domain.observation_de_entrada(entrada)
+                self.assertIsInstance(salida, domain.ObservationRejected)
+                self.assertTrue(salida.motivo)
+
+        legada_corta = dict(base, anchor={"path": "a.py", "line": True})
+        with self.subTest(caso="línea booleana legada"):
+            self.assertIsInstance(
+                domain.observation_de_entrada(legada_corta), domain.ObservationRejected
+            )
+
+    def test_bloque_invalido_no_avanza_cobertura(self):
+        entrada = {
+            "title": "t",
+            "severity": "High",
+            "file": "a.py",
+            "line": 3,
+            "state": "open",
+            "anchor": {
+                "path": "a.py",
+                "blob_sha": "a" * 40,
+                "range": [3],
+                "excerpt_digest": "x" * 64,
+            },
+        }
+        rechazada = domain.observation_de_entrada(entrada)
+        self.assertIsInstance(rechazada, domain.ObservationRejected)
+        report = domain.validar_reporte(
+            [rechazada], "complete", domain.RepositoryFacts()
+        )
+        self.assertEqual(len(report.rechazadas_forma), 1)
+        transicion = domain.accept_report(
+            self._snapshot_v2([]), domain.ReviewPlan(), report
+        )
+        self.assertIsInstance(transicion, domain.Replace)
+        self.assertEqual(transicion.snapshot.completion, domain.UNKNOWN)
+        self.assertEqual(transicion.snapshot.findings, [])
+
+    def test_resolucion_por_reversion_exacta(self):
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=("src/otro.py",),
+            reverted_paths=("src/fuga.py",),
+        )
+        obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
+        report = domain.validar_reporte([obs], "partial", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(
+            self._snapshot_v2([self._fuga()]), plan, report
+        )
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(f1.status, domain.StatusResolved)
+        self.assertEqual(f1.status.at_sha, "c" * 40)
+
+    def test_resolucion_por_cambio_relacionado(self):
+        fuga = self._fuga(relacionadas=[domain.AnchorLegacy(path="src/uso.py", line=7)])
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=("src/uso.py",),
+            delta_calculado=True,
+        )
+        obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
+        report = domain.validar_reporte([obs], "partial", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(self._snapshot_v2([fuga]), plan, report)
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(
+            f1.status, domain.StatusResolved, "el cambio pertinente está en la related"
+        )
+
+    def test_ausencia_en_la_respuesta_no_resuelve(self):
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=("src/fuga.py",),
+        )
+        report = domain.validar_reporte([], "complete", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(
+            self._snapshot_v2([self._fuga()]), plan, report
+        )
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(f1.status, domain.StatusOpen)
+
+    def test_delta_calculado_vacio_no_cae_al_alcance_revisado(self):
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=(),
+            delta_calculado=True,
+        )
+        obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
+        report = domain.validar_reporte([obs], "partial", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(
+            self._snapshot_v2([self._fuga()]), plan, report
+        )
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(
+            f1.status,
+            domain.StatusOpen,
+            "delta real vacío calculado: el alcance revisado no suple pertinencia",
+        )
+
+    def test_los_hechos_reales_mandan_sobre_lo_revisado(self):
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=("src/otro.py",),
+            delta_calculado=True,
+        )
+        obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
+        report = domain.validar_reporte([obs], "partial", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(
+            self._snapshot_v2([self._fuga()]), plan, report
+        )
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(
+            f1.status,
+            domain.StatusOpen,
+            "sin cambio real pertinente, el resuelto del modelo no resuelve",
+        )
+        self.assertTrue(
+            any(
+                isinstance(e, domain.EvidenceUnverified)
+                and "sin cambio pertinente" in (e.text or "")
+                for e in f1.evidence
+            )
+        )
+
+        otro = domain.Finding(
+            id="F2",
+            title="Typo en otro",
+            severity="Low",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path="src/otro.py", line=1),
+        )
+        obs_otro = _observacion(
+            "Typo en otro", ruta="src/otro.py", claim=domain.RESOLVED
+        )
+        report = domain.validar_reporte([obs_otro], "partial", hechos)
+        transicion = domain.accept_report(self._snapshot_v2([otro]), plan, report)
+        f2 = {f.id: f for f in transicion.snapshot.findings}["F2"]
+        self.assertIsInstance(f2.status, domain.StatusResolved)

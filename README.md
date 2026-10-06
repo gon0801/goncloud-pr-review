@@ -104,7 +104,7 @@ al modelo.
   Digest manda; el solape de rangos sólo sugiere -> `Ambiguous`.
   Devuelve `Existing(id)`, `New` o `Ambiguous(ids)`; dos candidatos plausibles
   quedan separados sin fusionar. Los descartes nunca se adoptan como nuevos.
-- `validar_reporte(observaciones, cobertura, facts) -> ValidatedReport`:
+- `validar_reporte(observaciones, cobertura, facts, runtime_terminado=True) -> ValidatedReport`:
   valida ruta, blob, rango y digest del extracto contra los blobs que el
   adaptador verificó; lo no comprobable queda etiquetado como
   `EvidenceUnverified` (ubicación verificada prueba que la cita existe, no que
