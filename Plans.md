@@ -133,7 +133,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | S0-r5 revisor | N3 review.py:1884 proxy.wait(timeout=10) en finally puede lanzar TimeoutExpired tras timeout del modelo y tapar ruta infra (preexistente en main) | abierta |
 | S0-r5 revisor | N4 S0.md:122 cifra verify-partition 370 desactualizada (sobre 73d7067 da 371: 186+185) | abierta |
 | S0-r5 LISTO | policy_digest vacio en revision avanzada | abierta |
-| S0-r5 LISTO | prueba de desborde del escritor compatible pendiente | abierta |
+| S0-r5 LISTO | prueba de desborde del escritor compatible pendiente | resuelta en S1 (ConservacionAlDesbordar tests/test_review.py:5255; S1.md:42) |
 | S0-r5 LISTO | hallazgos legacy con id None pendientes | abierta |
 | S0-r5 LISTO | aviso corto review.py:2050 | abierta |
 | S0-r5 LISTO | N1-N7 de r1, N1-N2 de r3 y F1-F5 del sticky 7a1e2b1 arrastrados (siguen abiertos) | abierta |
