@@ -97,9 +97,9 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 
 | Tarea | Bloque | Entregable | Depende de | Estado |
 |---|---|---|---|---|
-| T01 | R0 | Rutas Git exactas | Base verificada | cc:TODO |
-| T02 | R0 | Búsqueda de contexto con resultado explícito | T01 | cc:TODO |
-| T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:TODO |
+| T01 | R0 | Rutas Git exactas | Base verificada | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
+| T02 | R0 | Búsqueda de contexto con resultado explícito | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
+| T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:TODO |
 | T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:TODO |
 | T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:TODO |
@@ -117,3 +117,14 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 ### Residuales
 
 | Origen | Nota | Estado |
+|---|---|---|
+| R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
+| R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
+| R0-r3 CodeRabbit | R0.md:26 recuento historico ronda 1 dice 11, deberian ser 10 (9 ContextSearch + 1); corregir numero o quitar parentesis | abierta |
+| R0-r3 revisor | N3 colision de identidad para rutas no UTF-8 en changed_files (va a T04/S0) | abierta |
+| R0-r3 revisor | N4 pathspecs con globs en git diff y files_matching_base | abierta |
+| R0-r3 revisor | N7 higiene mktree-test/mt2 en el checkout principal | abierta |
+| R0-r3 revisor | Refactor: duplicacion del recorte y la nota de build_callers entre ramas Complete y Truncated | abierta |
+| R0.md:86 | Matiz de redaccion: dice que la vineta no UTF-8 fue reescrita, pero se borro; estado resuelto en seccion Ronda 2 | abierta |
+| R0.md:49-52 | build_conventions lee contenido con sh en modo texto; revisar decodificacion | abierta |
+| R0.md:49-52 | test_utf8_manifest_matches_file: asercion de seleccion por presupuesto no discrimina sola; cubre igualdad diff_bytes | abierta |
