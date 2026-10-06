@@ -2138,12 +2138,7 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
         )
     plan = review_domain.ReviewPlan(
         revision=revision,
-        changed_paths=tuple(
-            manifest.get("changed_files", [])
-            if manifest.get("mode") == "incremental"
-            or manifest.get("reason") == "incomplete-prev"
-            else manifest.get("reviewed", [])
-        ),
+        changed_paths=review_domain.rutas_de_cambio(manifest),
     )
     report = review_domain.validar_reporte(
         observaciones, cobertura, review_domain.RepositoryFacts()
@@ -2245,12 +2240,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         manifest.get("mode") == "incremental"
         or manifest.get("reason") == "incomplete-prev"
     )
-    if has_previous_changes:
-        changed = manifest.get("changed_files", [])
-    elif manifest.get("reason") == "same-sha":
-        changed = []  # a re-run of the same commit: nothing changed, nothing can be resolved
-    else:
-        changed = manifest.get("reviewed", [])
+    changed = review_domain.rutas_de_cambio(manifest)
     watched = {
         f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN
     }

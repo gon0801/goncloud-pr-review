@@ -742,15 +742,24 @@ def _v3_snapshot(data):
             raise _SchemaError(
                 f"la solicitud {rid} apunta al hallazgo inexistente {finding_id!r}"
             )
+        origin = req.get("origin", "")
+        basis = req.get("basis_generation", 0)
+        state = req.get("state", "pending")
+        if not isinstance(origin, str):
+            raise _SchemaError("origin de solicitud debe ser texto")
+        if not isinstance(basis, int) or isinstance(basis, bool) or basis < 0:
+            raise _SchemaError("basis_generation de solicitud inválida")
+        if not isinstance(state, str) or not state:
+            raise _SchemaError("state de solicitud inválido")
         solicitudes.append(
             WorkRequest(
                 id=rid,
                 kind=req["kind"],
                 finding_id=finding_id,
                 legacy_id=legacy_id,
-                origin=req.get("origin", ""),
-                basis_generation=req.get("basis_generation", 0),
-                state=req.get("state", "pending"),
+                origin=origin,
+                basis_generation=basis,
+                state=state,
             )
         )
     recibos, comandos = [], set()
@@ -822,6 +831,23 @@ def read_snapshot(body, *, last=False):
         return Invalid(f"schema desconocido: {schema!r}")
     raw = legacy_raw_of(data)
     return Legacy(snapshot=_migrate_legacy(raw), raw=raw, block=found_block)
+
+
+def rutas_de_cambio(manifest):
+    """Qué archivos pueden resolver hallazgos en esta revisión.
+
+    incremental o revisión incompleta: solo los del delta; mismo commit:
+    nada (sin cambio de código nada puede resolverse); el resto: todo lo
+    revisado. Única fuente de la decisión, compartida por ambos escritores.
+    """
+    if (
+        manifest.get("mode") == "incremental"
+        or manifest.get("reason") == "incomplete-prev"
+    ):
+        return tuple(manifest.get("changed_files", []))
+    if manifest.get("reason") == "same-sha":
+        return ()
+    return tuple(manifest.get("reviewed", []))
 
 
 def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):

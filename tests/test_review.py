@@ -4333,6 +4333,88 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     "la revisión previa se conserva",
                 )
 
+    def test_mismo_sha_no_resuelve_en_memoria_v2_y_v3(self):
+        """B5: un re-run del mismo commit no puede resolver hallazgos."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug a",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.PARTIAL,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug a",
+                            "state": "resolved",
+                        }
+                    ],
+                    "next": 2,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "full",
+            "reason": "same-sha",
+            "reviewed": ["src/a.py"],
+        }
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                encoded = domain.encode_snapshot(estado(schema), domain.StorageBudget())
+                sticky = {"body": encoded.block if schema == 3 else encoded}
+                with mock.patch.object(
+                    review, "collect_dismissals", return_value=(set(), False, 0)
+                ):
+                    r = review.build_findings(
+                        {"result": modelo},
+                        manifest,
+                        sticky,
+                        "o/r",
+                        1,
+                        "bot",
+                        [],
+                    )
+                self.assertIsNone(r.get("keep"), "el re-run del mismo sha sí publica")
+                snapshot = domain.read_snapshot(r["block"]).snapshot
+                f1 = next(f for f in snapshot.findings if f.id == "F1")
+                self.assertIsInstance(
+                    f1.status,
+                    domain.StatusOpen,
+                    "same-sha: nada cambió, nada puede resolverse",
+                )
+
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))
         import review_domain as domain

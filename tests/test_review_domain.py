@@ -2409,6 +2409,15 @@ class Schema3Compatibility(unittest.TestCase):
                 p["receipts"].append({"command_id": 98, "effect": "efecto"})
             p["receipts"].append(dict(p["receipts"][0]))
 
+        def origin_no_texto(p):
+            p["pending_requests"][0]["origin"] = {"mal": 1}
+
+        def base_de_generacion_invalida(p):
+            p["pending_requests"][0]["basis_generation"] = "x"
+
+        def state_vacio(p):
+            p["pending_requests"][0]["state"] = ""
+
         def recibo_vencido(p):
             p["receipts"].append({"command_id": 99, "effect": "efecto"})
 
@@ -2417,6 +2426,9 @@ class Schema3Compatibility(unittest.TestCase):
             (id_menor_que_uno, "id de solicitud menor que 1"),
             (id_fuera_de_count, "supera request_count"),
             (legacy_duplicado, "legacy_id de solicitud duplicado"),
+            (origin_no_texto, "origin de solicitud debe ser texto"),
+            (base_de_generacion_invalida, "basis_generation de solicitud inválida"),
+            (state_vacio, "state de solicitud inválido"),
             (recibo_duplicado, "command_id de recibo duplicado"),
             (recibo_vencido, "supera command_cursor"),
         ]
