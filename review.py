@@ -2166,15 +2166,15 @@ def hechos_de_repo(
 ):
     """RepositoryFacts que el adaptador verifica con Git.
 
-    `changed_paths` es el delta real entre revisiones (prev_sha..head en
-    incremental, base..head en el resto); sin SHAs hex40 o con delta no
-    calculable cae al alcance del manifiesto y la omisión queda registrada
-    para degradar la cobertura.
+    `changed_paths` es el delta real entre revisiones (prev_sha..head con
+    prev_sha hex40, en cualquier modo; base..head en el resto); sin SHAs
+    hex40 o con delta no calculable cae al alcance del manifiesto y la
+    omisión queda registrada para degradar la cobertura.
     """
     base, head = manifest.get("base"), manifest.get("head")
     omissions = tuple(omissions or ())
     desde = base
-    if manifest.get("mode") == "incremental" and _sha_hexa(manifest.get("prev_sha")):
+    if _sha_hexa(manifest.get("prev_sha")):
         desde = manifest["prev_sha"]
     calculado = False
     if _sha_hexa(desde) and _sha_hexa(head):
@@ -2184,6 +2184,7 @@ def hechos_de_repo(
             delta = tuple(review_domain.rutas_de_cambio(manifest))
     else:
         delta = tuple(review_domain.rutas_de_cambio(manifest))
+        omissions = omissions + ("delta real no calculable",)
     return review_domain.RepositoryFacts(
         revision=review_domain.Revision(
             base_sha=base,

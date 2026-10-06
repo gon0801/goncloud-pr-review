@@ -1506,10 +1506,19 @@ def _rango_valido(rango):
     )
 
 
-def _linea_valida(linea):
-    return linea is None or (
-        isinstance(linea, int) and not isinstance(linea, bool) and linea >= 1
-    )
+def _linea_legada(linea):
+    """(válida, línea normalizada) de una referencia legada; None es «sin
+    línea», incluido el 0 que produce el bloque legado.
+    """
+    if linea is None:
+        return True, None
+    if isinstance(linea, bool) or not isinstance(linea, int):
+        return False, linea
+    if linea == 0:
+        return True, None
+    if linea < 0:
+        return False, linea
+    return True, linea
 
 
 def observation_de_entrada(entry):
@@ -1534,19 +1543,17 @@ def observation_de_entrada(entry):
             symbol_hint=ancla.get("symbol_hint"),
         )
     elif isinstance(ancla, dict):
-        linea = ancla.get("line")
-        if not _linea_valida(linea):
+        valida, linea = _linea_legada(ancla.get("line"))
+        if not valida:
             return ObservationRejected(
                 motivo=f"ancla primaria legada: línea inválida {linea!r}"
             )
         primaria = AnchorLegacy(path=str(ancla.get("path") or ""), line=linea)
     else:
-        linea = entry.get("line")
-        if not _linea_valida(linea):
+        valida, linea = _linea_legada(entry.get("line"))
+        if not valida:
             return ObservationRejected(motivo=f"línea inválida {linea!r}")
-        primaria = AnchorLegacy(
-            path=str(entry.get("file") or ""), line=entry.get("line")
-        )
+        primaria = AnchorLegacy(path=str(entry.get("file") or ""), line=linea)
     relacionadas = []
     for a in entry.get("related_anchors", []) or []:
         if isinstance(a, dict) and a.get("blob_sha"):
@@ -1564,8 +1571,8 @@ def observation_de_entrada(entry):
                 )
             )
         elif isinstance(a, dict):
-            linea = a.get("line")
-            if not _linea_valida(linea):
+            valida, linea = _linea_legada(a.get("line"))
+            if not valida:
                 return ObservationRejected(
                     motivo=f"ancla relacionada legada: línea inválida {linea!r}"
                 )
