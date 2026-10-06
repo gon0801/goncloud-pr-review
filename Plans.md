@@ -117,6 +117,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 ### Residuales
 
 | Origen | Nota | Estado |
+|---|---|---|
 | R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
 | R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
 | R0-r3 CodeRabbit | R0.md:26 recuento historico ronda 1 dice 11, deberian ser 10 (9 ContextSearch + 1); corregir numero o quitar parentesis | abierta |
@@ -125,3 +126,5 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | R0-r3 revisor | N7 higiene mktree-test/mt2 en el checkout principal | abierta |
 | R0-r3 revisor | Refactor: duplicacion del recorte y la nota de build_callers entre ramas Complete y Truncated | abierta |
 | R0.md:86 | Matiz de redaccion: dice que la vineta no UTF-8 fue reescrita, pero se borro; estado resuelto en seccion Ronda 2 | abierta |
+| R0.md:49-52 | build_conventions lee contenido con sh en modo texto; revisar decodificacion | abierta |
+| R0.md:49-52 | test_utf8_manifest_matches_file: asercion de seleccion por presupuesto no discrimina sola; cubre igualdad diff_bytes | abierta |
