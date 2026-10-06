@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1213,7 +1214,13 @@ class PrepareContext(unittest.TestCase):
         pool = [f"src/noise{i}.py" for i in range(review.TESTS_MAX_RESULTS + 1)]
         pool.append("tests/test_app.py")
         with mock.patch.object(
-            review, "grep_files", side_effect=lambda patterns, limit: pool[: limit + 1]
+            review,
+            "grep_files",
+            side_effect=lambda patterns, limit, predicate=None, **kw: (
+                review.SearchComplete(
+                    tuple(p for p in pool if predicate is None or predicate(p))[:limit]
+                )
+            ),
         ):
             text = review.build_tests(["src/app.py"])
         self.assertIn("- tests/test_app.py", text)
@@ -4245,3 +4252,503 @@ class CableadoIdentidad(unittest.TestCase):
         # el ancla verifica (el extracto está en el blob) pero NO coincide con
         # ningún previo: es New, no Existing del descartado por título.
         self.assertEqual(domain.match_finding(previos, obs, facts), domain.MatchNew())
+
+
+def prepare_manifest(tmp, repo, base, head, max_diff_bytes="1500000"):
+    event = Path(tmp, "event.json")
+    event.write_text(json.dumps({"pull_request": {"title": "t", "body": None}}))
+    work = Path(tmp, "work")
+    env = dict(
+        os.environ,
+        HEAD_SHA=head,
+        BASE_SHA=base,
+        EXTRA_EXCLUDES="",
+        MAX_DIFF_BYTES=max_diff_bytes,
+        GITHUB_EVENT_PATH=str(event),
+    )
+    subprocess.run(
+        [sys.executable, str(ROOT / "review.py"), "prepare", "--work", str(work)],
+        cwd=repo,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    return json.loads((work / "manifest.json").read_text())
+
+
+def commit_tree(repo, entries, parents, message="head"):
+    index_input = b""
+    for name, content in entries.items():
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=repo,
+            input=content,
+            check=True,
+            capture_output=True,
+        ).stdout.strip()
+        index_input += b"100644 " + blob + b"\t" + name + b"\0"
+    subprocess.run(["git", "read-tree", "--empty"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "update-index", "-z", "--index-info"],
+        cwd=repo,
+        input=index_input,
+        check=True,
+        capture_output=True,
+    )
+    tree = (
+        subprocess.run(["git", "write-tree"], cwd=repo, check=True, capture_output=True)
+        .stdout.strip()
+        .decode()
+    )
+    cmd = ["git", "commit-tree", tree]
+    for parent in parents:
+        cmd += ["-p", parent]
+    cmd += ["-m", message]
+    return (
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+        .stdout.strip()
+        .decode()
+    )
+
+
+class ContextSearch(unittest.TestCase):
+    def repo_with(self, tmp, files):
+        repo = Path(tmp, "repo")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@t")
+        git(repo, "config", "user.name", "t")
+        for name, content in files.items():
+            dest = repo / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        return repo
+
+    def test_test_found_after_205_source_matches(self):
+        files = {"src/app.py": "def total(a, b):\n    return a + b\n"}
+        for i in range(205):
+            files[f"src/noise{i:03d}.py"] = "app\n"
+        files["tests/test_app.py"] = "from src.app import total\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.repo_with(tmp, files)
+            os.chdir(repo)
+            try:
+                text = review.build_tests(["src/app.py"])
+            finally:
+                os.chdir(ROOT)
+        self.assertIn("- tests/test_app.py", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
+
+    def test_complete_empty_reports_absence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.repo_with(
+                tmp, {"src/app.py": "def total(a, b):\n    return a + b\n"}
+            )
+            os.chdir(repo)
+            try:
+                result = review.grep_files(["zzz-no-esta"], 5)
+                text = review.build_tests(["src/app.py"])
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchComplete)
+        self.assertEqual(result.paths, ())
+        self.assertIn("Ninguna prueba menciona", text)
+
+    def test_git_error_reports_failed_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                result = review.grep_files(["app"], 5)
+                text = review.build_tests(["src/app.py"])
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchFailed)
+        self.assertIn("not a git repository", result.reason)
+        self.assertIn("falló", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
+
+    def test_output_ceiling_truncates_even_with_zero_paths(self):
+        files = {"src/app.py": "def total():\n    return 1\n"}
+        for i in range(100):
+            files[f"src/noise{i:03d}.py"] = "app\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, files)
+            os.chdir(Path(tmp, "repo"))
+            try:
+                result = review.grep_files(
+                    ["app"], 5, predicate=lambda path: False, max_bytes=16
+                )
+                text = review.build_tests(["src/app.py"])
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertEqual(result.paths, ())
+        self.assertIn("techo", result.reason)
+        with mock.patch.object(
+            review,
+            "grep_files",
+            return_value=review.SearchTruncated((), "techo de salida"),
+        ):
+            text = review.build_tests(["src/app.py"])
+        self.assertIn("truncada", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
+
+    def test_timeout_truncates(self):
+        wrapper = Path(tempfile.mkdtemp(), "bin")
+        wrapper.mkdir()
+        real_git = shutil.which("git")
+        script = wrapper / "git"
+        script.write_text(f'#!/bin/sh\nsleep 1\nexec "{real_git}" "$@"\n')
+        script.chmod(0o755)
+        files = {"src/app.py": "app\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, files)
+            os.chdir(Path(tmp, "repo"))
+            try:
+                with mock.patch.dict(
+                    os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
+                ):
+                    result = review.grep_files(["app"], 5, timeout=0.1)
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIn("tiempo", result.reason)
+
+    def test_callers_exact_limit_does_not_claim_more(self):
+        exactly = [f"pkg/modulo_{i}.py" for i in range(review.CALLERS_MAX_MATCHES)]
+        chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        with mock.patch.object(
+            review, "grep_files", return_value=review.SearchComplete(tuple(exactly))
+        ):
+            text = review.build_callers(["src/app.py"], chunks)
+        self.assertNotIn("y más", text)
+        self.assertIn("pkg/modulo_0.py", text)
+
+    def test_callers_truncated_keeps_accepted_paths(self):
+        chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        result = review.SearchTruncated(
+            ("pkg/a.py", "pkg/b.py"), "techo de salida (16 bytes examinados)"
+        )
+        with mock.patch.object(review, "grep_files", return_value=result):
+            text = review.build_callers(["src/app.py"], chunks)
+        self.assertIn("- pkg/a.py", text)
+        self.assertIn("- pkg/b.py", text)
+        self.assertIn("búsqueda truncada", text)
+
+    def test_timeout_interrupts_silent_producer(self):
+        wrapper = Path(tempfile.mkdtemp(), "bin")
+        wrapper.mkdir()
+        script = wrapper / "git"
+        script.write_text("#!/bin/sh\nsleep 4\n")
+        script.chmod(0o755)
+        files = {"src/app.py": "app\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, files)
+            os.chdir(Path(tmp, "repo"))
+            try:
+                with mock.patch.dict(
+                    os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
+                ):
+                    result = review.grep_files(["app"], 5, timeout=0.2)
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIn("tiempo", result.reason)
+
+    def test_failed_reason_respects_byte_budget(self):
+        reason = "fatal: " + "ñ" * 10500
+        with mock.patch.object(
+            review, "grep_files", return_value=review.SearchFailed(reason)
+        ):
+            text = review.build_tests(["src/app.py"])
+        self.assertLessEqual(len(text.encode("utf-8")), review.TESTS_MAX_BYTES)
+        self.assertIn("recortado", text)
+        self.assertNotIn("\ufffd", text)
+
+    def test_tests_cap_is_exact_across_files(self):
+        first = [f"tests/test_a_{i}.py" for i in range(39)]
+        second = [f"tests/test_b_{i}.py" for i in range(40)]
+        with mock.patch.object(
+            review,
+            "grep_files",
+            side_effect=[
+                review.SearchComplete(tuple(first)),
+                review.SearchComplete(tuple(second)),
+            ],
+        ):
+            text = review.build_tests(["src/a.py", "src/b.py"])
+        route_lines = [ln for ln in text.splitlines() if ln.startswith("- tests/")]
+        self.assertEqual(len(route_lines), review.TESTS_MAX_RESULTS)
+
+    def test_non_utf8_matches_stay_visible(self):
+        wrapper = Path(tempfile.mkdtemp(), "bin")
+        wrapper.mkdir()
+        real = shutil.which("git")
+        script = wrapper / "git"
+        script.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "grep" ]; then\n'
+            "  printf 'tests/test_\\377.py\\0'\n"
+            "  exit 0\n"
+            "fi\n"
+            f'exec "{real}" "$@"\n'
+        )
+        script.chmod(0o755)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, {"src/app.py": "app\n"})
+            os.chdir(Path(tmp, "repo"))
+            try:
+                with mock.patch.dict(
+                    os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
+                ):
+                    result = review.grep_files(["app"], 5)
+                    text = review.build_tests(["src/app.py"])
+                    chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+                    callers = review.build_callers(["src/app.py"], chunks)
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIn("no UTF-8", result.reason)
+        self.assertIn("UTF-8", text)
+        self.assertNotIn("Ninguna prueba menciona", text)
+        self.assertIn("UTF-8", callers)
+        self.assertNotIn("no encontró el texto", callers)
+
+    def test_callers_truncated_respects_match_cap(self):
+        overflow = [f"pkg/extra_{i}.py" for i in range(11)]
+        chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        result = review.SearchTruncated(tuple(overflow), "techo de salida")
+        with mock.patch.object(review, "grep_files", return_value=result):
+            text = review.build_callers(["src/app.py"], chunks)
+        route_lines = [ln for ln in text.splitlines() if ln.startswith("- pkg/")]
+        self.assertEqual(len(route_lines), review.CALLERS_MAX_MATCHES)
+        self.assertIn("y más", text)
+        self.assertIn("búsqueda truncada", text)
+
+    def test_callers_reports_truncated_and_failed(self):
+        chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        cases = [
+            (review.SearchTruncated((), "techo de salida"), "truncada"),
+            (review.SearchFailed("git murió"), "falló"),
+        ]
+        for result, expected in cases:
+            with self.subTest(state=type(result).__name__):
+                with mock.patch.object(review, "grep_files", return_value=result):
+                    text = review.build_callers(["src/app.py"], chunks)
+                self.assertIn(expected, text)
+                self.assertNotIn("no encontró el texto", text)
+
+
+class ContextBudgets(unittest.TestCase):
+    def test_utf8_manifest_matches_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "keep.txt").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "a.txt").write_text("mañana €100\n" * 40)
+            (repo / "b.txt").write_text("año año año €\n" * 40)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "head")
+            head = git(repo, "rev-parse", "HEAD")
+
+            manifest = prepare_manifest(tmp, repo, base, head, max_diff_bytes="400")
+            diff_path = Path(tmp, "work") / "diff.patch"
+            self.assertEqual(manifest["diff_bytes"], len(diff_path.read_bytes()))
+            self.assertGreater(manifest["diff_bytes"], 0)
+            self.assertEqual(manifest["reviewed"], ["a.txt"])
+            self.assertIn({"path": "b.txt", "reason": "budget"}, manifest["excluded"])
+
+    def test_first_large_file_reports_excess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "keep.txt").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "big.txt").write_text("日本語のテキスト\n" * 200)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "head")
+            head = git(repo, "rev-parse", "HEAD")
+
+            manifest = prepare_manifest(tmp, repo, base, head, max_diff_bytes="500")
+            actual = len((Path(tmp, "work") / "diff.patch").read_bytes())
+            self.assertEqual(manifest["reviewed"], ["big.txt"])
+            self.assertEqual(manifest["over_budget_bytes"], max(0, actual - 500))
+            self.assertGreater(manifest["over_budget_bytes"], 0)
+
+    def test_context_packages_respect_byte_budget(self):
+        long_path = "pkg/" + "a" * 120 + "/archivo_con_nombre_largo_{}.py"
+        callers_pool = [long_path.format(i) for i in range(30)]
+        tests_pool = [f"tests/test_modulo_{'ñ' * 280}_caso_{i}.py" for i in range(400)]
+        chunks = {
+            f"src/modulo{i}.py": "".join(
+                f"+def funcion_{n}_con_nombre_largo():\n"
+                for n in range(i * 5, i * 5 + 5)
+            )
+            for i in range(8)
+        }
+
+        def grep_side(patterns, limit, **kw):
+            pool = tests_pool if kw.get("predicate") is not None else callers_pool
+            return review.SearchComplete(tuple(pool[: limit + 1]))
+
+        with mock.patch.object(review, "grep_files", side_effect=grep_side):
+            callers = review.build_callers(sorted(chunks), chunks)
+            tests = review.build_tests(["src/app.py"])
+        self.assertLessEqual(len(callers.encode("utf-8")), review.CALLERS_MAX_BYTES)
+        self.assertLessEqual(len(tests.encode("utf-8")), review.TESTS_MAX_BYTES)
+        callers.encode("utf-8")
+        tests.encode("utf-8")
+        self.assertIn("recortado", callers)
+        self.assertIn("recortado", tests)
+        self.assertNotIn("\ufffd", callers)
+        self.assertNotIn("\ufffd", tests)
+
+    def test_conventions_final_serialization_respects_budget(self):
+        big = "原文の規約テキストです €\n" * 900
+        first = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
+        second = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
+        with mock.patch.object(review, "sh", side_effect=[first, second]):
+            text = review.build_conventions("deadbeef")
+        self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
+        text.encode("utf-8")
+
+    def test_conventions_respect_byte_budget(self):
+        big = "原文の規約テキストです €\n" * 900
+        with_content = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
+        empty = subprocess.CompletedProcess(["git"], 1, stdout="", stderr="")
+        with mock.patch.object(review, "sh", side_effect=[with_content, empty]):
+            text = review.build_conventions("deadbeef")
+        self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
+        text.encode("utf-8")
+        self.assertIn("recortado", text)
+        self.assertNotIn("\ufffd", text)
+
+
+class GitPaths(unittest.TestCase):
+    def test_special_paths_roundtrip(self):
+        entries = {
+            b"src/ni\xc3\xb1o.py": "valor = 'niño revisado'\n".encode(),
+            b"tab\tname.py": b"def f():\n    return 'tab'\n",
+            b"line\nname.py": b"def g():\n    return 'line'\n",
+            b"x-->y.py": b"marker = '--> intacto'\n",
+            b"keep.txt": b"base\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = Path(tmp, "repo"), Path(tmp, "work")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "keep.txt").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            head = commit_tree(repo, entries, [base])
+
+            os.chdir(repo)
+            try:
+                changed = review.changed_since(base, head)
+            finally:
+                os.chdir(ROOT)
+            self.assertEqual(
+                {p.raw for p in changed},
+                {name for name in entries if name != b"keep.txt"},
+            )
+
+            manifest = prepare_manifest(tmp, repo, base, head)
+            self.assertEqual(
+                sorted(manifest["reviewed"]),
+                sorted(p.decode("utf-8") for p in entries if p != b"keep.txt"),
+            )
+            diff = (work / "diff.patch").read_bytes()
+            self.assertIn("valor = 'niño revisado'".encode(), diff)
+            self.assertIn(b"marker = '--> intacto'", diff)
+            self.assertIn(b"return 'tab'", diff)
+            self.assertIn(b"return 'line'", diff)
+
+    def test_incremental_with_unrepresentable_path_reports_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = Path(tmp, "repo"), Path(tmp, "work")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "same.txt").write_text("estable\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            entries = {b"same.txt": b"estable\n"}
+            head = commit_tree(repo, entries, [base])
+            work.mkdir()
+            (work / "prev.json").write_text(
+                json.dumps(
+                    {"sha": head, "state": {"findings": []}, "completion": "complete"}
+                )
+            )
+            entries2 = {
+                b"same.txt": b"estable\n",
+                b"nuevo.txt": b"agregado\n",
+                b"malo\xff.py": b"import os\n",
+            }
+            head2 = commit_tree(repo, entries2, [head])
+
+            manifest = prepare_manifest(tmp, repo, head, head2)
+            self.assertIn("malo\\xff.py", manifest["changed_files"])
+            self.assertEqual(manifest["reviewed"], ["nuevo.txt"])
+            self.assertEqual(manifest["mode"], "incremental")
+            encoding = {
+                e["path"] for e in manifest["excluded"] if e["reason"] == "encoding"
+            }
+            self.assertIn("malo\\xff.py", encoding)
+
+    def test_unrepresentable_path_and_blob_are_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "keep.txt").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            entries = {
+                b"keep.txt": b"cambiado\n",
+                b"bad\xff.py": b"import os\n",
+                b"mangle.py": b"caf\xe9 = 'no utf8'\n",
+            }
+            head = commit_tree(repo, entries, [base])
+
+            manifest = prepare_manifest(tmp, repo, base, head)
+            self.assertEqual(manifest["reviewed"], ["keep.txt"])
+            encoding = {
+                e["path"]: e for e in manifest["excluded"] if e["reason"] == "encoding"
+            }
+            self.assertEqual(set(encoding), {"bad\\xff.py", "mangle.py"})
+            manifest_bytes = (Path(tmp, "work") / "manifest.json").read_bytes()
+            self.assertNotIn(b"\xef\xbf\xbd", manifest_bytes)
+            diff_bytes = (Path(tmp, "work") / "diff.patch").read_bytes()
+            self.assertNotIn(b"\xef\xbf\xbd", diff_bytes)
+            self.assertNotIn(b"no utf8", diff_bytes)
+
+            body = review.compose(
+                {"result": "COVERAGE: complete\n"},
+                manifest,
+                sha=SHA,
+                provider="opencode-go",
+            )
+            self.assertIn(f"completion={SHA}:partial", body)
+            self.assertIn("no se pudieron leer como UTF-8", body)
