@@ -4457,6 +4457,31 @@ class ContextSearch(unittest.TestCase):
         self.assertIsInstance(result, review.SearchTruncated)
         self.assertIn("tiempo", result.reason)
 
+    def test_failed_reason_respects_byte_budget(self):
+        reason = "fatal: " + "ñ" * 10500
+        with mock.patch.object(
+            review, "grep_files", return_value=review.SearchFailed(reason)
+        ):
+            text = review.build_tests(["src/app.py"])
+        self.assertLessEqual(len(text.encode("utf-8")), review.TESTS_MAX_BYTES)
+        self.assertIn("recortado", text)
+        self.assertNotIn("\ufffd", text)
+
+    def test_tests_cap_is_exact_across_files(self):
+        first = [f"tests/test_a_{i}.py" for i in range(39)]
+        second = [f"tests/test_b_{i}.py" for i in range(40)]
+        with mock.patch.object(
+            review,
+            "grep_files",
+            side_effect=[
+                review.SearchComplete(tuple(first)),
+                review.SearchComplete(tuple(second)),
+            ],
+        ):
+            text = review.build_tests(["src/a.py", "src/b.py"])
+        route_lines = [ln for ln in text.splitlines() if ln.startswith("- tests/")]
+        self.assertEqual(len(route_lines), review.TESTS_MAX_RESULTS)
+
     def test_non_utf8_matches_stay_visible(self):
         wrapper = Path(tempfile.mkdtemp(), "bin")
         wrapper.mkdir()
@@ -4490,6 +4515,17 @@ class ContextSearch(unittest.TestCase):
         self.assertNotIn("Ninguna prueba menciona", text)
         self.assertIn("UTF-8", callers)
         self.assertNotIn("no encontró el texto", callers)
+
+    def test_callers_truncated_respects_match_cap(self):
+        overflow = [f"pkg/extra_{i}.py" for i in range(11)]
+        chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        result = review.SearchTruncated(tuple(overflow), "techo de salida")
+        with mock.patch.object(review, "grep_files", return_value=result):
+            text = review.build_callers(["src/app.py"], chunks)
+        route_lines = [ln for ln in text.splitlines() if ln.startswith("- pkg/")]
+        self.assertEqual(len(route_lines), review.CALLERS_MAX_MATCHES)
+        self.assertIn("y más", text)
+        self.assertIn("búsqueda truncada", text)
 
     def test_callers_reports_truncated_and_failed(self):
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}

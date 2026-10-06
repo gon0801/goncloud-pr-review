@@ -1181,7 +1181,11 @@ def build_callers(reviewed, chunks):
                 continue
             matches = list(result.paths)
             if isinstance(result, SearchTruncated):
-                lines += [f"- {m}" for m in matches]
+                lines += [f"- {m}" for m in matches[:CALLERS_MAX_MATCHES]]
+                if len(matches) > CALLERS_MAX_MATCHES:
+                    lines.append(
+                        "- … y más (símbolo muy común, acota con Grep si lo necesitas)"
+                    )
                 lines.append(f"- búsqueda truncada: {result.reason}")
                 continue
             if not matches:
