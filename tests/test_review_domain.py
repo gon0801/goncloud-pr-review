@@ -2598,6 +2598,105 @@ class CheckpointCapacity(unittest.TestCase):
             len(con_multibyte.encode("utf-8")), ajustado.comment_max_bytes
         )
 
+    def test_presupuesto_en_camino_con_hallazgos(self):
+        """B: budget aplica con merged no vacío y jamás recorta el checkpoint."""
+        perfil = domain.StorageBudget(
+            max_bytes=domain.STATE_BYTES_PROPOSED,
+            comment_max_bytes=domain.COMMENT_MAX_BYTES,
+            comment_max_chars=domain.COMMENT_MAX_CHARS,
+        )
+        ajustado = domain.StorageBudget(
+            max_bytes=domain.STATE_BYTES_PROPOSED,
+            comment_max_bytes=20000,
+            comment_max_chars=20000,
+        )
+        snapshot = self._snapshot_rico()
+        encoded = domain.encode_snapshot(snapshot, perfil)
+        self.assertIsInstance(encoded, domain.EncodedCheckpoint)
+        hallazgos = [
+            {
+                "id": f.id,
+                "file": f.primary_anchor.path,
+                "line": 1,
+                "severity": f.severity,
+                "title": f.title,
+                "state": "open",
+            }
+            for f in snapshot.findings
+        ]
+        findings = {
+            "merged": hallazgos,
+            "new_ids": ["F0", "F1"],
+            "block": encoded.block,
+            "model_ok": True,
+        }
+        resultado = {"result": "COVERAGE: partial\n" + ("detalle largo " * 3000)}
+        manifest = {
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": ["src/modulo_0.py"],
+            "excluded": [],
+        }
+        comentario = review.compose(
+            resultado,
+            manifest,
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+            budget=ajustado,
+        )
+        self.assertLessEqual(
+            len(comentario.encode("utf-8")), ajustado.comment_max_bytes
+        )
+        self.assertLessEqual(len(comentario), ajustado.comment_max_chars)
+        self.assertIn(
+            encoded.block,
+            comentario,
+            "el checkpoint viaja íntegro, jamás recortado",
+        )
+
+    def test_budget_mas_chico_que_el_checkpoint_no_lo_recorta(self):
+        """B: presupuesto menor que el checkpoint → se rechaza el budget."""
+        perfil = domain.StorageBudget(
+            max_bytes=domain.STATE_BYTES_PROPOSED,
+            comment_max_bytes=domain.COMMENT_MAX_BYTES,
+            comment_max_chars=domain.COMMENT_MAX_CHARS,
+        )
+        snapshot = self._snapshot_rico()
+        encoded = domain.encode_snapshot(snapshot, perfil)
+        self.assertGreater(encoded.bytes, 9000)
+        findings = {
+            "merged": [],
+            "new_ids": [],
+            "block": encoded.block,
+            "model_ok": True,
+        }
+        resultado = {"result": "COVERAGE: partial\n"}
+        manifest = {
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": [],
+            "excluded": [],
+        }
+        chico = domain.StorageBudget(
+            max_bytes=domain.STATE_BYTES_PROPOSED,
+            comment_max_bytes=5000,
+            comment_max_chars=5000,
+        )
+        comentario = review.compose(
+            resultado,
+            manifest,
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+            budget=chico,
+        )
+        self.assertIn(
+            encoded.block,
+            comentario,
+            "el checkpoint confirmado viaja completo",
+        )
+
     def test_frontera_exacta_del_perfil_propuesto(self):
         """T05: 40000 bytes exactos se aceptan; 40001 se rechazan."""
         perfil = domain.StorageBudget(

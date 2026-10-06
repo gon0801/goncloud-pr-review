@@ -685,7 +685,9 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
             findings=findings,
             review=review,
             warnings=warnings,
+            budget=budget,
         )
+
     if findings is not None:
         review = strip_findings_block(review, last=True)
     parts = [
@@ -702,37 +704,41 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
             "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
             "",
         ]
-    if not manifest["reviewed"]:
-        review = (
-            review
-            or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
-        )
-    if len(review) > COMMENT_LIMIT:
-        review = (
-            review[:COMMENT_LIMIT]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
-    parts += [review or "_El revisor no devolvió texto._", ""]
-
-    parts += [
+    scope = [
         "<details><summary>Alcance de la revisión</summary>",
         "",
         *scope_lines(result, manifest, provider),
         "",
         "</details>",
     ]
-
-    cuerpo = "\n".join(parts)
     if budget is not None:
-        aviso = "\n\n_(Comentario recortado al presupuesto de capacidad.)_"
-        if len(cuerpo) > budget.comment_max_chars:
-            cuerpo = cuerpo[: max(0, budget.comment_max_chars - len(aviso))] + aviso
-        cuerpo = trim_utf8(cuerpo, budget.comment_max_bytes, aviso)
-    return cuerpo[:GITHUB_COMMENT_MAX]
+        fijo = "\n".join(parts + ["", ""] + scope) + "\n"
+        disponible_bytes = budget.comment_max_bytes - len(fijo.encode("utf-8"))
+        disponible_chars = budget.comment_max_chars - len(fijo)
+        if disponible_bytes < 0 or disponible_chars < 0:
+            budget = None
+    if budget is not None:
+        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
+        prose = review or "_El revisor no devolvió texto._"
+        if len(prose) > disponible_chars:
+            prose = prose[: max(0, disponible_chars - len(aviso))] + aviso
+        if len(prose.encode("utf-8")) > disponible_bytes:
+            prose = trim_utf8(prose, disponible_bytes, aviso)
+        parts.append(prose)
+        parts += scope
+        return "\n".join(parts)
+    if len(review) > COMMENT_LIMIT:
+        review = (
+            review[:COMMENT_LIMIT]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
+    parts.append(review or "_El revisor no devolvió texto._")
+    parts += scope
+    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
 
 def compose_with_findings(
-    result, manifest, *, sha, provider, findings, review, warnings
+    result, manifest, *, sha, provider, findings, review, warnings, budget=None
 ):
     merged, new_ids, block = (
         findings["merged"],
@@ -770,10 +776,14 @@ def compose_with_findings(
             )
         partes[3] = review or "_El revisor no devolvió texto._"
         return "\n".join(partes)
-    budget = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
-    if len(review) > budget:
+    # El checkpoint confirmado jamás se recorta: si no cabe en el
+    # presupuesto, se rechaza y se publican los topes actuales.
+    if budget is not None and len(block.encode("utf-8")) > budget.comment_max_bytes:
+        budget = None
+    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
+    if len(review) > budget_prosa:
         review = (
-            review[:budget]
+            review[:budget_prosa]
             + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
         )
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
@@ -817,6 +827,35 @@ def compose_with_findings(
         "",
         "</details>",
     ]
+    if budget is not None:
+        parts += ["", "## Detalle del revisor", "", "", ""]
+        alcance = scope_lines(result, manifest, provider)
+        if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
+            alcance.insert(
+                0,
+                f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
+                f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
+            )
+        parts += [
+            "<details><summary>Alcance de la revisión</summary>",
+            "",
+            *alcance,
+            "",
+            "</details>",
+        ]
+        i_prosa = parts.index("## Detalle del revisor") + 2
+        sin_prosa = "\n".join(parts[:i_prosa] + parts[i_prosa + 1 :])
+        disponible_bytes = max(
+            0, budget.comment_max_bytes - len(sin_prosa.encode("utf-8")) - 1
+        )
+        disponible_chars = max(0, budget.comment_max_chars - len(sin_prosa) - 1)
+        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
+        if len(review) > disponible_chars:
+            review = review[: max(0, disponible_chars - len(aviso))] + aviso
+        if len(review.encode("utf-8")) > disponible_bytes:
+            review = trim_utf8(review, disponible_bytes, aviso)
+        parts[i_prosa] = review
+        return "\n".join(parts)
 
     return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
