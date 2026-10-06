@@ -4230,6 +4230,109 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     f2.status, domain.StatusOpen, "sin cambio pertinente sigue abierto"
                 )
 
+    def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug existente",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug existente",
+                            "state": "open",
+                        },
+                        {
+                            "id": None,
+                            "file": "src/n.py",
+                            "line": 5,
+                            "severity": "Low",
+                            "title": "hallazgo nuevo",
+                            "state": "open",
+                        },
+                    ],
+                    "next": 2,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+
+        def publicar(estado_previo, schema, con_base):
+            encoded = domain.encode_snapshot(estado_previo, domain.StorageBudget())
+            sticky = {"body": encoded.block if schema == 3 else encoded}
+            manifest = {"head": "e" * 40, "mode": "full", "reviewed": ["src/n.py"]}
+            if con_base:
+                manifest["base"] = "b" * 40
+            with mock.patch.object(
+                review, "collect_dismissals", return_value=(set(), False, 0)
+            ):
+                return review.build_findings(
+                    {"result": modelo},
+                    manifest,
+                    sticky,
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                r = publicar(estado(schema), schema, True)
+                self.assertIsNone(r.get("keep"))
+                self.assertEqual(
+                    r["new_ids"],
+                    ["F2"],
+                    "lo nuevo del modelo se marca como nuevo",
+                )
+                carga = domain.read_snapshot(r["block"])
+                self.assertIsInstance(carga, domain.Valid)
+                self.assertEqual(carga.snapshot.revision.head_sha, "e" * 40)
+
+                sin_base = publicar(estado(schema), schema, False)
+                self.assertIsNone(
+                    sin_base.get("keep"),
+                    "sin base válida la revisión no avanza pero se publica",
+                )
+                carga = domain.read_snapshot(sin_base["block"])
+                self.assertIsInstance(carga, domain.Valid)
+                self.assertEqual(
+                    carga.snapshot.revision.head_sha,
+                    "c" * 40,
+                    "la revisión previa se conserva",
+                )
+
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))
         import review_domain as domain
