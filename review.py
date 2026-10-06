@@ -2048,7 +2048,7 @@ def quota_error(result):
 # F0: identidad y evidencia. El dominio trae match_finding / accept_report /
 # validar_reporte; el adaptador construye los RepositoryFacts con Git. El modo
 # `finding_identity=anchors` requiere estado v2 y se activa sólo en el CIERRE:
-# desactivado (por defecto) el camino de memoria es el legado de siempre.
+# con identidad anchors el camino de memoria nueva llega en T06 (por defecto current ya actualiza v2/v3 vía T04).
 IDENTIDADES = ("current", "anchors")
 
 
@@ -2090,22 +2090,114 @@ def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None, policy_dige
     )
 
 
+def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments):
+    """Escritor compatible (T04): memoria v2/v3 válida, identidad current.
+
+    Conserva el schema del estado, aplica los descartes de comentarios,
+    avanza la revisión a la del manifiesto cuando head y base son hex40, e
+    integra las observaciones del
+    modelo con el matching compatible. Desborde: Keep, como en M1.
+    """
+    snapshot = load.snapshot
+    model = parse_model_findings((result or {}).get("result") or "")
+    try:
+        dismiss_ids, dismiss_all, seen = collect_dismissals(
+            repo, pr, login, comments, snapshot.command_cursor
+        )
+    except Exception as exc:
+        print(
+            f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
+            file=sys.stderr,
+        )
+        dismiss_ids, dismiss_all, seen = set(), False, snapshot.command_cursor
+    snapshot = review_domain.aplicar_descartes(
+        snapshot, dismiss_ids, dismiss_all, comment_id=seen
+    )
+    snapshot = review_domain.avanzar_cursor(snapshot, seen)
+    observaciones = [
+        review_domain.observation_de_entrada(entry)
+        for entry in (model or {}).get("findings", [])
+    ]
+    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
+    cobertura = {
+        "complete": review_domain.COMPLETE_CLAIM,
+        "partial": review_domain.PARTIAL,
+    }.get(cobertura, review_domain.UNKNOWN)
+
+    def _hexa(valor):
+        valor = valor or ""
+        return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
+
+    head = manifest.get("head")
+    revision = None
+    if _hexa(head) and _hexa(manifest.get("base")):
+        revision = review_domain.Revision(
+            base_sha=manifest.get("base"),
+            head_sha=head,
+            policy_digest="",
+        )
+    plan = review_domain.ReviewPlan(
+        revision=revision,
+        changed_paths=review_domain.rutas_de_cambio(manifest),
+    )
+    report = review_domain.validar_reporte(
+        observaciones, cobertura, review_domain.RepositoryFacts()
+    )
+    decision = review_domain.accept_report(snapshot, plan, report)
+    if isinstance(decision, review_domain.Keep):
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": decision.reason,
+        }
+    encoded = review_domain.encode_snapshot(
+        decision.snapshot, review_domain.StorageBudget()
+    )
+    if isinstance(encoded, review_domain.CapacityExceeded):
+        motivo = f"desborde ({encoded.needed} bytes para {encoded.limit})"
+        print(
+            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+            file=sys.stderr,
+        )
+        return {
+            "merged": [],
+            "new_ids": [],
+            "block": load.block,
+            "model_ok": model is not None,
+            "keep": motivo,
+        }
+    previos = {f.id for f in snapshot.findings}
+    return {
+        "merged": review_domain.hallazgos_legacy(decision.snapshot),
+        "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
+        "block": encoded.block if snapshot.schema == 3 else encoded,
+        "model_ok": model is not None,
+    }
+
+
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
     """Merge previous state with the model's block. Broken block: keep last parseable (B6).
 
-    A v2 or future-version sticky is kept verbatim (the Keep of the design):
-    the memory is never downgraded to legacy, so a confirmed dismissal can't
-    reappear and nothing is lost.
+    Memoria v2/v3 válida con identidad `current`: se actualiza conservando
+    su schema (T04, escritor compatible); versiones futuras, memoria
+    inválida y el camino `anchors` se conservan (Keep), y el legado sigue
+    su propio camino de siempre.
     """
     load = (
         review_domain.read_snapshot(sticky["body"])
         if sticky
         else review_domain.Missing()
     )
+    if isinstance(load, review_domain.Valid) and politica_de_identidad() == "current":
+        return actualizar_memoria_valida(
+            load, result, manifest, repo, pr, login, comments
+        )
     model = parse_model_findings((result or {}).get("result") or "")
     if isinstance(load, (review_domain.Valid, review_domain.Future)):
         motivo = (
-            "schema 2"
+            f"schema {load.snapshot.schema}"
             if isinstance(load, review_domain.Valid)
             else f"versión {load.version}"
         )
@@ -2148,12 +2240,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
         manifest.get("mode") == "incremental"
         or manifest.get("reason") == "incomplete-prev"
     )
-    if has_previous_changes:
-        changed = manifest.get("changed_files", [])
-    elif manifest.get("reason") == "same-sha":
-        changed = []  # a re-run of the same commit: nothing changed, nothing can be resolved
-    else:
-        changed = manifest.get("reviewed", [])
+    changed = review_domain.rutas_de_cambio(manifest)
     watched = {
         f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN
     }
@@ -2247,7 +2334,7 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2, de versión futura, inválida o desbordada: se conserva
+            # Memoria v2/v3, de versión futura, inválida o desbordada: se conserva
             # el comentario sin modificar (o MARKER + banner si no hay sticky),
             # el sha= y la cobertura no avanzan y se avisa en visible, como en
             # la ruta de falla de infraestructura.

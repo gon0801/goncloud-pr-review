@@ -1,8 +1,12 @@
+import argparse
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -170,11 +174,14 @@ class LectorCompatible(unittest.TestCase):
         self.assertIsNone(review.parse_findings_block(PRE + "{oops" + SUF))
 
     def test_future_version_is_not_legacy(self):
+        SCHEMA_FUTURO = 4
         load = domain.read_snapshot(
-            PRE + json.dumps({"schema": 3, "findings": [], "next_id": 1}) + SUF
+            PRE
+            + json.dumps({"schema": SCHEMA_FUTURO, "findings": [], "next_id": 1})
+            + SUF
         )
         self.assertIsInstance(load, domain.Future)
-        self.assertEqual(load.version, 3)
+        self.assertEqual(load.version, SCHEMA_FUTURO)
         self.assertNotIsInstance(load, domain.Legacy)
         self.assertNotIsInstance(load, domain.Invalid)
 
@@ -361,7 +368,8 @@ class RutaDePublicacion(unittest.TestCase):
         self.assertIsInstance(cuerpo, str)
         return snapshot, cuerpo
 
-    def test_b1_sticky_v2_se_conserva_sin_perdida_en_publicacion(self):
+    def test_b1_sticky_v2_se_actualiza_sin_perdida_en_publicacion(self):
+        """T04: identidad current actualiza la memoria v2 conservando todo."""
         snapshot, sticky_body = self.memoria_v2_en_sticky()
         sticky = {"id": 9, "body": sticky_body}
         result = {"result": legado([entrada("F-new", file="c.py")])}
@@ -369,18 +377,24 @@ class RutaDePublicacion(unittest.TestCase):
         out = review.build_findings(
             result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
         )
-        self.assertEqual(out["block"], sticky_body, "el bloque v2 sale intacto")
-        self.assertTrue(out.get("keep"))
+        self.assertFalse(out.get("keep"), "el escritor compatible actualiza")
+        self.assertNotEqual(out["block"], sticky_body, "la revisión avanza")
         de_vuelta = domain.read_snapshot(out["block"])
         self.assertIsInstance(de_vuelta, domain.Valid)
-        self.assertEqual([f.id for f in de_vuelta.snapshot.findings], ["F1", "F2"])
+        self.assertEqual(de_vuelta.snapshot.schema, 2, "no se degrada a legacy")
+        ids = [f.id for f in de_vuelta.snapshot.findings]
+        self.assertIn("F1", ids)
+        self.assertIn("F2", ids)
+        self.assertIn("F3", ids, "lo nuevo del modelo se integra con id asignado")
+        self.assertIn("Hallazgo F-new", [f.title for f in de_vuelta.snapshot.findings])
         self.assertEqual(
-            de_vuelta.snapshot.findings[0].status,
+            next(f.status for f in de_vuelta.snapshot.findings if f.id == "F1"),
             domain.StatusDismissed(command_id=7),
             "un descarte confirmado no reaparece",
         )
+        self.assertEqual(de_vuelta.snapshot.command_cursor, 7)
 
-    def test_b1_sticky_de_version_futura_tambien_se_conserva(self):
+    def test_sticky_de_version_futura_se_conserva(self):
         sticky_body = (
             PRE + json.dumps({"schema": 9, "findings": [], "next_id": 1}) + SUF
         )
@@ -469,15 +483,12 @@ class FronteraDeReferencias(unittest.TestCase):
         self.assertIsInstance(load, domain.Invalid)
 
 
-class PublicacionConMemoriaConservada(unittest.TestCase):
-    def test_b4_publicar_con_memoria_v2_conserva_el_comentario_y_avisa(self):
-        import argparse
-        import os
-        from unittest import mock
-
+class PublicacionConMemoriaV2(unittest.TestCase):
+    def test_b4_publicar_con_memoria_v2_actualiza_el_comentario(self):
+        """T04: identidad current publica la actualización de memoria v2."""
         snapshot = domain.Snapshot(
             schema=2,
-            generation=2,
+            generation=1,
             revision=None,
             next_id=3,
             completion=domain.UNKNOWN,
@@ -536,7 +547,6 @@ class PublicacionConMemoriaConservada(unittest.TestCase):
             }
             os.environ.pop("GITHUB_STEP_SUMMARY", None)
             with mock.patch.dict(os.environ, envs):
-                os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
                         review, "fetch_all_comments", return_value=[sticky]
@@ -545,15 +555,16 @@ class PublicacionConMemoriaConservada(unittest.TestCase):
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        original_sha = f"{review.SHA_PREFIX}{'a' * 40} -->"
-        self.assertIn(original_sha, body, "el SHA revisado no avanza")
-        self.assertNotIn(f"{review.SHA_PREFIX}{'c' * 40}", body)
-        self.assertNotIn(f"{'c' * 40}:complete", body, "la cobertura no se confirma")
-        self.assertNotIn("bug nuevo z", body, "lo nuevo no se publica encima")
-        self.assertNotIn("bug x</code>", body)
-        self.assertIn("conservada", body, "aviso visible para el operador")
-        self.assertIn(review.CAUTION_MARK, body)
-        self.assertIn("Texto previo que debe permanecer.", body)
+        self.assertIn(f"{review.SHA_PREFIX}{'c' * 40} -->", body, "la revisión avanza")
+        self.assertIn(
+            f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->",
+            body,
+            "sin cobertura declarada no se confirma complete",
+        )
+        self.assertIn('"schema":2', body, "la memoria v2 se conserva en schema 2")
+        self.assertIn("bug nuevo z", body, "lo nuevo del modelo se integra")
+        self.assertIn('"command_id":7', body, "el descarte F1 conserva su command_id")
+        self.assertIn("bug x", body, "el descartado sigue listado como descartado")
 
 
 class PresupuestosEnBytes(unittest.TestCase):
@@ -2145,3 +2156,312 @@ class TituloUnicoConOtroLegadoEnRango(unittest.TestCase):
     def hechos(self):
         lineas = tuple(f"línea {i}" for i in range(1, 41))
         return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
+
+
+class Schema3Compatibility(unittest.TestCase):
+    def test_preserva_estado_y_solicitudes(self):
+        legado = domain.serialize_findings(
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": "a.py",
+                        "line": 1,
+                        "severity": "Low",
+                        "title": "legado abierto",
+                        "state": "OPEN",
+                    },
+                    {
+                        "id": "F2",
+                        "file": "b.py",
+                        "line": 2,
+                        "severity": "Low",
+                        "title": "legado descartado",
+                        "state": "DISMISSED",
+                    },
+                ],
+                "next": 5,
+                "seen": 98,
+            }
+        )
+        carga = domain.read_snapshot(legado)
+        self.assertIsInstance(carga, domain.Legacy)
+        self.assertEqual([f.id for f in carga.snapshot.findings], ["F1", "F2"])
+        self.assertEqual(carga.snapshot.next_id, 5)
+        self.assertEqual(carga.snapshot.command_cursor, 98)
+        self.assertEqual(carga.snapshot.completion, domain.UNKNOWN)
+
+        v2 = snapshot_v2()
+        bloque = domain.encode_snapshot(v2)
+        carga = domain.read_snapshot(bloque)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        self.assertEqual(s.schema, 2)
+        self.assertEqual([f.id for f in s.findings], ["F1", "F2", "F3"])
+        self.assertEqual(s.next_id, 4)
+        self.assertIsInstance(s.findings[2].status, domain.StatusDismissed)
+        self.assertEqual(s.command_cursor, 98)
+        self.assertEqual(s.pending_requests[0].id, "req-1")
+        self.assertEqual(s.pending_requests[0].kind, "explain")
+        self.assertEqual(s.pending_requests[0].finding_id, "F1")
+
+        v3 = domain.snapshot_a_v3(v2)
+        self.assertEqual(v3.schema, 3)
+        self.assertEqual(v3.request_count, 1)
+        self.assertEqual(v3.pending_requests[0].id, 1)
+        self.assertEqual(v3.pending_requests[0].legacy_id, "req-1")
+        self.assertEqual(v3.pending_requests[0].kind, "explain")
+        self.assertEqual(v3.pending_requests[0].finding_id, "F1")
+        v3 = domain.replace(
+            v3,
+            receipts=(
+                domain.Receipt(command_id=98, effect="descartado F3 por comando"),
+            ),
+        )
+        enc = domain.encode_snapshot(v3, domain.StorageBudget())
+        self.assertIsInstance(enc, domain.EncodedCheckpoint)
+        self.assertEqual(enc.schema, 3)
+        self.assertEqual(enc.bytes, len(enc.block.encode("utf-8")))
+        carga = domain.read_snapshot(enc.block)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        self.assertEqual(s.schema, 3)
+        self.assertEqual([f.id for f in s.findings], ["F1", "F2", "F3"])
+        self.assertEqual(s.next_id, 4)
+        self.assertIsInstance(s.findings[2].status, domain.StatusDismissed)
+        self.assertEqual(s.findings[2].status.command_id, 98)
+        self.assertEqual(s.command_cursor, 98)
+        self.assertEqual(s.request_count, 1)
+        self.assertEqual(s.pending_requests[0].id, 1)
+        self.assertEqual(s.pending_requests[0].legacy_id, "req-1")
+        self.assertEqual(s.pending_requests[0].kind, "explain")
+        self.assertEqual(s.pending_requests[0].finding_id, "F1")
+        self.assertEqual(s.receipts[0].command_id, 98)
+        self.assertEqual(s.receipts[0].effect, "descartado F3 por comando")
+
+    def test_invalid_or_future_never_initializes_empty(self):
+        carga = domain.read_snapshot("")
+        self.assertIsInstance(carga, domain.Missing)
+        corrupto = domain.read_snapshot(
+            domain.FINDINGS_PREFIX
+            + '{"schema": 3, "generation": 1, "findings": [{"id": "F1"}]}'
+            + domain.FINDINGS_SUFFIX
+        )
+        self.assertIsInstance(corrupto, domain.Invalid)
+        self.assertNotIsInstance(corrupto, domain.Missing)
+        futuro = domain.read_snapshot(
+            domain.FINDINGS_PREFIX
+            + '{"schema": 4, "generation": 1, "findings": []}'
+            + domain.FINDINGS_SUFFIX
+        )
+        self.assertIsInstance(futuro, domain.Future)
+        self.assertEqual(futuro.version, 4)
+        legado = domain.read_snapshot(
+            domain.serialize_findings(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "a.py",
+                            "line": 1,
+                            "severity": "Low",
+                            "title": "t",
+                            "state": "OPEN",
+                        }
+                    ],
+                    "next": 2,
+                    "seen": 0,
+                }
+            )
+        )
+        self.assertEqual(legado.snapshot.completion, domain.UNKNOWN)
+
+    def test_identity_strings_roundtrip(self):
+        raro = "src/niño\ttab\nlínea -->x --!>y ✓"
+        v3 = domain.snapshot_a_v3(snapshot_v2())
+        v3 = domain.replace(
+            v3,
+            findings=[
+                domain.replace(
+                    v3.findings[0],
+                    title=raro,
+                    primary_anchor=domain.AnchorLocated(
+                        path=raro,
+                        blob_sha="a" * 40,
+                        range=(10, 20),
+                        excerpt_digest="d1",
+                        symbol_hint=raro,
+                    ),
+                    cause_hint=raro,
+                    evidence=[domain.EvidenceUnverified(text=raro)],
+                )
+            ]
+            + v3.findings[1:],
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1, legacy_id="req-->1 --!>2", kind="explain", finding_id="F1"
+                )
+            ],
+            receipts=[domain.Receipt(command_id=98, effect="descarta --> F3")],
+        )
+        enc = domain.encode_snapshot(v3, domain.StorageBudget())
+        cuerpo = enc.block[: len(enc.block) - len(domain.FINDINGS_SUFFIX)]
+        self.assertNotIn("-->", cuerpo)
+        self.assertNotIn("--!>", cuerpo)
+        self.assertIn("--\\u003e", cuerpo)
+        carga = domain.read_snapshot(enc.block)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        f = s.findings[0]
+        self.assertEqual(f.title, raro)
+        self.assertEqual(f.primary_anchor.path, raro)
+        self.assertEqual(f.primary_anchor.symbol_hint, raro)
+        self.assertEqual(f.cause_hint, raro)
+        self.assertEqual(f.evidence[0].text, raro)
+        self.assertEqual(s.pending_requests[0].legacy_id, "req-->1 --!>2")
+        self.assertEqual(s.receipts[0].effect, "descarta --> F3")
+
+    def test_v2_rechaza_ids_de_solicitud_duplicados(self):
+        v2 = json.loads(
+            domain.encode_snapshot(snapshot_v2())[
+                len(domain.FINDINGS_PREFIX) : -len(domain.FINDINGS_SUFFIX)
+            ]
+        )
+        v2["pending_requests"].append(dict(v2["pending_requests"][0]))
+        bloque = domain.FINDINGS_PREFIX + json.dumps(v2) + domain.FINDINGS_SUFFIX
+        carga = domain.read_snapshot(bloque)
+        self.assertIsInstance(carga, domain.Invalid)
+        self.assertIn("duplicado", carga.reason)
+
+    def test_descartes_solo_tocan_abiertos_y_no_inflan_cursor(self):
+        """B1 ronda 2: 'descartar todo' respeta resueltos y el cursor."""
+        snapshot = snapshot_v2()
+        snapshot = domain.snapshot_a_v3(snapshot)
+        snapshot = replace(
+            snapshot,
+            command_cursor=98,
+            receipts=(domain.Receipt(command_id=98, effect="recibo previo"),),
+        )
+        descartados = domain.aplicar_descartes(
+            snapshot,
+            {"F1", "F2", "F999"},
+            True,
+            comment_id=99,
+        )
+        por_id = {f.id: f for f in descartados.findings}
+        self.assertIsInstance(
+            por_id["F1"].status, domain.StatusDismissed, "abierto: descartado"
+        )
+        self.assertEqual(por_id["F1"].status.command_id, 99, "command_id = comentario")
+        self.assertEqual(
+            por_id["F2"].status,
+            domain.StatusResolved(at_sha="b" * 40),
+            "'descartar todo' no toca resueltos",
+        )
+        self.assertEqual(
+            por_id["F3"].status.command_id,
+            98,
+            "el descartado previo conserva su command_id",
+        )
+        self.assertEqual(
+            descartados.command_cursor, 98, "el cursor no se infla con descartes"
+        )
+        self.assertEqual(
+            [r.command_id for r in descartados.receipts],
+            [98, 99],
+            "un recibo por comando, tras los previos",
+        )
+
+    def test_validador_v3_rechaza_bloques_malformados(self):
+        """Frontera del codec: un rechazo por regla, con su motivo afirmado."""
+        base = json.loads(
+            domain.encode_snapshot(
+                domain.snapshot_a_v3(snapshot_v2()), domain.StorageBudget()
+            ).block[len(domain.FINDINGS_PREFIX) : -len(domain.FINDINGS_SUFFIX)]
+        )
+
+        def variante(cambios):
+            payload = json.loads(json.dumps(base))
+            cambios(payload)
+            return domain.FINDINGS_PREFIX + json.dumps(payload) + domain.FINDINGS_SUFFIX
+
+        def id_duplicado(p):
+            p["pending_requests"].append(
+                {"id": 1, "legacy_id": "otro", "kind": "explain", "finding_id": "F1"}
+            )
+            p["request_count"] = 2
+
+        def id_menor_que_uno(p):
+            p["pending_requests"][0]["id"] = 0
+
+        def id_fuera_de_count(p):
+            p["pending_requests"][0]["id"] = 2
+            p["request_count"] = 1
+
+        def legacy_duplicado(p):
+            p["pending_requests"].append(
+                {"id": 2, "legacy_id": "req-1", "kind": "explain", "finding_id": "F1"}
+            )
+            p["request_count"] = 2
+
+        def recibo_duplicado(p):
+            if not p["receipts"]:
+                p["receipts"].append({"command_id": 98, "effect": "efecto"})
+            p["receipts"].append(dict(p["receipts"][0]))
+
+        def origin_no_texto(p):
+            p["pending_requests"][0]["origin"] = {"mal": 1}
+
+        def base_de_generacion_invalida(p):
+            p["pending_requests"][0]["basis_generation"] = "x"
+
+        def state_vacio(p):
+            p["pending_requests"][0]["state"] = ""
+
+        def recibo_vencido(p):
+            p["receipts"].append({"command_id": 99, "effect": "efecto"})
+
+        casos = [
+            (id_duplicado, "id de solicitud duplicado"),
+            (id_menor_que_uno, "id de solicitud menor que 1"),
+            (id_fuera_de_count, "supera request_count"),
+            (legacy_duplicado, "legacy_id de solicitud duplicado"),
+            (origin_no_texto, "origin de solicitud debe ser texto"),
+            (base_de_generacion_invalida, "basis_generation de solicitud inválida"),
+            (state_vacio, "state de solicitud inválido"),
+            (recibo_duplicado, "command_id de recibo duplicado"),
+            (recibo_vencido, "supera command_cursor"),
+        ]
+        for cambios, motivo in casos:
+            with self.subTest(regla=motivo):
+                carga = domain.read_snapshot(variante(cambios))
+                self.assertIsInstance(carga, domain.Invalid)
+                self.assertIn(motivo, carga.reason)
+
+    def test_normaliza_politica_una_vez(self):
+        p = domain.normalize_policy(
+            {
+                "finding_identity": "titles",
+                "findings_max_count": 25,
+                "findings_max_bytes": 9000,
+                "rules_digest": "abc",
+                "exclude_patterns": ["dist/**"],
+                "schema_version": 3,
+                "diff_mode": "incremental",
+            }
+        )
+        self.assertEqual(p.finding_identity, "current")
+        self.assertEqual(p.findings_max_count, 25)
+        self.assertEqual(p.findings_max_bytes, 9000)
+        self.assertEqual(p.rules_digest, "abc")
+        self.assertEqual(p.exclude_patterns, ("dist/**",))
+        self.assertEqual(p.schema_version, 3)
+        self.assertEqual(p.diff_mode, "incremental")
+        self.assertEqual(domain.normalize_policy({}).finding_identity, "current")
+        self.assertEqual(
+            domain.normalize_policy({"exclude_patterns": None}).exclude_patterns, ()
+        )
+        with self.assertRaises(ValueError):
+            domain.normalize_policy({"finding_identity": "bogus"})
+        with self.assertRaises(ValueError):
+            domain.normalize_policy({"diff_mode": "bogus"})

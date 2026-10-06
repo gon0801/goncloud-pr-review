@@ -59,7 +59,7 @@ class Future:
 
 @dataclass
 class CapacityExceeded:
-    """El estado v2 no cabe en el presupuesto; no se recorta nada."""
+    """El estado v2/v3 no cabe en el presupuesto; no se recorta nada."""
 
     limit: int
     needed: int
@@ -141,6 +141,50 @@ class PendingRequest:
 
 
 @dataclass
+class WorkRequest:
+    """Solicitud pendiente con id numérico monotónico."""
+
+    id: int
+    kind: str
+    finding_id: str | None = None
+    legacy_id: str | None = None
+    origin: str = ""
+    basis_generation: int = 0
+    state: str = "pending"
+
+
+@dataclass
+class RunKey:
+    request_id: int
+    run_id: int
+    attempt: int
+
+
+@dataclass
+class Receipt:
+    command_id: int
+    effect: str
+
+
+@dataclass
+class StorageBudget:
+    max_bytes: int = FINDINGS_MAX_BYTES
+
+
+@dataclass
+class EncodedCheckpoint:
+    block: str
+    schema: int
+    bytes: int
+
+
+@dataclass
+class ReviewTarget:
+    revision: Revision | None = None
+    basis_generation: int = 0
+
+
+@dataclass
 class Snapshot:
     schema: int
     generation: int
@@ -150,6 +194,24 @@ class Snapshot:
     findings: list
     command_cursor: int
     pending_requests: list = field(default_factory=list)
+    request_count: int = 0
+    receipts: tuple = field(default_factory=tuple)
+
+
+@dataclass
+class CompleteClaim:
+    obligations: tuple = field(default_factory=tuple)
+
+
+@dataclass
+class Partial:
+    missing: tuple = field(default_factory=tuple)
+    reason: str = ""
+
+
+@dataclass
+class UnknownCoverage:
+    reason: str = ""
 
 
 @dataclass
@@ -531,7 +593,7 @@ class _SchemaError(Exception):
         self.reason = reason
 
 
-def _v2_snapshot(data):
+def _base_snapshot(data, schema):
     generation = data.get("generation")
     next_id = data.get("next_id")
     cursor = data.get("command_cursor")
@@ -546,7 +608,7 @@ def _v2_snapshot(data):
         or isinstance(cursor, bool)
         or cursor < 0
     ):
-        raise _SchemaError("contadores de schema 2 inválidos")
+        raise _SchemaError(f"contadores de schema {schema} inválidos")
     if data.get("completion") not in (COMPLETE_CLAIM, PARTIAL, UNKNOWN):
         raise _SchemaError("completion inválida")
     revision = None
@@ -564,23 +626,6 @@ def _v2_snapshot(data):
             head_sha=rev["head_sha"],
             policy_digest=rev["policy_digest"],
         )
-    if "pending_requests" in data and not isinstance(data["pending_requests"], list):
-        raise _SchemaError("pending_requests debe ser una lista")
-    pedidos = data.get("pending_requests") or []
-    solicitudes = []
-    for req in pedidos:
-        if (
-            not isinstance(req, dict)
-            or not isinstance(req.get("id"), str)
-            or not req["id"]
-            or not isinstance(req.get("kind"), str)
-        ):
-            raise _SchemaError("solicitud pendiente inválida")
-        solicitudes.append(
-            PendingRequest(
-                id=req["id"], kind=req["kind"], finding_id=req.get("finding_id")
-            )
-        )
     findings, vistos = [], set()
     for entry in data.get("findings", []):
         hallazgo = _finding_of(entry)
@@ -593,12 +638,6 @@ def _v2_snapshot(data):
         raise _SchemaError(
             f"next_id ({next_id}) no supera al id máximo existente (F{maximo})"
         )
-    ids = {f.id for f in findings}
-    for req in solicitudes:
-        if req.finding_id is not None and req.finding_id not in ids:
-            raise _SchemaError(
-                f"la solicitud {req.id!r} apunta al hallazgo inexistente {req.finding_id!r}"
-            )
     for f in findings:
         if isinstance(f.status, StatusDismissed) and (
             f.status.command_id is not None and f.status.command_id > cursor
@@ -606,15 +645,152 @@ def _v2_snapshot(data):
             raise _SchemaError(
                 f"command_id {f.status.command_id} supera command_cursor ({cursor})"
             )
+    return generation, revision, next_id, data["completion"], findings, cursor
+
+
+def _v2_snapshot(data):
+    (
+        generation,
+        revision,
+        next_id,
+        completion,
+        findings,
+        cursor,
+    ) = _base_snapshot(data, 2)
+    if "pending_requests" in data and not isinstance(data["pending_requests"], list):
+        raise _SchemaError("pending_requests debe ser una lista")
+    ids = {f.id for f in findings}
+    solicitudes, textos = [], set()
+    for req in data.get("pending_requests") or []:
+        if (
+            not isinstance(req, dict)
+            or not isinstance(req.get("id"), str)
+            or not req["id"]
+            or not isinstance(req.get("kind"), str)
+        ):
+            raise _SchemaError("solicitud pendiente inválida")
+        if req["id"] in textos:
+            raise _SchemaError(f"id de solicitud duplicado: {req['id']!r}")
+        textos.add(req["id"])
+        finding_id = req.get("finding_id")
+        if finding_id is not None and finding_id not in ids:
+            raise _SchemaError(
+                f"la solicitud {req['id']!r} apunta al hallazgo inexistente {finding_id!r}"
+            )
+        solicitudes.append(
+            PendingRequest(id=req["id"], kind=req["kind"], finding_id=finding_id)
+        )
     return Snapshot(
         schema=2,
         generation=generation,
         revision=revision,
         next_id=next_id,
-        completion=data["completion"],
+        completion=completion,
         findings=findings,
         command_cursor=cursor,
         pending_requests=solicitudes,
+    )
+
+
+def _v3_snapshot(data):
+    (
+        generation,
+        revision,
+        next_id,
+        completion,
+        findings,
+        cursor,
+    ) = _base_snapshot(data, 3)
+    if "pending_requests" in data and not isinstance(data["pending_requests"], list):
+        raise _SchemaError("pending_requests debe ser una lista")
+    if "receipts" in data and not isinstance(data["receipts"], list):
+        raise _SchemaError("receipts debe ser una lista")
+    request_count = data.get("request_count", 0)
+    if (
+        not isinstance(request_count, int)
+        or isinstance(request_count, bool)
+        or request_count < 0
+    ):
+        raise _SchemaError("request_count inválido")
+    ids = {f.id for f in findings}
+    solicitudes, numericos, legados = [], set(), set()
+    for req in data.get("pending_requests") or []:
+        rid = req.get("id") if isinstance(req, dict) else None
+        legacy_id = req.get("legacy_id") if isinstance(req, dict) else None
+        if not isinstance(req, dict):
+            raise _SchemaError("solicitud pendiente no es un objeto")
+        if not isinstance(rid, int) or isinstance(rid, bool):
+            raise _SchemaError("id de solicitud debe ser entero")
+        if rid < 1:
+            raise _SchemaError("id de solicitud menor que 1")
+        if rid in numericos:
+            raise _SchemaError(f"id de solicitud duplicado: {rid}")
+        if rid > request_count:
+            raise _SchemaError(
+                f"id de solicitud supera request_count ({rid} > {request_count})"
+            )
+        if not isinstance(req.get("kind"), str) or not req["kind"]:
+            raise _SchemaError("kind de solicitud inválido")
+        if legacy_id is not None and (not isinstance(legacy_id, str) or not legacy_id):
+            raise _SchemaError(f"legacy_id de solicitud inválido: {legacy_id!r}")
+        if legacy_id is not None and legacy_id in legados:
+            raise _SchemaError(f"legacy_id de solicitud duplicado: {legacy_id!r}")
+        legados.add(legacy_id)
+        numericos.add(rid)
+        finding_id = req.get("finding_id")
+        if finding_id is not None and finding_id not in ids:
+            raise _SchemaError(
+                f"la solicitud {rid} apunta al hallazgo inexistente {finding_id!r}"
+            )
+        origin = req.get("origin", "")
+        basis = req.get("basis_generation", 0)
+        state = req.get("state", "pending")
+        if not isinstance(origin, str):
+            raise _SchemaError("origin de solicitud debe ser texto")
+        if not isinstance(basis, int) or isinstance(basis, bool) or basis < 0:
+            raise _SchemaError("basis_generation de solicitud inválida")
+        if not isinstance(state, str) or not state:
+            raise _SchemaError("state de solicitud inválido")
+        solicitudes.append(
+            WorkRequest(
+                id=rid,
+                kind=req["kind"],
+                finding_id=finding_id,
+                legacy_id=legacy_id,
+                origin=origin,
+                basis_generation=basis,
+                state=state,
+            )
+        )
+    recibos, comandos = [], set()
+    for recibo in data.get("receipts") or []:
+        cid = recibo.get("command_id") if isinstance(recibo, dict) else None
+        efecto = recibo.get("effect") if isinstance(recibo, dict) else None
+        if not isinstance(recibo, dict):
+            raise _SchemaError("recibo no es un objeto")
+        if not isinstance(cid, int) or isinstance(cid, bool) or cid < 1:
+            raise _SchemaError("command_id de recibo debe ser entero >= 1")
+        if cid in comandos:
+            raise _SchemaError(f"command_id de recibo duplicado: {cid}")
+        if cid > cursor:
+            raise _SchemaError(
+                f"command_id de recibo supera command_cursor ({cid} > {cursor})"
+            )
+        if not isinstance(efecto, str) or not efecto:
+            raise _SchemaError("effect de recibo vacío")
+        comandos.add(cid)
+        recibos.append(Receipt(command_id=cid, effect=efecto))
+    return Snapshot(
+        schema=3,
+        generation=generation,
+        revision=revision,
+        next_id=next_id,
+        completion=completion,
+        findings=findings,
+        command_cursor=cursor,
+        pending_requests=solicitudes,
+        request_count=request_count,
+        receipts=tuple(recibos),
     )
 
 
@@ -622,7 +798,7 @@ def read_snapshot(body, *, last=False):
     """Lee el bloque de memoria y clasifica el resultado.
 
     Missing (no hay bloque), Invalid (bloque ilegible o que viola la frontera
-    del esquema), Future (versión más nueva), Valid (schema 2) o Legacy
+    del esquema), Future (versión más nueva), Valid (schema 2 o 3) o Legacy
     (formato legado, migrado a Snapshot sin inventar nada; `raw` conserva el
     estado legado saneado para el adaptador).
     """
@@ -643,11 +819,149 @@ def read_snapshot(body, *, last=False):
                 return Invalid(exc.reason, block=found_block)
             except (TypeError, ValueError, AttributeError, KeyError) as exc:
                 return Invalid(f"bloque v2 mal formado: {exc}", block=found_block)
+        if schema == 3:
+            try:
+                return Valid(_v3_snapshot(data), block=found_block)
+            except _SchemaError as exc:
+                return Invalid(exc.reason, block=found_block)
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                return Invalid(f"bloque v3 mal formado: {exc}", block=found_block)
         if isinstance(schema, int) and not isinstance(schema, bool):
             return Future(schema, block=found_block)
         return Invalid(f"schema desconocido: {schema!r}")
     raw = legacy_raw_of(data)
     return Legacy(snapshot=_migrate_legacy(raw), raw=raw, block=found_block)
+
+
+def rutas_de_cambio(manifest):
+    """Qué archivos pueden resolver hallazgos en esta revisión.
+
+    incremental o revisión incompleta: solo los del delta; mismo commit:
+    nada (sin cambio de código nada puede resolverse); el resto: todo lo
+    revisado. Única fuente de la decisión, compartida por ambos escritores.
+    """
+    if (
+        manifest.get("mode") == "incremental"
+        or manifest.get("reason") == "incomplete-prev"
+    ):
+        return tuple(manifest.get("changed_files", []))
+    if manifest.get("reason") == "same-sha":
+        return ()
+    return tuple(manifest.get("reviewed", []))
+
+
+def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
+    """Descarta hallazgos ABIERTOS por comando (escritor compatible, T04).
+
+    El command_id de cada descarte es el id del comentario que lo ordenó: el
+    cursor es la marca de agua de comentarios procesados y no lo toca (si no,
+    "descartar todo" inflaría el cursor y se tragaría comandos posteriores).
+    En schema 3 deja UN recibo por comando. Sin ids ni `todos` devuelve el
+    snapshot intacto.
+    """
+    if not ids and not todos:
+        return snapshot
+    hallazgos = list(snapshot.findings)
+    descartados = []
+    for i, f in enumerate(hallazgos):
+        if not isinstance(f.status, StatusOpen):
+            continue
+        if not todos and f.id not in ids:
+            continue
+        hallazgos[i] = replace(f, status=StatusDismissed(command_id=comment_id))
+        descartados.append(f.id)
+    if not descartados:
+        return snapshot
+    recibos = list(snapshot.receipts)
+    if snapshot.schema == 3:
+        efecto = (
+            f"descartar todo: {', '.join(sorted(descartados))}"
+            if todos
+            else f"descartados por comando: {', '.join(sorted(descartados))}"
+        )
+        recibos.append(Receipt(command_id=comment_id, effect=efecto))
+    return replace(snapshot, findings=hallazgos, receipts=tuple(recibos))
+
+
+def avanzar_cursor(snapshot, seen):
+    """El cursor de comentarios no retrocede (idempotencia de comandos)."""
+    if seen <= snapshot.command_cursor:
+        return snapshot
+    return replace(snapshot, command_cursor=seen)
+
+
+def hallazgos_legacy(snapshot):
+    """El estado en formato legado (dicts) para el comentario publicado."""
+    return _legacy_raw_of_snapshot(snapshot)["findings"]
+
+
+def snapshot_a_v3(snapshot):
+    """Migra un Snapshot legado/v2 a schema 3.
+
+    Las solicitudes pendientes reciben IDs numéricos monotónicos (1..n) y
+    conservan su identificador anterior en legacy_id: la correspondencia viaja
+    persistida en cada solicitud, sin compactar pendientes. Es idempotente.
+    """
+    if snapshot.schema == 3:
+        return snapshot
+    solicitudes = []
+    for i, req in enumerate(snapshot.pending_requests, start=1):
+        legacy = req.id if isinstance(req, PendingRequest) else req.legacy_id
+        solicitudes.append(
+            WorkRequest(
+                id=i, kind=req.kind, finding_id=req.finding_id, legacy_id=legacy
+            )
+        )
+    return replace(
+        snapshot,
+        schema=3,
+        request_count=len(solicitudes),
+        pending_requests=solicitudes,
+        receipts=snapshot.receipts,
+    )
+
+
+def normalize_policy(boot):
+    """Normaliza la política confiable una vez.
+
+    Identidad externa current/anchors; el valor interno antiguo `titles` se
+    adapta aquí, en la frontera de compatibilidad. Valida modos, versión de
+    schema, reglas, exclusiones y presupuestos.
+    """
+    identity = boot.get("finding_identity", "titles")
+    if identity == "titles":
+        identity = "current"
+    if identity not in ("current", "anchors"):
+        raise ValueError(f"finding_identity inválida: {identity!r}")
+    mode = boot.get("diff_mode", "full")
+    if mode not in ("full", "incremental"):
+        raise ValueError(f"diff_mode inválido: {mode!r}")
+    version = boot.get("schema_version", 2)
+    if version not in (2, 3):
+        raise ValueError(f"schema_version inválida: {version!r}")
+    max_count = boot.get("findings_max_count", FINDINGS_MAX_COUNT)
+    max_bytes = boot.get("findings_max_bytes", FINDINGS_MAX_BYTES)
+    if not isinstance(max_count, int) or isinstance(max_count, bool) or max_count < 1:
+        raise ValueError(f"findings_max_count inválido: {max_count!r}")
+    if (
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or max_bytes < 1000
+    ):
+        raise ValueError(f"findings_max_bytes inválido: {max_bytes!r}")
+    patterns = boot.get("exclude_patterns") or ()
+    if isinstance(patterns, str) or not all(isinstance(x, str) for x in patterns):
+        raise ValueError("exclude_patterns debe ser una lista de patrones")
+    return ReviewPolicy(
+        finding_identity=identity,
+        findings_max_count=max_count,
+        findings_max_bytes=max_bytes,
+        rules_digest=str(boot.get("rules_digest", "")),
+        exclude_patterns=tuple(patterns),
+        allow_inline_comments=bool(boot.get("allow_inline_comments", False)),
+        schema_version=version,
+        diff_mode=mode,
+    )
 
 
 def _legacy_raw_of_snapshot(snapshot):
@@ -687,33 +1001,31 @@ def _neutralizar(texto):
     return str(texto).replace("--!>", "--!\u203a").replace("-->", "--\u203a")
 
 
-def encode_snapshot(snapshot):
-    """Serializa el estado: legado en formato legado, v2 sin pérdida.
+def _revision_json(snapshot):
+    if snapshot.revision is None:
+        return None
+    return {
+        "base_sha": snapshot.revision.base_sha,
+        "head_sha": snapshot.revision.head_sha,
+        "policy_digest": snapshot.revision.policy_digest,
+    }
 
-    Devuelve el bloque completo, o CapacityExceeded cuando el estado v2 no
-    cabe en el presupuesto de bytes (nunca se recorta: el llamador conserva
-    el último estado válido).
-    """
-    if snapshot.schema != 2:
-        return serialize_findings(_legacy_raw_of_snapshot(snapshot))
-    revision = None
-    if snapshot.revision is not None:
-        revision = {
-            "base_sha": snapshot.revision.base_sha,
-            "head_sha": snapshot.revision.head_sha,
-            "policy_digest": snapshot.revision.policy_digest,
-        }
+
+def _findings_json(snapshot, *, neutralizar=True):
+    def texto(valor):
+        return _neutralizar(valor) if neutralizar else valor
 
     def anchor_json(a):
+
         if isinstance(a, AnchorLegacy):
-            return {"kind": "legacy", "path": _neutralizar(a.path), "line": a.line}
+            return {"kind": "legacy", "path": texto(a.path), "line": a.line}
         return {
             "kind": "located",
-            "path": _neutralizar(a.path),
+            "path": texto(a.path),
             "blob_sha": a.blob_sha,
             "range": list(a.range),
-            "excerpt_digest": _neutralizar(a.excerpt_digest),
-            "symbol_hint": _neutralizar(a.symbol_hint),
+            "excerpt_digest": texto(a.excerpt_digest),
+            "symbol_hint": texto(a.symbol_hint),
         }
 
     def evidence_json(e):
@@ -722,55 +1034,108 @@ def encode_snapshot(snapshot):
         if isinstance(e, EvidenceCheck):
             return {
                 "kind": "check",
-                "check_id": _neutralizar(e.check_id),
+                "check_id": texto(e.check_id),
                 "head_sha": e.head_sha,
-                "producer": _neutralizar(e.producer),
-                "conclusion": _neutralizar(e.conclusion),
-                "url": _neutralizar(e.url),
+                "producer": texto(e.producer),
+                "conclusion": texto(e.conclusion),
+                "url": texto(e.url),
             }
-        return {"kind": "unverified", "text": _neutralizar(e.text)}
+        return {"kind": "unverified", "text": texto(e.text)}
 
-    def status_json(s):
-        if isinstance(s, StatusOpen):
+    def status_json(status):
+        if isinstance(status, StatusOpen):
             return {"kind": "open"}
-        if isinstance(s, StatusResolved):
-            return {"kind": "resolved", "at_sha": s.at_sha}
-        return {"kind": "dismissed", "command_id": s.command_id}
+        if isinstance(status, StatusResolved):
+            return {"kind": "resolved", "at_sha": status.at_sha}
+        return {"kind": "dismissed", "command_id": status.command_id}
 
-    payload = {
-        "schema": 2,
-        "generation": snapshot.generation,
-        "revision": revision,
-        "next_id": snapshot.next_id,
-        "completion": snapshot.completion,
-        "command_cursor": snapshot.command_cursor,
-        "pending_requests": [
-            {"id": r.id, "kind": r.kind, "finding_id": r.finding_id}
-            for r in snapshot.pending_requests
-        ],
-        "findings": [
-            {
-                "id": f.id,
-                "title": _neutralizar(f.title),
-                "severity": f.severity,
-                "status": status_json(f.status),
-                "primary_anchor": anchor_json(f.primary_anchor),
-                "related_anchors": [anchor_json(a) for a in f.related_anchors],
-                "cause_hint": _neutralizar(f.cause_hint),
-                "evidence": [evidence_json(e) for e in f.evidence],
-            }
-            for f in snapshot.findings
-        ],
-    }
-    blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-    bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
-    load = read_snapshot(bloque)
-    if not isinstance(load, Valid):
-        raise ValueError(f"estado v2 ilegal: {load.reason}")
-    needed = len(bloque.encode("utf-8"))
-    if needed > FINDINGS_MAX_BYTES:
-        return CapacityExceeded(limit=FINDINGS_MAX_BYTES, needed=needed)
-    return bloque
+    return [
+        {
+            "id": f.id,
+            "title": _neutralizar(f.title) if neutralizar else f.title,
+            "severity": f.severity,
+            "status": status_json(f.status),
+            "primary_anchor": anchor_json(f.primary_anchor),
+            "related_anchors": [anchor_json(a) for a in f.related_anchors],
+            "cause_hint": _neutralizar(f.cause_hint) if neutralizar else f.cause_hint,
+            "evidence": [evidence_json(e) for e in f.evidence],
+        }
+        for f in snapshot.findings
+    ]
+
+
+def encode_snapshot(snapshot, budget=None):
+    """Serializa el estado: legado en formato legado, v2 sin pérdida, v3 en
+    checkpoint codificado con escapes JSON reversibles.
+
+    Devuelve el bloque (str) para legado/v2, un EncodedCheckpoint para v3, o
+    CapacityExceeded cuando el estado no cabe en el presupuesto (nunca se
+    recorta: el llamador conserva el último estado válido).
+    """
+    limite = budget.max_bytes if budget is not None else FINDINGS_MAX_BYTES
+    if snapshot.schema == 1:
+        return serialize_findings(_legacy_raw_of_snapshot(snapshot), max_bytes=limite)
+    if snapshot.schema == 2:
+        payload = {
+            "schema": 2,
+            "generation": snapshot.generation,
+            "revision": _revision_json(snapshot),
+            "next_id": snapshot.next_id,
+            "completion": snapshot.completion,
+            "command_cursor": snapshot.command_cursor,
+            "pending_requests": [
+                {"id": r.id, "kind": r.kind, "finding_id": r.finding_id}
+                for r in snapshot.pending_requests
+            ],
+            "findings": _findings_json(snapshot),
+        }
+        blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+        load = read_snapshot(bloque)
+        if not isinstance(load, Valid):
+            raise ValueError(f"estado v2 ilegal: {load.reason}")
+        needed = len(bloque.encode("utf-8"))
+        if needed > limite:
+            return CapacityExceeded(limit=limite, needed=needed)
+        return bloque
+    if snapshot.schema == 3:
+        payload = {
+            "schema": 3,
+            "generation": snapshot.generation,
+            "revision": _revision_json(snapshot),
+            "next_id": snapshot.next_id,
+            "completion": snapshot.completion,
+            "command_cursor": snapshot.command_cursor,
+            "request_count": snapshot.request_count,
+            "pending_requests": [
+                {
+                    "id": r.id,
+                    "legacy_id": r.legacy_id,
+                    "kind": r.kind,
+                    "finding_id": r.finding_id,
+                    "origin": r.origin,
+                    "basis_generation": r.basis_generation,
+                    "state": r.state,
+                }
+                for r in snapshot.pending_requests
+            ],
+            "receipts": [
+                {"command_id": r.command_id, "effect": r.effect}
+                for r in snapshot.receipts
+            ],
+            "findings": _findings_json(snapshot, neutralizar=False),
+        }
+        blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        blob = blob.replace("-->", "--\\u003e").replace("--!>", "--!\\u003e")
+        bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
+        load = read_snapshot(bloque)
+        if not isinstance(load, Valid) or load.snapshot.schema != 3:
+            raise ValueError(f"estado v3 ilegal: {getattr(load, 'reason', load)}")
+        needed = len(bloque.encode("utf-8"))
+        if needed > limite:
+            return CapacityExceeded(limit=limite, needed=needed)
+        return EncodedCheckpoint(block=bloque, schema=3, bytes=needed)
+    raise ValueError(f"schema desconocido: {snapshot.schema!r}")
 
 
 # ---- F0: identidad, evidencia y resolución ----
@@ -830,6 +1195,7 @@ class ReviewPlan:
     obligations: tuple = ()
     context_refs: tuple = ()
     exclusions: tuple = ()
+    delivered: tuple = ()
 
 
 @dataclass
@@ -842,6 +1208,8 @@ class ReviewPolicy:
     rules_digest: str = ""
     exclude_patterns: tuple = ()
     allow_inline_comments: bool = False
+    schema_version: int = 2
+    diff_mode: str = "full"
 
 
 @dataclass
@@ -857,6 +1225,7 @@ class ValidatedReport:
     observations: list
     claimed_coverage: str = UNKNOWN
     rechazadas: tuple = ()
+    coverage: object = None
 
 
 def _ruta_primaria(algo):
@@ -1074,7 +1443,7 @@ def match_finding(previous, observation, facts):
 
 
 def observation_de_entrada(entry):
-    """Entrada del bloque del modelo -> Observation (camino anchors de F0).
+    """Entrada del bloque del modelo -> Observation (transporte puro del canal claim/state).
 
     Transporte puro: la cita/ancla se valida después (validar_reporte) y la
     severidad se normaliza al aceptar. Sin ancla declarada, la ubicación es
@@ -1119,7 +1488,8 @@ def observation_de_entrada(entry):
         for ev in entry.get("evidence", []) or []
         if isinstance(ev, dict) and ev.get("kind") == "unverified"
     ]
-    claim = RESOLVED if entry.get("claim") == "resolved" else OPEN
+    claim = entry.get("claim") or entry.get("state")
+    claim = RESOLVED if claim == "resolved" else OPEN
     return Observation(
         title=str(entry.get("title") or ""),
         severity=str(entry.get("severity") or ""),
@@ -1150,15 +1520,15 @@ def _cambio_pertinente(finding, cambiadas):
 def accept_report(current, plan, report):
     """Acepta el reporte validado y devuelve la Transition del estado.
 
-    Requiere estado v2 (schema 2): en legado devuelve Keep. El programa asigna
+    Requiere estado v2 o v3 (schema 2/3): en legado devuelve Keep. El programa asigna
     los ids; título y causa son mutables. Resolver exige cambio pertinente o
     reversión exacta; la evaluación del modelo queda etiquetada como
     UnverifiedClaim. Un match Ambiguous entra como hallazgo separado con la
     indicación de posible duplicado, sin fusionar. Los descartes nunca
     reaparecen.
     """
-    if current.schema != 2:
-        return Keep(reason="el reconocimiento de identidad requiere estado v2")
+    if current.schema not in (2, 3):
+        return Keep(reason="el reconocimiento de identidad requiere estado v2 o v3")
     facts = report.facts
     revertidas = set(facts.reverted_paths)
     cambiadas = set(plan.changed_paths) | revertidas

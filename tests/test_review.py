@@ -3917,6 +3917,504 @@ if __name__ == "__main__":
 class PersistenciaSinPerdida(unittest.TestCase):
     """M1: el desborde y la memoria inválida conservan el estado y no confirman el commit."""
 
+    def test_publicacion_dos_actualizaciones_v2_y_schema3(self):
+        import dataclasses
+        import hashlib
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        lineas = tuple(f"línea {i}" for i in range(1, 31))
+        digest = hashlib.sha256("\n".join(lineas[9:11]).encode()).hexdigest()
+
+        def construir(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug ubicado",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLocated(
+                        path="src/app.py",
+                        blob_sha="a" * 40,
+                        range=(10, 11),
+                        excerpt_digest=digest,
+                    ),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="otro bug",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+                pending_requests=[
+                    domain.PendingRequest(id="req-1", kind="explain", finding_id="F1")
+                ],
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def aceptar(estado, head):
+            obs = domain.Observation(
+                title="bug ubicado",
+                severity="High",
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(10, 11),
+                    excerpt_digest=digest,
+                ),
+                claim=domain.OPEN,
+            )
+            hechos = domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
+            plan = domain.ReviewPlan(
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha=head, policy_digest="d" * 64
+                ),
+                changed_paths=("src/app.py",),
+            )
+            report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+            return domain.accept_report(estado, plan, report)
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                base = construir(schema)
+                t1 = aceptar(base, "e" * 40)
+                self.assertIsInstance(t1, domain.Replace)
+                self.assertEqual(t1.snapshot.revision.head_sha, "e" * 40)
+                descartados = tuple(
+                    dataclasses.replace(f, status=domain.StatusDismissed(command_id=5))
+                    if f.id == "F2"
+                    else f
+                    for f in t1.snapshot.findings
+                )
+                con_descarte = dataclasses.replace(
+                    t1.snapshot, findings=descartados, command_cursor=5
+                )
+                t2 = aceptar(con_descarte, "f" * 40)
+                self.assertIsInstance(t2, domain.Replace)
+                enc = domain.encode_snapshot(t2.snapshot, domain.StorageBudget())
+                bloque = enc.block if schema == 3 else enc
+                load = domain.read_snapshot(bloque)
+                self.assertIsInstance(load, domain.Valid)
+                s = load.snapshot
+                self.assertEqual(s.revision.head_sha, "f" * 40)
+                f2 = next(f for f in s.findings if f.id == "F2")
+                self.assertIsInstance(f2.status, domain.StatusDismissed)
+                self.assertEqual(s.command_cursor, 5)
+                if schema == 3:
+                    self.assertEqual(s.schema, 3)
+                    self.assertEqual(s.request_count, 1)
+                    self.assertEqual(s.pending_requests[0].legacy_id, "req-1")
+
+    def test_publica_dos_veces_via_build_findings_v2_y_schema3(self):
+        """B1: el escritor compatible actualiza v2/v3 con identidad current."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="abierto uno",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="abierto dos",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+                domain.Finding(
+                    id="F3",
+                    title="descartado antes",
+                    severity="Low",
+                    status=domain.StatusDismissed(command_id=98),
+                    primary_anchor=domain.AnchorLegacy(path="src/c.py", line=3),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=4,
+                completion=domain.PARTIAL,
+                findings=hallazgos,
+                command_cursor=98,
+                pending_requests=[
+                    domain.PendingRequest(id="req-1", kind="explain", finding_id="F2")
+                ],
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def publicar(bloque_previo, schema, descartes, head):
+            sticky = {"body": bloque_previo}
+            manifest = {
+                "base": "b" * 40,
+                "head": head,
+                "mode": "full",
+                "reviewed": ["src/a.py"],
+            }
+            with mock.patch.object(
+                review,
+                "collect_dismissals",
+                return_value=(descartes, False, 99),
+            ):
+                return review.build_findings(
+                    {"result": "COVERAGE: partial\n"},
+                    manifest,
+                    sticky,
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                original = domain.encode_snapshot(
+                    estado(schema), domain.StorageBudget()
+                )
+                bloque0 = original.block if schema == 3 else original
+                r1 = publicar(bloque0, schema, {"F1"}, "e" * 40)
+                self.assertIsNone(r1.get("keep"), f"schema {schema}: no debe ser Keep")
+                carga1 = domain.read_snapshot(r1["block"])
+                self.assertIsInstance(carga1, domain.Valid)
+                s1 = carga1.snapshot
+                self.assertEqual(s1.schema, schema)
+                self.assertEqual(s1.revision.head_sha, "e" * 40)
+                f1 = next(f for f in s1.findings if f.id == "F1")
+                self.assertIsInstance(f1.status, domain.StatusDismissed)
+                self.assertEqual(f1.status.command_id, 99)
+                self.assertEqual(
+                    s1.command_cursor,
+                    99,
+                    "el cursor es marca de agua de comentarios, no suma descartes",
+                )
+                if schema == 3:
+                    self.assertTrue(
+                        any(r.command_id == 99 for r in s1.receipts),
+                        "el descarte deja su recibo en schema 3",
+                    )
+                r2 = publicar(r1["block"], schema, set(), "f" * 40)
+                self.assertIsNone(r2.get("keep"))
+                carga2 = domain.read_snapshot(r2["block"])
+                self.assertIsInstance(carga2, domain.Valid)
+                s2 = carga2.snapshot
+                self.assertEqual(s2.schema, schema)
+                self.assertEqual(s2.revision.head_sha, "f" * 40)
+                f1b = next(f for f in s2.findings if f.id == "F1")
+                self.assertIsInstance(f1b.status, domain.StatusDismissed)
+                self.assertEqual(f1b.status.command_id, 99)
+                if schema == 3:
+                    self.assertEqual(s2.request_count, 1)
+                    self.assertEqual(s2.pending_requests[0].legacy_id, "req-1")
+                self.assertEqual(s2.receipts, s1.receipts)
+
+    def test_escritor_compatible_resuelve_con_cambio_pertinente(self):
+        """B3: el canal state del bloque legado resuelve en v2/v3."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug a",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="bug b",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n## Detalle\n\n- bug a resuelto\n- bug b sigue\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug a",
+                            "state": "resolved",
+                        },
+                        {
+                            "id": "F2",
+                            "file": "src/b.py",
+                            "line": 2,
+                            "severity": "Medium",
+                            "title": "bug b",
+                            "state": "open",
+                        },
+                    ],
+                    "next": 3,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "full",
+            "reviewed": ["src/a.py"],
+        }
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                anterior = estado(schema)
+                encoded = domain.encode_snapshot(anterior, domain.StorageBudget())
+                sticky = {"body": encoded.block if schema == 3 else encoded}
+                with mock.patch.object(
+                    review, "collect_dismissals", return_value=(set(), False, 0)
+                ):
+                    r = review.build_findings(
+                        {"result": modelo},
+                        manifest,
+                        sticky,
+                        "o/r",
+                        1,
+                        "bot",
+                        [],
+                    )
+                self.assertIsNone(r.get("keep"))
+                snapshot = domain.read_snapshot(r["block"]).snapshot
+                f1 = next(f for f in snapshot.findings if f.id == "F1")
+                f2 = next(f for f in snapshot.findings if f.id == "F2")
+                self.assertIsInstance(
+                    f1.status, domain.StatusResolved, "resuelto con cambio pertinente"
+                )
+                self.assertEqual(f1.status.at_sha, "e" * 40)
+                self.assertIsInstance(
+                    f2.status, domain.StatusOpen, "sin cambio pertinente sigue abierto"
+                )
+
+    def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug existente",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug existente",
+                            "state": "open",
+                        },
+                        {
+                            "id": None,
+                            "file": "src/n.py",
+                            "line": 5,
+                            "severity": "Low",
+                            "title": "hallazgo nuevo",
+                            "state": "open",
+                        },
+                    ],
+                    "next": 2,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+
+        def publicar(estado_previo, schema, con_base):
+            encoded = domain.encode_snapshot(estado_previo, domain.StorageBudget())
+            sticky = {"body": encoded.block if schema == 3 else encoded}
+            manifest = {"head": "e" * 40, "mode": "full", "reviewed": ["src/n.py"]}
+            if con_base:
+                manifest["base"] = "b" * 40
+            with mock.patch.object(
+                review, "collect_dismissals", return_value=(set(), False, 0)
+            ):
+                return review.build_findings(
+                    {"result": modelo},
+                    manifest,
+                    sticky,
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                r = publicar(estado(schema), schema, True)
+                self.assertIsNone(r.get("keep"))
+                self.assertEqual(
+                    r["new_ids"],
+                    ["F2"],
+                    "lo nuevo del modelo se marca como nuevo",
+                )
+                carga = domain.read_snapshot(r["block"])
+                self.assertIsInstance(carga, domain.Valid)
+                self.assertEqual(carga.snapshot.revision.head_sha, "e" * 40)
+
+                sin_base = publicar(estado(schema), schema, False)
+                self.assertIsNone(
+                    sin_base.get("keep"),
+                    "sin base válida la revisión no avanza pero se publica",
+                )
+                carga = domain.read_snapshot(sin_base["block"])
+                self.assertIsInstance(carga, domain.Valid)
+                self.assertEqual(
+                    carga.snapshot.revision.head_sha,
+                    "c" * 40,
+                    "la revisión previa se conserva",
+                )
+
+    def test_mismo_sha_no_resuelve_en_memoria_v2_y_v3(self):
+        """B5: un re-run del mismo commit no puede resolver hallazgos."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug a",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.PARTIAL,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug a",
+                            "state": "resolved",
+                        }
+                    ],
+                    "next": 2,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "full",
+            "reason": "same-sha",
+            "reviewed": ["src/a.py"],
+        }
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                encoded = domain.encode_snapshot(estado(schema), domain.StorageBudget())
+                sticky = {"body": encoded.block if schema == 3 else encoded}
+                with mock.patch.object(
+                    review, "collect_dismissals", return_value=(set(), False, 0)
+                ):
+                    r = review.build_findings(
+                        {"result": modelo},
+                        manifest,
+                        sticky,
+                        "o/r",
+                        1,
+                        "bot",
+                        [],
+                    )
+                self.assertIsNone(r.get("keep"), "el re-run del mismo sha sí publica")
+                snapshot = domain.read_snapshot(r["block"]).snapshot
+                f1 = next(f for f in snapshot.findings if f.id == "F1")
+                self.assertIsInstance(
+                    f1.status,
+                    domain.StatusOpen,
+                    "same-sha: nada cambió, nada puede resolverse",
+                )
+
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))
         import review_domain as domain
