@@ -102,7 +102,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:done (PR #44, squash 9c93844; evidencia docs/evidence/reviewer/S0.md) |
 | T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:done (PR #46, squash 1bd1542; evidencia docs/evidence/reviewer/S1.md) |
-| T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:TODO |
+| T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:done (PR #48, squash b2b82e4; evidencia docs/evidence/reviewer/F1.md) |
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:TODO |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:TODO |
 | T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:TODO |
@@ -143,3 +143,17 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | S1-r3 LISTO | slice [:GITHUB_COMMENT_MAX] cuenta caracteres, no bytes (pre-existente en la base, heredado por N1) | abierta |
 | S1-r3 revisor N2 | docs/evidence/reviewer/S1.md:46 dice ai-review 0 hallazgos sobre 5e55715; el sticky tiene F1 Medium y F2 Low resueltos; errata historica | abierta |
 | S1-r3 revisor N3 | guarda del checkpoint en compose_with_findings sin prueba que la discrimine; la propiedad el checkpoint nunca se recorta se sostiene igual | abierta |
+| F1-r2 revisor N3 | vigencia del reporte no se comprueba (T07/T08) | abierta |
+| F1-r2 revisor N4 | LISTO-F1-r1 dijo 0 hallazgos de ai-review y no era asi; transparencia | abierta |
+| F1-r2 revisor N6 | blobs de anclas ilegibles sin omision (solo anchors) | abierta |
+| F1-r2 revisor N8 | runtime_terminado solo mira error_max_turns | abierta |
+| F1-r2 revisor N9 | boilerplate de las pruebas | abierta |
+| F1-r2 revisor N10 | FINDING_IDENTITY invalido tambien falla en publish | abierta |
+| F1-r2 revisor N5 | F1.md:79-81 seccion Verificacion del bloque con totales viejos (20 vs 24, 396 vs 400); correccion anunciada en F1.md:51 no aplicada a esa seccion, ver fila F1-r2 CodeRabbit F1.md:79-81 | abierta |
+| F1-r2 LISTO | rebase con prev_sha no ancestro usa diff de arboles, ventana mas ancha mitigada por PARTIAL | abierta |
+| F1-r2 LISTO | incomplete-prev con arreglo caido antes de prev_sha queda abierto, igual que en main | abierta |
+| F1-r2 LISTO | entradas basura de blobs cuando la ruta no existe en HEAD | abierta |
+| F1-r2 LISTO | rendimiento de blobs con anchors (~un subprocess por ancla, solo con anchors) | abierta |
+| F1-r2 review F5 | F1.md:87 delta vacio no calculable degrada cobertura, docs | abierta |
+| F1-r2 CodeRabbit | F1.md:79-81 totales viejos (20 vs 24, 396 vs 400), docs sin repro | abierta |
+| F1-r2 CodeRabbit | review.py:2178 rebase full-mode usa base vs prev_sha, sin repro, residual ya declarado rebase prev_sha no ancestro | abierta |
