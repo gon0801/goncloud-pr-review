@@ -149,11 +149,11 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | F1-r2 revisor N8 | runtime_terminado solo mira error_max_turns | abierta |
 | F1-r2 revisor N9 | boilerplate de las pruebas | abierta |
 | F1-r2 revisor N10 | FINDING_IDENTITY invalido tambien falla en publish | abierta |
-| F1-r2 revisor N2 | F1.md:81 cifra historica total 396 en verificacion del bloque; ronda 3 y arbol dan 400 | abierta |
+| F1-r2 revisor N5 | F1.md:79-81 seccion Verificacion del bloque con totales viejos (20 vs 24, 396 vs 400); correccion anunciada en F1.md:51 no aplicada a esa seccion, ver fila F1-r2 CodeRabbit F1.md:79-81 | abierta |
 | F1-r2 LISTO | rebase con prev_sha no ancestro usa diff de arboles, ventana mas ancha mitigada por PARTIAL | abierta |
 | F1-r2 LISTO | incomplete-prev con arreglo caido antes de prev_sha queda abierto, igual que en main | abierta |
 | F1-r2 LISTO | entradas basura de blobs cuando la ruta no existe en HEAD | abierta |
 | F1-r2 LISTO | rendimiento de blobs con anchors (~un subprocess por ancla, solo con anchors) | abierta |
-| F1-r2 review F5 | F1.md:87 delta vacio calculable degrada cobertura, docs | abierta |
+| F1-r2 review F5 | F1.md:87 delta vacio no calculable degrada cobertura, docs | abierta |
 | F1-r2 CodeRabbit | F1.md:79-81 totales viejos (20 vs 24, 396 vs 400), docs sin repro | abierta |
 | F1-r2 CodeRabbit | review.py:2178 rebase full-mode usa base vs prev_sha, sin repro, residual ya declarado rebase prev_sha no ancestro | abierta |
