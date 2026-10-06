@@ -2,6 +2,7 @@
 """Glue for the AI PR review action. Subcommands: gate, prepare, run, publish."""
 
 import argparse
+import dataclasses
 import fnmatch
 import html
 import json
@@ -167,6 +168,29 @@ TESTS_MAX_RESULTS = 40
 TESTS_MAX_BYTES = 20000
 CONVENTIONS_MAX_BYTES = 8000
 CONVENTION_FILES = ("CLAUDE.md", "AGENTS.md")
+
+GREP_MAX_EXAMINED_BYTES = 8_000_000
+GREP_MAX_SECONDS = 15
+GREP_READ_CHUNK = 65536
+
+
+@dataclasses.dataclass(frozen=True)
+class SearchComplete:
+    paths: tuple
+
+
+@dataclasses.dataclass(frozen=True)
+class SearchTruncated:
+    paths: tuple
+    reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class SearchFailed:
+    reason: str
+
+
+SearchResult = (SearchComplete, SearchTruncated, SearchFailed)
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 STOPWORDS = frozenset(
@@ -642,6 +666,11 @@ def compose(result, manifest, *, sha, provider, findings=None):
         warnings.append(
             f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff"
         )
+    encoding_omitted = [e for e in manifest["excluded"] if e["reason"] == "encoding"]
+    if encoding_omitted:
+        warnings.append(
+            f"{len(encoding_omitted)} archivo(s) no se pudieron leer como UTF-8"
+        )
     if findings is not None and not findings.get("model_ok", True) and reviewed_any:
         warnings.append(
             "el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores"
@@ -831,6 +860,28 @@ def sh(*args, check=True, **kw):
     return subprocess.run(args, check=check, text=True, capture_output=True, **kw)
 
 
+def shb(*args, check=True, **kw):
+    return subprocess.run(args, check=check, capture_output=True, **kw)
+
+
+@dataclasses.dataclass(frozen=True)
+class GitPath:
+    raw: bytes
+
+    @property
+    def text(self):
+        return self.raw.decode("utf-8")
+
+    def diagnostic(self):
+        return self.raw.decode("utf-8", "backslashreplace")
+
+    def label(self):
+        try:
+            return self.raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return self.diagnostic()
+
+
 def env(name):
     value = os.environ.get(name, "")
     if not value:
@@ -900,8 +951,8 @@ def decide_mode(prev_sha, head):
 
 
 def changed_since(prev_sha, head):
-    out = sh("git", "diff", "--name-only", "-z", prev_sha, head).stdout
-    return [path for path in out.split("\0") if path]
+    out = shb("git", "diff", "--name-only", "-z", prev_sha, head).stdout
+    return [GitPath(rec) for rec in out.split(b"\0") if rec]
 
 
 def files_matching_base(paths, base, head):
@@ -1001,19 +1052,99 @@ def changed_symbols(chunk, limit=CALLERS_MAX_SYMBOLS_PER_FILE):
     return sorted(counts, key=lambda s: (-counts[s], s.lower()))[:limit]
 
 
-def grep_files(patterns, limit):
-    """Files at HEAD mentioning any of the patterns (fixed strings, OR)."""
+def trim_utf8(text, ceiling, notice):
+    """Cut text so the final UTF-8 bytes (notice included) fit the ceiling.
+
+    Drops bytes from the end until the remainder decodes as valid UTF-8, so a
+    multibyte character is never replaced or split mid-sequence.
+    """
+    if len(text.encode("utf-8")) <= ceiling:
+        return text
+    room = ceiling - len(notice.encode("utf-8"))
+    data = text.encode("utf-8")[: max(0, room)].rstrip()
+    while data:
+        try:
+            return data.decode("utf-8") + notice
+        except UnicodeDecodeError:
+            data = data[:-1]
+    return notice
+
+
+def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None):
+    """Files at HEAD mentioning any of the patterns (fixed strings, OR).
+
+    Streams `git grep -z -l` and applies the candidate filter BEFORE the limit,
+    so a capped search can never swallow candidates that a later filter would
+    have kept. The result states what happened: Complete (the stream ended or
+    the designed limit was reached), Truncated (a ceiling was hit, maybe with
+    zero paths), Failed (git errored). Only an empty Complete means "the
+    search found nothing".
+    """
     if not patterns:
-        return []
-    out = sh(
-        "git",
-        "grep",
-        "-l",
-        "--fixed-strings",
-        *[a for p in patterns for a in ("-e", p)],
-        check=False,
-    ).stdout
-    return out.splitlines()[: limit + 1]
+        return SearchComplete(())
+    proc = subprocess.Popen(
+        [
+            "git",
+            "grep",
+            "-z",
+            "-l",
+            "--fixed-strings",
+            *[arg for pattern in patterns for arg in ("-e", pattern)],
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    ceiling = max_bytes if max_bytes is not None else GREP_MAX_EXAMINED_BYTES
+    deadline = time.monotonic() + (timeout if timeout is not None else GREP_MAX_SECONDS)
+    accepted, examined, pending = [], 0, b""
+    reason, limit_hit = None, False
+
+    def stop_proc():
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
+        proc.stderr.close()
+
+    while reason is None and not limit_hit:
+        if time.monotonic() >= deadline:
+            reason = f"techo de tiempo ({timeout if timeout is not None else GREP_MAX_SECONDS:g} s)"
+            break
+        chunk = proc.stdout.read(GREP_READ_CHUNK)
+        if not chunk:
+            break
+        examined += len(chunk)
+        if examined > ceiling:
+            reason = f"techo de salida ({ceiling} bytes examinados)"
+            break
+        parts = (pending + chunk).split(b"\0")
+        pending = parts.pop()
+        for raw in parts:
+            if not raw:
+                continue
+            try:
+                path = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if predicate is not None and not predicate(path):
+                continue
+            accepted.append(path)
+            if len(accepted) >= limit:
+                limit_hit = True
+                break
+    if reason is not None or limit_hit:
+        stop_proc()
+        if reason is not None:
+            return SearchTruncated(tuple(accepted), reason)
+        return SearchComplete(tuple(accepted))
+    code = proc.wait()
+    if code not in (0, 1):
+        detail = proc.stderr.read().decode("utf-8", "backslashreplace").strip()
+        proc.stdout.close()
+        proc.stderr.close()
+        return SearchFailed(detail or f"git grep terminó con código {code}")
+    proc.stdout.close()
+    proc.stderr.close()
+    return SearchComplete(tuple(accepted))
 
 
 def build_callers(reviewed, chunks):
@@ -1034,8 +1165,16 @@ def build_callers(reviewed, chunks):
             if total >= CALLERS_MAX_SYMBOLS:
                 break
             total += 1
-            matches = grep_files([symbol], CALLERS_MAX_MATCHES)
             lines.append(f"### `{symbol}`")
+            result = grep_files([symbol], CALLERS_MAX_MATCHES + 1)
+            if isinstance(result, SearchFailed):
+                lines.append(f"- búsqueda falló: {result.reason}")
+                continue
+            matches = list(result.paths)
+            if isinstance(result, SearchTruncated):
+                lines += [f"- {m}" for m in matches]
+                lines.append(f"- búsqueda truncada: {result.reason}")
+                continue
             if not matches:
                 lines.append(
                     "- (git grep no encontró el texto en otro archivo; puede haber usos dinámicos)"
@@ -1050,9 +1189,7 @@ def build_callers(reviewed, chunks):
     if total == 0:
         return "(El diff no trae símbolos identificables; explora con Grep.)\n"
     text = "\n".join(lines)
-    if len(text) > CALLERS_MAX_BYTES:
-        text = text[:CALLERS_MAX_BYTES] + "\n…(recortado por tamaño)…\n"
-    return text
+    return trim_utf8(text, CALLERS_MAX_BYTES, "\n…(recortado por tamaño)…\n")
 
 
 TEST_DIRS = frozenset(
@@ -1092,25 +1229,28 @@ def build_tests(reviewed):
         "# Pruebas que mencionan archivos del diff (precalculado con git grep)",
         "",
     ]
-    seen = set()
+    seen, truncated = set(), None
     for path in reviewed[:TESTS_MAX_FILES]:
         name = path.rsplit("/", 1)[-1]
         stem = name.rsplit(".", 1)[0] if "." in name else name
         patterns = [p for p in (stem, name) if len(p) >= 3]
-        for match in grep_files(patterns, TESTS_MAX_RESULTS * 5):
-            if match not in seen and looks_like_test(match):
+        result = grep_files(patterns, TESTS_MAX_RESULTS, predicate=looks_like_test)
+        if isinstance(result, SearchFailed):
+            return f"(La búsqueda de pruebas falló: {result.reason})\n"
+        if isinstance(result, SearchTruncated):
+            truncated = result.reason
+        for match in result.paths:
+            if match not in seen:
                 seen.add(match)
                 lines.append(f"- {match} (menciona `{stem}`)")
-                if len(seen) >= TESTS_MAX_RESULTS:
-                    break
         if len(seen) >= TESTS_MAX_RESULTS:
             break
-    if not seen:
+    if not seen and truncated is None:
         return "(Ninguna prueba menciona los archivos del diff; busca la cobertura con Grep.)\n"
+    if truncated is not None:
+        lines.append(f"- búsqueda de pruebas truncada: {truncated}")
     text = "\n".join(lines) + "\n"
-    if len(text) > TESTS_MAX_BYTES:
-        text = text[:TESTS_MAX_BYTES] + "…(recortado por tamaño)…\n"
-    return text
+    return trim_utf8(text, TESTS_MAX_BYTES, "…(recortado por tamaño)…\n")
 
 
 def build_conventions(base):
@@ -1119,9 +1259,13 @@ def build_conventions(base):
         found = sh("git", "show", f"{base}:{name}", check=False)
         if found.returncode == 0 and found.stdout.strip():
             content = found.stdout
-            if len(content) > CONVENTIONS_MAX_BYTES:
-                content = content[:CONVENTIONS_MAX_BYTES] + "\n\n…(recortado)…\n"
-            parts.append(f"# {name} (de la rama base, recortado)\n\n{content}")
+            parts.append(
+                trim_utf8(
+                    f"# {name} (de la rama base, recortado)\n\n{content}",
+                    CONVENTIONS_MAX_BYTES,
+                    "\n\n…(recortado)…\n",
+                )
+            )
     if not parts:
         return "(Este repo no tiene CLAUDE.md ni AGENTS.md en la rama base.)\n"
     return "\n\n".join(parts)
@@ -1208,33 +1352,40 @@ def cmd_prepare(args):
         else []
     )
 
-    numstat = sh(
+    numstat = shb(
         "git", "diff", "--numstat", "-z", "--no-renames", merge_base, head
     ).stdout
-    files, binary = [], set()
-    for rec in filter(None, numstat.split("\0")):
-        added, deleted, path = rec.split("\t", 2)
+    files, binary, encoding_omissions = [], set(), []
+    for rec in filter(None, numstat.split(b"\0")):
+        added, deleted, raw = rec.split(b"\t", 2)
+        path = GitPath(raw)
+        try:
+            text = path.text
+        except UnicodeDecodeError:
+            encoding_omissions.append({"path": path.diagnostic(), "reason": "encoding"})
+            continue
         files.append(path)
-        if added == "-" and deleted == "-":
-            binary.add(path)
+        if added == b"-" and deleted == b"-":
+            binary.add(text)
     if mode == "incremental":
         wanted = set(changed)
         files = [path for path in files if path in wanted]
 
-    excluded, candidates = [], []
+    excluded = list(encoding_omissions)
+    candidates = []
     for path in files:
-        pattern = excluded_by(path, patterns)
+        pattern = excluded_by(path.text, patterns)
         if pattern:
-            excluded.append({"path": path, "reason": f"filtro {pattern}"})
-        elif path in binary:
-            excluded.append({"path": path, "reason": "binario"})
+            excluded.append({"path": path.text, "reason": f"filtro {pattern}"})
+        elif path.text in binary:
+            excluded.append({"path": path.text, "reason": "binario"})
         else:
             candidates.append(path)
 
     budget = int(os.environ.get("MAX_DIFF_BYTES", "1500000"))
-    reviewed, chunks, used = [], {}, 0
-    for path in sorted(candidates, key=lambda p: (priority(p), p)):
-        chunk = sh(
+    reviewed, chunks, used, over_budget_bytes = [], {}, 0, 0
+    for path in sorted(candidates, key=lambda p: (priority(p.text), p.text)):
+        proc = shb(
             "git",
             "diff",
             "--no-color",
@@ -1242,26 +1393,37 @@ def cmd_prepare(args):
             "-U10",
             merge_base,
             head,
-            "--",
-            path,
-        ).stdout
-        if used + len(chunk) > budget and reviewed:
-            excluded.append({"path": path, "reason": "budget"})
+            b"--",
+            path.raw,
+        )
+        try:
+            chunk = proc.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            excluded.append({"path": path.diagnostic(), "reason": "encoding"})
             continue
-        reviewed.append(path)
-        chunks[path] = chunk
-        used += len(chunk)
+        chunk_bytes = len(chunk.encode("utf-8"))
+        if used + chunk_bytes > budget and reviewed:
+            excluded.append({"path": path.text, "reason": "budget"})
+            continue
+        if not reviewed and chunk_bytes > budget:
+            over_budget_bytes = max(0, chunk_bytes - budget)
+        reviewed.append(path.text)
+        chunks[path.text] = chunk
+        used += chunk_bytes
 
-    (work / "diff.patch").write_text("".join(chunks[p] for p in reviewed))
+    (work / "diff.patch").write_bytes(
+        "".join(chunks[p] for p in reviewed).encode("utf-8")
+    )
     manifest = {
         "base": merge_base,
         "head": head,
         "reviewed": reviewed,
         "excluded": excluded,
         "diff_bytes": used,
+        "over_budget_bytes": over_budget_bytes,
         "mode": mode,
         "prev_sha": prev_sha,
-        "changed_files": changed,
+        "changed_files": [path.label() for path in changed],
         "reason": reason,
         "has_prev_findings": bool((prev.get("state") or {}).get("findings")),
     }
