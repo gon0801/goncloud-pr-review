@@ -3,7 +3,7 @@
 
 import argparse
 import dataclasses
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import fnmatch
 import hashlib
 import html
@@ -2485,6 +2485,171 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     }
 
 
+@dataclass
+class PublishReceipt:
+    generacion: int
+    recibo: dict
+    trabajo: tuple
+
+
+@dataclass
+class Unconfirmed:
+    """Escritura incierta: el siguiente evento relee antes de reintentar."""
+
+    motivo: str
+
+
+@dataclass
+class AuthenticatedResult:
+    observaciones: tuple
+    cobertura: str
+    run_id: int
+    attempt: int
+
+
+@dataclass
+class Rejected:
+    """Resultado rechazado: nunca ejecuta contenido ni satisface la solicitud."""
+
+    motivo: str
+
+
+def _cuerpo_con_checkpoint(decision):
+    encoded = review_domain.encode_snapshot(
+        decision.snapshot, review_domain.StorageBudget()
+    )
+    if isinstance(encoded, review_domain.CapacityExceeded):
+        return None
+    bloque = encoded.block if decision.snapshot.schema == 3 else encoded
+    return bloque
+
+
+def _login_de(comentario):
+    return comentario.get("login") or (comentario.get("user") or {}).get("login")
+
+
+def publish_checkpoint(decision, observado, adaptador, login=None):
+    """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
+    bloque y conserva el resto (la prosa puede citar otros). Relee antes de
+    escribir (duplicados del bot y checkpoint ya aplicado); una respuesta de
+    PATCH/POST perdida devuelve Unconfirmed para que el siguiente paso relea.
+    Un Keep no escribe: es un no-op confirmado.
+    """
+    if not isinstance(decision, review_domain.Commit):
+        return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
+    bloque = _cuerpo_con_checkpoint(decision)
+    if bloque is None:
+        return Unconfirmed("desborde de memoria: se conserva el checkpoint previo")
+    marcados = [
+        c
+        for c in adaptador.leer()
+        if MARKER in (c.get("body") or "") and (login is None or _login_de(c) == login)
+    ]
+    if len(marcados) > 1:
+        return Unconfirmed("múltiples comentarios con el marcador; escritura detenida")
+    carga_observada = review_domain.read_snapshot(
+        (observado or {}).get("body") or "", last=False
+    )
+    if (
+        observado is not None
+        and isinstance(carga_observada, review_domain.Valid)
+        and carga_observada.block == bloque
+    ):
+        return PublishReceipt(
+            generacion=decision.snapshot.generation,
+            recibo={"comentario_id": observado.get("id"), "ya_aplicado": True},
+            trabajo=decision.work_after_commit,
+        )
+    if observado is None:
+        cuerpo = f"{MARKER}\n{bloque}"
+        try:
+            adaptador.crear(cuerpo)
+        except Exception as exc:
+            return Unconfirmed(f"respuesta de POST incierta: {exc}")
+        creado = next(
+            (c for c in adaptador.leer() if MARKER in (c.get("body") or "")),
+            None,
+        )
+        return PublishReceipt(
+            generacion=decision.snapshot.generation,
+            recibo={"comentario_id": creado.get("id") if creado else None},
+            trabajo=decision.work_after_commit,
+        )
+    original = observado.get("body") or ""
+    lineas_original = original.split("\n")
+    resto = (
+        "\n".join(lineas_original[1:])
+        if lineas_original and lineas_original[0] == MARKER
+        else original
+    )
+    resto = strip_findings_block(resto, last=False).strip()
+    cuerpo = f"{MARKER}\n{bloque}\n{resto}" if resto else f"{MARKER}\n{bloque}"
+    try:
+        adaptador.parchar(observado["id"], cuerpo)
+    except Exception as exc:
+        return Unconfirmed(f"respuesta de PATCH incierta: {exc}")
+    return PublishReceipt(
+        generacion=decision.snapshot.generation,
+        recibo={"comentario_id": observado["id"]},
+        trabajo=decision.work_after_commit,
+    )
+
+
+def request_de_solicitud(
+    solicitud, repository="", workflow="ai-review-worker", ref=None, workflow_sha=None
+):
+    """Contexto de confianza del resultado: el target sale de la solicitud
+    persistida, nunca del artifact que el propio worker escribió."""
+    return {
+        "id": solicitud.id,
+        "target": dict(solicitud.target),
+        "repository": repository,
+        "workflow": workflow,
+        "ref": ref,
+        "workflow_sha": workflow_sha,
+    }
+
+
+def dispatch_confirmed(recibo: PublishReceipt, *, despachar):
+    for solicitud in recibo.trabajo:
+        despachar(solicitud)
+
+
+def authenticate_result(run_metadata, artifact, request):
+    """El SHA del workflow (código confiable) y el HEAD del PR se validan por
+    separado; el contenido del artifact nunca se ejecuta.
+    """
+
+    def rechazo(motivo):
+        return Rejected(motivo=motivo)
+
+    if run_metadata.get("repository") != request.get("repository"):
+        return rechazo("repositorio del run incorrecto")
+    if run_metadata.get("workflow") != request.get("workflow"):
+        return rechazo("workflow del run incorrecto")
+    if run_metadata.get("ref") != request.get("ref"):
+        return rechazo("ref del run incorrecta")
+    if run_metadata.get("sha") != request.get("workflow_sha"):
+        return rechazo("SHA del workflow no es el código confiable")
+    if run_metadata.get("run_id") != artifact.get("run_id"):
+        return rechazo("run_id no coincide con el artifact")
+    if run_metadata.get("attempt") != artifact.get("attempt"):
+        return rechazo("attempt no coincide con el artifact")
+    if artifact.get("request_id") != request.get("id"):
+        return rechazo("request_id del artifact incorrecto")
+    target = request.get("target") or {}
+    if artifact.get("pr_head_sha") != target.get("head_sha"):
+        return rechazo("HEAD del PR del artifact no es el target vigente")
+    if artifact.get("policy_digest") != target.get("policy_digest"):
+        return rechazo("digest de política del artifact incorrecto")
+    return AuthenticatedResult(
+        observaciones=tuple(artifact.get("observaciones") or ()),
+        cobertura=artifact.get("cobertura") or review_domain.UNKNOWN,
+        run_id=artifact.get("run_id"),
+        attempt=artifact.get("attempt"),
+    )
+
+
 def summary_of(body):
     return "\n".join(
         line
@@ -2609,7 +2774,8 @@ def cmd_publish(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=["gate", "prepare", "install", "run", "publish"]
+        "command",
+        choices=["gate", "prepare", "install", "run", "publish", "reconcile"],
     )
     parser.add_argument(
         "--work",
@@ -2623,7 +2789,221 @@ def main():
         "install": cmd_install,
         "run": cmd_run,
         "publish": cmd_publish,
+        "reconcile": cmd_reconcile,
     }[args.command](args)
+
+
+class ComentariosGh:
+    def __init__(self, repo, pr):
+        self.repo, self.pr = repo, pr
+
+    def leer(self):
+        return fetch_all_comments(self.repo, self.pr)
+
+    def parchar(self, cid, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write(json.dumps({"body": body}))
+            ruta = fh.name
+        try:
+            sh(
+                "gh",
+                "api",
+                "-X",
+                "PATCH",
+                f"repos/{self.repo}/issues/comments/{cid}",
+                "--input",
+                ruta,
+            )
+        finally:
+            Path(ruta).unlink(missing_ok=True)
+
+    def crear(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write(json.dumps({"body": body}))
+            ruta = fh.name
+        try:
+            sh(
+                "gh",
+                "api",
+                "-X",
+                "POST",
+                f"repos/{self.repo}/issues/{self.pr}/comments",
+                "--input",
+                ruta,
+            )
+        finally:
+            Path(ruta).unlink(missing_ok=True)
+
+
+def despachar_worker(solicitud, *, repo, ref, run_id):
+    sh(
+        "gh",
+        "workflow",
+        "run",
+        "ai-review-worker.yml",
+        "--repo",
+        repo,
+        "--ref",
+        ref,
+        "-f",
+        f"request_id={solicitud.id}",
+        "-f",
+        f"coordinator_run_id={run_id}",
+        "-f",
+        f"comment_login={os.environ.get('BOT_LOGIN') or 'github-actions[bot]'}",
+    )
+
+
+def _evento_de_entorno(repo, pr, head, base, digest):
+    """El evento push admisible desde el entorno."""
+    target = review_domain.ReviewTarget(
+        repository=repo,
+        pr_number=int(pr),
+        head_sha=head,
+        base_sha=base,
+        policy_digest=digest,
+    )
+    nombre = os.environ.get("GITHUB_EVENT_NAME", "")
+    if nombre in ("pull_request", "pull_request_target"):
+        return review_domain.RequestReview(
+            origin=review_domain.Origin(kind="push", run_id=_run_id()),
+            target=target,
+        )
+    return None
+
+
+def _run_id():
+    valor = os.environ.get("GITHUB_RUN_ID") or "0"
+    return int(valor) if valor.isdigit() else 0
+
+
+def _estado_actual(sticky):
+    """Estado migrado a v3 para el coordinador; None si la memoria no se
+    puede tocar (inválida o futura: se conserva, como en cmd_publish)."""
+    if sticky:
+        load = review_domain.read_snapshot(sticky["body"])
+        if isinstance(load, review_domain.Valid):
+            if load.snapshot.schema == 3:
+                return load.snapshot
+            return review_domain.snapshot_a_v3(load.snapshot)
+        return None
+    return review_domain.Snapshot(
+        schema=3,
+        generation=1,
+        revision=None,
+        next_id=1,
+        completion=review_domain.UNKNOWN,
+        findings=[],
+        command_cursor=0,
+    )
+
+
+def cmd_reconcile(args):
+    repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
+    base = env("BASE_SHA")
+    worker_ref = env("WORKER_REF")
+    login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
+    policy = politica_de_revision()
+    digest = digest_de_politica(policy)
+    adaptador = ComentariosGh(repo, pr)
+    comments = adaptador.leer()
+    sticky = sticky_from_comments(comments, login)
+    current = _estado_actual(sticky)
+    if current is None:
+        print(
+            "ai-review: memoria inválida o de versión futura; se conserva sin tocar",
+            file=sys.stderr,
+        )
+        return
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    facts = review_domain.RepositoryFacts(
+        revision=review_domain.Revision(
+            base_sha=base, head_sha=head, policy_digest=digest
+        )
+    )
+
+    if event_name == "workflow_run":
+        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+        wr = payload.get("workflow_run") or {}
+        artifact = json.loads((Path(args.work) / "result.json").read_text())
+        solicitud = next(
+            (r for r in current.pending_requests if r.id == artifact.get("request_id")),
+            None,
+        )
+        if solicitud is None:
+            sys.exit(
+                f"ai-review: resultado de solicitud desconocida {artifact.get('request_id')!r}"
+            )
+        request = request_de_solicitud(
+            solicitud,
+            repository=repo,
+            workflow=wr.get("name"),
+            ref=wr.get("head_branch"),
+            workflow_sha=wr.get("head_sha"),
+        )
+        autenticado = authenticate_result(
+            {
+                "repository": repo,
+                "workflow": wr.get("name"),
+                "ref": wr.get("head_branch"),
+                "sha": wr.get("head_sha"),
+                "run_id": wr.get("id"),
+                "attempt": wr.get("run_attempt"),
+            },
+            artifact,
+            request,
+        )
+        if isinstance(autenticado, Rejected):
+            print(
+                f"ai-review: resultado rechazado ({autenticado.motivo})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        observaciones = [
+            review_domain.observation_de_entrada(e) for e in autenticado.observaciones
+        ]
+        decision = review_domain.reconcile(
+            current,
+            review_domain.ReportReady(
+                origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
+                request_id=artifact.get("request_id"),
+                run_id=autenticado.run_id,
+                attempt=autenticado.attempt,
+                observaciones=tuple(observaciones),
+                cobertura=autenticado.cobertura,
+            ),
+            facts,
+            policy,
+        )
+    elif event_name in ("pull_request", "pull_request_target"):
+        evento = _evento_de_entorno(repo, pr, head, base, digest)
+        decision = review_domain.reconcile(current, evento, facts, policy)
+    else:
+        sys.exit(
+            "ai-review: evento sin admisión en reconcile "
+            "(pull_request, pull_request_target o workflow_run)"
+        )
+
+    observado = sticky if sticky else None
+    resultado = publish_checkpoint(decision, observado, adaptador, login=login)
+    if isinstance(resultado, Unconfirmed):
+        print(
+            f"ai-review: escritura incierta ({resultado.motivo}); se relee en el próximo evento",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if resultado.trabajo:
+        dispatch_confirmed(
+            resultado,
+            despachar=lambda s: despachar_worker(
+                s, repo=repo, ref=worker_ref, run_id=_run_id()
+            ),
+        )
+        print(
+            f"ai-review: {len(resultado.trabajo)} solicitud(es) confirmada(s) y despachada(s)"
+        )
+    else:
+        print("ai-review: checkpoint publicado sin trabajo nuevo")
 
 
 if __name__ == "__main__":
