@@ -4110,7 +4110,6 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     99,
                     "el cursor es marca de agua de comentarios, no suma descartes",
                 )
-                self.assertEqual(s1.receipts, s1.receipts)
                 if schema == 3:
                     self.assertTrue(
                         any(r.command_id == 99 for r in s1.receipts),
@@ -4130,6 +4129,106 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     self.assertEqual(s2.request_count, 1)
                     self.assertEqual(s2.pending_requests[0].legacy_id, "req-1")
                 self.assertEqual(s2.receipts, s1.receipts)
+
+    def test_escritor_compatible_resuelve_con_cambio_pertinente(self):
+        """B3: el canal state del bloque legado resuelve en v2/v3."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug a",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="bug b",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        modelo = (
+            "COVERAGE: partial\n\n## Detalle\n\n- bug a resuelto\n- bug b sigue\n\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "src/a.py",
+                            "line": 1,
+                            "severity": "High",
+                            "title": "bug a",
+                            "state": "resolved",
+                        },
+                        {
+                            "id": "F2",
+                            "file": "src/b.py",
+                            "line": 2,
+                            "severity": "Medium",
+                            "title": "bug b",
+                            "state": "open",
+                        },
+                    ],
+                    "next": 3,
+                }
+            )
+            + domain.FINDINGS_SUFFIX
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "full",
+            "reviewed": ["src/a.py"],
+        }
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                anterior = estado(schema)
+                encoded = domain.encode_snapshot(anterior, domain.StorageBudget())
+                sticky = {"body": encoded.block if schema == 3 else encoded}
+                with mock.patch.object(
+                    review, "collect_dismissals", return_value=(set(), False, 0)
+                ):
+                    r = review.build_findings(
+                        {"result": modelo},
+                        manifest,
+                        sticky,
+                        "o/r",
+                        1,
+                        "bot",
+                        [],
+                    )
+                self.assertIsNone(r.get("keep"))
+                snapshot = domain.read_snapshot(r["block"]).snapshot
+                f1 = next(f for f in snapshot.findings if f.id == "F1")
+                f2 = next(f for f in snapshot.findings if f.id == "F2")
+                self.assertIsInstance(
+                    f1.status, domain.StatusResolved, "resuelto con cambio pertinente"
+                )
+                self.assertEqual(f1.status.at_sha, "e" * 40)
+                self.assertIsInstance(
+                    f2.status, domain.StatusOpen, "sin cambio pertinente sigue abierto"
+                )
 
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))

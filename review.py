@@ -2094,7 +2094,8 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
     """Escritor compatible (T04): memoria v2/v3 válida, identidad current.
 
     Conserva el schema del estado, aplica los descartes de comentarios,
-    avanza la revisión a la del manifiesto e integra las observaciones del
+    avanza la revisión a la del manifiesto cuando head y base son hex40, e
+    integra las observaciones del
     modelo con el matching compatible. Desborde: Keep, como en M1.
     """
     snapshot = load.snapshot
@@ -2122,11 +2123,16 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
         "complete": review_domain.COMPLETE_CLAIM,
         "partial": review_domain.PARTIAL,
     }.get(cobertura, review_domain.UNKNOWN)
-    head = manifest.get("head") or ""
+
+    def _hexa(valor):
+        valor = valor or ""
+        return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
+
+    head = manifest.get("head")
     revision = None
-    if len(head) == 40 and all(c in "0123456789abcdef" for c in head.lower()):
+    if _hexa(head) and _hexa(manifest.get("base")):
         revision = review_domain.Revision(
-            base_sha=manifest.get("base") or None,
+            base_sha=manifest.get("base"),
             head_sha=head,
             policy_digest="",
         )
@@ -2167,9 +2173,10 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
             "model_ok": model is not None,
             "keep": motivo,
         }
+    previos = {f.id for f in snapshot.findings}
     return {
         "merged": review_domain.hallazgos_legacy(decision.snapshot),
-        "new_ids": [],
+        "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
         "block": encoded.block if snapshot.schema == 3 else encoded,
         "model_ok": model is not None,
     }
@@ -2178,9 +2185,10 @@ def actualizar_memoria_valida(load, result, manifest, repo, pr, login, comments)
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
     """Merge previous state with the model's block. Broken block: keep last parseable (B6).
 
-    A v2/v3 or future-version sticky is kept verbatim (the Keep of the
-    design): the memory is never downgraded to legacy, so a confirmed
-    dismissal can't reappear and nothing is lost.
+    Memoria v2/v3 válida con identidad `current`: se actualiza conservando
+    su schema (T04, escritor compatible); versiones futuras, memoria
+    inválida y el camino `anchors` se conservan (Keep), y el legado sigue
+    su propio camino de siempre.
     """
     load = (
         review_domain.read_snapshot(sticky["body"])

@@ -2336,13 +2336,6 @@ class Schema3Compatibility(unittest.TestCase):
     def test_descartes_solo_tocan_abiertos_y_no_inflan_cursor(self):
         """B1 ronda 2: 'descartar todo' respeta resueltos y el cursor."""
         snapshot = snapshot_v2()
-        snapshot = replace(
-            snapshot,
-            command_cursor=98,
-            receipts=(domain.Receipt(command_id=98, effect="recibo previo"),)
-            if snapshot.schema == 3
-            else snapshot.receipts,
-        )
         snapshot = domain.snapshot_a_v3(snapshot)
         snapshot = replace(
             snapshot,
@@ -2367,7 +2360,7 @@ class Schema3Compatibility(unittest.TestCase):
         )
         self.assertEqual(
             por_id["F3"].status.command_id,
-            descartados.findings[2].status.command_id,
+            98,
             "el descartado previo conserva su command_id",
         )
         self.assertEqual(

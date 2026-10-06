@@ -1417,7 +1417,7 @@ def match_finding(previous, observation, facts):
 
 
 def observation_de_entrada(entry):
-    """Entrada del bloque del modelo -> Observation (camino anchors de F0).
+    """Entrada del bloque del modelo -> Observation (transporte puro del canal claim/state).
 
     Transporte puro: la cita/ancla se valida después (validar_reporte) y la
     severidad se normaliza al aceptar. Sin ancla declarada, la ubicación es
@@ -1462,7 +1462,8 @@ def observation_de_entrada(entry):
         for ev in entry.get("evidence", []) or []
         if isinstance(ev, dict) and ev.get("kind") == "unverified"
     ]
-    claim = RESOLVED if entry.get("claim") == "resolved" else OPEN
+    claim = entry.get("claim") or entry.get("state")
+    claim = RESOLVED if claim == "resolved" else OPEN
     return Observation(
         title=str(entry.get("title") or ""),
         severity=str(entry.get("severity") or ""),
