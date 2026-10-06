@@ -101,7 +101,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T02 | R0 | Búsqueda de contexto con resultado explícito | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:done (PR #44, squash 9c93844; evidencia docs/evidence/reviewer/S0.md) |
-| T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:TODO |
+| T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:done (PR #46, squash 1bd1542; evidencia docs/evidence/reviewer/S1.md) |
 | T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:TODO |
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:TODO |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:TODO |
@@ -133,7 +133,13 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | S0-r5 revisor | N3 review.py:1884 proxy.wait(timeout=10) en finally puede lanzar TimeoutExpired tras timeout del modelo y tapar ruta infra (preexistente en main) | abierta |
 | S0-r5 revisor | N4 S0.md:122 cifra verify-partition 370 desactualizada (sobre 73d7067 da 371: 186+185) | abierta |
 | S0-r5 LISTO | policy_digest vacio en revision avanzada | abierta |
-| S0-r5 LISTO | prueba de desborde del escritor compatible pendiente | abierta |
+| S0-r5 LISTO | prueba de desborde del escritor compatible pendiente | resuelta en S1 (ConservacionAlDesbordar tests/test_review.py:5255; S1.md:42) |
 | S0-r5 LISTO | hallazgos legacy con id None pendientes | abierta |
 | S0-r5 LISTO | aviso corto review.py:2050 | abierta |
 | S0-r5 LISTO | N1-N7 de r1, N1-N2 de r3 y F1-F5 del sticky 7a1e2b1 arrastrados (siguen abiertos) | abierta |
+| S1-r3 LISTO | fallback B2 no aplica en rama con budget del camino generico de compose (budget + reviewed=[] + prosa vacia publica texto por defecto); resolver antes de activar perfil en T16 | abierta |
+| S1-r3 LISTO | con presupuestos custom cuyo margen restante es menor que el aviso (~53 unidades) la salida excede hasta ~52 unidades; CodeRabbit 4197481797 misma familia; resolver antes de activar perfil en T16 | abierta |
+| S1-r3 LISTO | en compose_with_findings el guard de presupuesto valida solo el bloque, no el fijo completo; con fijos inflados el cuerpo excede el budget; resolver antes de activar perfil en T16 | abierta |
+| S1-r3 LISTO | slice [:GITHUB_COMMENT_MAX] cuenta caracteres, no bytes (pre-existente en la base, heredado por N1) | abierta |
+| S1-r3 revisor N2 | docs/evidence/reviewer/S1.md:46 dice ai-review 0 hallazgos sobre 5e55715; el sticky tiene F1 Medium y F2 Low resueltos; errata historica | abierta |
+| S1-r3 revisor N3 | guarda del checkpoint en compose_with_findings sin prueba que la discrimine; la propiedad el checkpoint nunca se recorta se sostiene igual | abierta |
