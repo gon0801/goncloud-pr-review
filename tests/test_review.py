@@ -5250,3 +5250,99 @@ class GitPaths(unittest.TestCase):
             )
             self.assertIn(f"completion={SHA}:partial", body)
             self.assertIn("no se pudieron leer como UTF-8", body)
+
+
+class ConservacionAlDesbordar(unittest.TestCase):
+    """T05: el desborde conserva el estado confirmado íntegro."""
+
+    def modelo_de_60(self):
+        hallazgos = [
+            {
+                "id": "F-nuevo",
+                "file": f"src/nuevo_{i}.py",
+                "line": i,
+                "severity": "Medium",
+                "title": f"bug nuevo z ñ {i} en el flujo de cobro de la pasarela de pagos con reintentos y reembolsos",
+                "state": "open",
+            }
+            for i in range(1, 61)
+        ]
+        return {
+            "result": review.FINDINGS_PREFIX
+            + json.dumps({"findings": hallazgos, "next": 61}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        }
+
+    def test_desborde_conserva_el_estado_confirmado(self):
+        """T05: el desborde conserva SHA, cursor, descartes y pendientes."""
+        import review_domain as domain
+
+        hallazgos = [
+            domain.Finding(
+                id="F1",
+                title="resuelto en b",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+            ),
+            domain.Finding(
+                id="F2",
+                title="descartado por comando",
+                severity="Low",
+                status=domain.StatusDismissed(command_id=31),
+                primary_anchor=domain.AnchorLegacy(path="src/c.py", line=3),
+            ),
+        ]
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=4,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="d" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.PARTIAL,
+            findings=hallazgos,
+            command_cursor=31,
+            pending_requests=[
+                domain.PendingRequest(id="req-7", kind="explain", finding_id="F1")
+            ],
+        )
+        sticky_body = (
+            review.MARKER
+            + "\n"
+            + f"{review.SHA_PREFIX}{'d' * 40} -->\n"
+            + f"{review.COMPLETION_PREFIX}{'d' * 40}:partial -->\n"
+            + domain.encode_snapshot(snapshot)
+        )
+        sticky = {"id": 12, "user": "github-actions[bot]", "body": sticky_body}
+
+        with mock.patch.object(
+            review, "collect_dismissals", return_value=(set(), False, 31)
+        ):
+            out = review.build_findings(
+                self.modelo_de_60(),
+                dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+                sticky,
+                "o/r",
+                1,
+                "bot",
+                [],
+            )
+        self.assertEqual(
+            out.get("keep") and "desborde" in out["keep"],
+            True,
+            "el desborde conserva la memoria (Keep)",
+        )
+        self.assertEqual(
+            out["block"],
+            domain.encode_snapshot(snapshot),
+            "el bloque previo queda byte-idéntico (conservación)",
+        )
+        de_vuelta = domain.read_snapshot(out["block"])
+        self.assertIsInstance(de_vuelta, domain.Valid)
+        confirmado = de_vuelta.snapshot
+        self.assertEqual(confirmado.revision.head_sha, "d" * 40)
+        self.assertEqual(confirmado.command_cursor, 31)
+        f2 = next(f for f in confirmado.findings if f.id == "F2")
+        self.assertEqual(f2.status, domain.StatusDismissed(command_id=31))
+        self.assertEqual([req.id for req in confirmado.pending_requests], ["req-7"])
