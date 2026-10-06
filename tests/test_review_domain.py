@@ -3055,6 +3055,7 @@ class ReportBoundary(unittest.TestCase):
                 base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
             ),
             changed_paths=("src/uso.py",),
+            delta_calculado=True,
         )
         obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
         report = domain.validar_reporte([obs], "partial", hechos)
@@ -3084,12 +3085,36 @@ class ReportBoundary(unittest.TestCase):
         f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
         self.assertIsInstance(f1.status, domain.StatusOpen)
 
+    def test_delta_calculado_vacio_no_cae_al_alcance_revisado(self):
+        hechos = domain.RepositoryFacts(
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
+            ),
+            changed_paths=(),
+            delta_calculado=True,
+        )
+        obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
+        report = domain.validar_reporte([obs], "partial", hechos)
+        plan = domain.ReviewPlan(
+            revision=hechos.revision, changed_paths=("src/fuga.py",)
+        )
+        transicion = domain.accept_report(
+            self._snapshot_v2([self._fuga()]), plan, report
+        )
+        f1 = {f.id: f for f in transicion.snapshot.findings}["F1"]
+        self.assertIsInstance(
+            f1.status,
+            domain.StatusOpen,
+            "delta real vacío calculado: el alcance revisado no suple pertinencia",
+        )
+
     def test_los_hechos_reales_mandan_sobre_lo_revisado(self):
         hechos = domain.RepositoryFacts(
             revision=domain.Revision(
                 base_sha="b" * 40, head_sha="c" * 40, policy_digest=""
             ),
             changed_paths=("src/otro.py",),
+            delta_calculado=True,
         )
         obs = _observacion("Fuga de recurso", ruta="src/fuga.py", claim=domain.RESOLVED)
         report = domain.validar_reporte([obs], "partial", hechos)

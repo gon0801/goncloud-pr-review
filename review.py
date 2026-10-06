@@ -3,6 +3,7 @@
 
 import argparse
 import dataclasses
+from dataclasses import replace
 import fnmatch
 import hashlib
 import html
@@ -2175,6 +2176,7 @@ def hechos_de_repo(
     desde = base
     if manifest.get("mode") == "incremental" and _sha_hexa(manifest.get("prev_sha")):
         desde = manifest["prev_sha"]
+    calculado = False
     if _sha_hexa(desde) and _sha_hexa(head):
         delta, omis_delta, calculado = delta_real(desde, head)
         omissions = omissions + omis_delta
@@ -2189,6 +2191,7 @@ def hechos_de_repo(
             policy_digest=policy_digest,
         ),
         changed_paths=delta,
+        delta_calculado=calculado,
         reverted_paths=tuple(reverted_files or ()),
         renames=tuple(renames or ()),
         blobs=dict(blobs or {}),
@@ -2196,14 +2199,17 @@ def hechos_de_repo(
     )
 
 
-def blobs_para_aceptar(snapshot, manifest, policy):
+def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
     """Blobs de HEAD y de las anclas localizadas persistidas, para aceptar
-    con identidad `anchors`."""
+    con identidad `anchors`. Las rutas del delta real van también: una cita
+    sobre un archivo cambiado ausente del manifiesto no debe degradar a
+    coincidencia por título."""
     if policy.finding_identity != "anchors":
         return {}
     rutas = sorted(
         set(manifest.get("reviewed", []) or [])
         | set(review_domain.rutas_de_cambio(manifest))
+        | set(rutas_delta)
     )
     blobs = blobs_de_head(rutas)
     for ancla in anclas_locadas(snapshot):
@@ -2248,7 +2254,10 @@ def actualizar_memoria_valida(
     """
     policy = policy or politica_de_revision(manifest)
     snapshot = load.snapshot
-    model = parse_model_findings((result or {}).get("result") or "")
+    model = parse_model_findings(
+        (result or {}).get("result") or "",
+        conservar_anclas=policy.finding_identity == "anchors",
+    )
     try:
         dismiss_ids, dismiss_all, seen = collect_dismissals(
             repo, pr, login, comments, snapshot.command_cursor
@@ -2291,7 +2300,14 @@ def actualizar_memoria_valida(
             head_sha=head,
             policy_digest="",
         )
-    blobs = blobs_para_aceptar(snapshot, manifest, policy)
+    facts = hechos_de_repo(
+        manifest,
+        set(),
+        policy_digest=digest_de_politica(policy),
+    )
+    blobs = blobs_para_aceptar(
+        snapshot, manifest, policy, rutas_delta=facts.changed_paths
+    )
     revertidas = set()
     if revision is not None:
         cambiadas = set(review_domain.rutas_de_cambio(manifest)) | set(
@@ -2308,12 +2324,11 @@ def actualizar_memoria_valida(
                 revertidas = files_matching_base(candidatos, manifest["base"], head)
             except Exception:
                 revertidas = set()
-    facts = hechos_de_repo(
-        manifest,
-        revertidas,
+    facts = replace(
+        facts,
+        reverted_paths=tuple(revertidas),
         blobs=blobs,
-        policy_digest=digest_de_politica(policy),
-        omissions=omisiones_alcance,
+        omissions=facts.omissions + omisiones_alcance,
     )
     plan = review_domain.ReviewPlan(
         revision=revision,

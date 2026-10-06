@@ -273,8 +273,13 @@ def finding_number(fid):
     return int(match.group(1)) if match else None
 
 
-def sanitize_finding(entry, *, allow_dismissed):
-    """Validate one raw finding dict. Returns a clean dict, or None to drop it."""
+def sanitize_finding(entry, *, allow_dismissed, conservar_anclas=False):
+    """Validate one raw finding dict. Returns a clean dict, or None to drop it.
+
+    Con `conservar_anclas` transporta anchor/related_anchors/evidence/cause_hint
+    sin validarlos (frontera de observation_de_entrada); el camino legado no
+    los lleva para no cambiar su bloque.
+    """
     if not isinstance(entry, dict):
         return None
     path = one_line(entry.get("file"), 200)
@@ -293,7 +298,7 @@ def sanitize_finding(entry, *, allow_dismissed):
     fid = str(entry.get("id") or "").strip().upper()
     raw_files = entry.get("files") if isinstance(entry.get("files"), list) else []
     files = unique_paths([path] + [one_line(item, 200) for item in raw_files])
-    return {
+    limpio = {
         "id": fid if finding_number(fid) else None,
         "file": path,
         "files": files,
@@ -302,6 +307,12 @@ def sanitize_finding(entry, *, allow_dismissed):
         "title": title,
         "state": state,
     }
+    if conservar_anclas:
+        limpio["anchor"] = entry.get("anchor")
+        limpio["related_anchors"] = entry.get("related_anchors")
+        limpio["evidence"] = entry.get("evidence")
+        limpio["cause_hint"] = entry.get("cause_hint")
+    return limpio
 
 
 def unique_paths(paths):
@@ -346,11 +357,14 @@ def find_findings_block(text, *, last=False):
     return None
 
 
-def legacy_raw_of(data):
+def legacy_raw_of(data, conservar_anclas=False):
     """Sanitized legacy dict ({findings, next, seen}) from a parsed block."""
     findings = [
         f
-        for f in (sanitize_finding(e, allow_dismissed=True) for e in data["findings"])
+        for f in (
+            sanitize_finding(e, allow_dismissed=True, conservar_anclas=conservar_anclas)
+            for e in data["findings"]
+        )
         if f
     ]
     claimed = data.get("next")
@@ -407,9 +421,9 @@ def same_issue(a, b):
     return a["file"] == b["file"] and a["title"].casefold() == b["title"].casefold()
 
 
-def parse_model_findings(text):
+def parse_model_findings(text, *, conservar_anclas=False):
     """Parse the block the model emitted. The model may never dismiss; only users do."""
-    load = read_snapshot(text, last=True)
+    load = read_snapshot(text, last=True, conservar_anclas=conservar_anclas)
     if not isinstance(load, Legacy):
         return None
     state = load.raw
@@ -803,13 +817,14 @@ def _v3_snapshot(data):
     )
 
 
-def read_snapshot(body, *, last=False):
+def read_snapshot(body, *, last=False, conservar_anclas=False):
     """Lee el bloque de memoria y clasifica el resultado.
 
     Missing (no hay bloque), Invalid (bloque ilegible o que viola la frontera
     del esquema), Future (versión más nueva), Valid (schema 2 o 3) o Legacy
     (formato legado, migrado a Snapshot sin inventar nada; `raw` conserva el
-    estado legado saneado para el adaptador).
+    estado legado saneado para el adaptador). Con `conservar_anclas`, el
+    `raw` legado transporta las anclas del modelo sin validarlas.
     """
     found = find_findings_block(body, last=last)
     if found is None:
@@ -838,7 +853,7 @@ def read_snapshot(body, *, last=False):
         if isinstance(schema, int) and not isinstance(schema, bool):
             return Future(schema, block=found_block)
         return Invalid(f"schema desconocido: {schema!r}")
-    raw = legacy_raw_of(data)
+    raw = legacy_raw_of(data, conservar_anclas=conservar_anclas)
     return Legacy(snapshot=_migrate_legacy(raw), raw=raw, block=found_block)
 
 
@@ -1198,13 +1213,15 @@ class RepositoryFacts:
     correspondencias de renombres confirmadas (pares ruta_nueva -> ruta_vieja)
     y los blobs ya leídos (por (ruta, blob_sha)) para validar las citas.
     `changed_paths` es el delta real entre revisiones cuando el adaptador
-    puede calcularlo; `omissions` lista omisiones obligatorias (delta no
-    calculable, exclusiones, rutas no representables) que degradan la
-    cobertura completa.
+    puede calcularlo (`delta_calculado` lo distingue de "no suministrado",
+    incluso si el delta sale vacío); `omissions` lista omisiones
+    obligatorias (delta no calculable, exclusiones, rutas no representables)
+    que degradan la cobertura completa.
     """
 
     revision: Revision | None = None
     changed_paths: tuple = ()
+    delta_calculado: bool = False
     reverted_paths: tuple = ()
     renames: tuple = ()
     blobs: dict = field(default_factory=dict)
@@ -1628,10 +1645,10 @@ def accept_report(current, plan, report):
         return Keep(reason="el reconocimiento de identidad requiere estado v2 o v3")
     facts = report.facts
     revertidas = set(facts.reverted_paths)
-    # el delta real del adaptador manda; `plan.changed_paths` conserva a los
-    # callers directos del dominio que aún no llenan hechos
+    # el delta real del adaptador manda (aunque salga vacío); `plan.changed_paths`
+    # conserva a los callers directos del dominio que aún no llenan hechos
     cambiadas = (
-        set(facts.changed_paths) if facts.changed_paths else set(plan.changed_paths)
+        set(facts.changed_paths) if facts.delta_calculado else set(plan.changed_paths)
     ) | revertidas
     findings = list(current.findings)
     por_id = {f.id: f for f in findings if f.id}

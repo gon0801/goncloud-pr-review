@@ -4845,6 +4845,8 @@ class CableadoIdentidad(unittest.TestCase):
                                 "title": "Fuga de recurso reformulada",
                                 "severity": "High",
                                 "state": "open",
+                                "file": "app.py",
+                                "line": 5,
                                 "anchor": {
                                     "path": "app.py",
                                     "blob_sha": r["blob2"],
@@ -4858,6 +4860,8 @@ class CableadoIdentidad(unittest.TestCase):
                                 "title": "Riesgo de eval",
                                 "severity": "High",
                                 "state": "open",
+                                "file": "app.py",
+                                "line": 9,
                                 "anchor": {
                                     "path": "app.py",
                                     "blob_sha": r["blob2"],
@@ -5120,6 +5124,99 @@ class CableadoIdentidad(unittest.TestCase):
             f"{review.COMPLETION_PREFIX}{'e' * 40}:partial -->",
             cuerpo,
         )
+
+    def test_cita_sobre_ruta_del_delta_ausente_del_manifiesto_verifica(self):
+        """CodeRabbit r1: la identidad no se pierde por falta del manifiesto."""
+        import hashlib as h
+
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._repo_dos_bugs(tmp)
+            snapshot = domain.Snapshot(
+                schema=2,
+                generation=2,
+                revision=domain.Revision(
+                    base_sha=r["base"], head_sha=r["head1"], policy_digest=""
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title="Fuga de recurso",
+                        severity="High",
+                        status=domain.StatusDismissed(command_id=None),
+                        primary_anchor=domain.AnchorLocated(
+                            path="app.py",
+                            blob_sha=r["blob1"],
+                            range=(4, 4),
+                            excerpt_digest=r["digest_fuga"],
+                        ),
+                    )
+                ],
+                command_cursor=0,
+            )
+            sticky = {"body": domain.encode_snapshot(snapshot)}
+            extracto_fuga = "x = 1/0  # fuga"
+            modelo = (
+                domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "title": "Fuga de recurso reformulada",
+                                "severity": "High",
+                                "state": "open",
+                                "file": "app.py",
+                                "line": 5,
+                                "anchor": {
+                                    "path": "app.py",
+                                    "blob_sha": r["blob2"],
+                                    "range": [5, 5],
+                                    "excerpt_digest": h.sha256(
+                                        extracto_fuga.encode()
+                                    ).hexdigest(),
+                                },
+                            }
+                        ],
+                        "next": 2,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+                + "\n\nCOVERAGE: complete\n"
+            )
+            manifest = {
+                "base": r["base"],
+                "head": r["head2"],
+                "mode": "incremental",
+                "prev_sha": r["head1"],
+                "changed_files": [],
+                "reviewed": [],
+                "excluded": [],
+            }
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+                cwd = os.getcwd()
+                os.chdir(r["repo"])
+                try:
+                    out = review.build_findings(
+                        {"result": modelo}, manifest, sticky, "o/r", 1, "bot", []
+                    )
+                finally:
+                    os.chdir(cwd)
+            self.assertIsNone(out.get("keep"))
+            carga = domain.read_snapshot(out["block"])
+            self.assertIsInstance(carga, domain.Valid)
+            self.assertEqual(
+                [f.id for f in carga.snapshot.findings],
+                ["F1"],
+                "la cita sobre la ruta del delta verifica aunque el manifiesto no la liste",
+            )
+            self.assertIsInstance(
+                carga.snapshot.findings[0].status,
+                domain.StatusDismissed,
+                "el descartado se reconoce por digest y no revive ni se duplica",
+            )
 
     def test_blobs_previos_para_verificar_anclas_persistidas(self):
         import review_domain as domain
