@@ -264,7 +264,7 @@ class RequestTransitions(unittest.TestCase):
         self.assertEqual(nueva.target["policy_digest"], "9" * 64)
         self.assertEqual(len(vencido.work_after_commit), 1)
 
-    def test_vencido_no_duplica_solicitud_del_target_vigente(self):
+    def test_push_nuevo_poda_la_solicitud_superseded(self):
         estado = snapshot_base()
         primera = domain.reconcile(
             estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
@@ -282,9 +282,10 @@ class RequestTransitions(unittest.TestCase):
             hechos(),
             POLICY,
         )
-        revision_nueva = domain.Revision(
-            base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
-        )
+        self.assertIsInstance(segunda, domain.Commit)
+        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
+        self.assertEqual(segunda.snapshot.request_count, 2)
+
         vencido = domain.reconcile(
             segunda.snapshot,
             domain.ReportReady(
@@ -295,12 +296,33 @@ class RequestTransitions(unittest.TestCase):
                 observaciones=(),
                 cobertura=domain.PARTIAL,
             ),
-            hechos(revision_nueva),
+            hechos(),
             POLICY,
         )
-        self.assertIsInstance(vencido, domain.Commit)
-        self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
-        self.assertEqual([s.id for s in vencido.work_after_commit], [2])
+        self.assertIsInstance(vencido, domain.Keep)
+
+    def test_tombstones_antiguos_se_podian(self):
+        estado = snapshot_base()
+        primera = domain.reconcile(
+            estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
+        )
+        terminal = domain.reconcile(
+            primera.snapshot,
+            domain.ReportFailed(
+                request_id=1, run_id=11, attempt=1, motivo="x", retryable=False
+            ),
+            hechos(),
+            POLICY,
+        )
+        segunda = domain.reconcile(
+            terminal.snapshot,
+            domain.RequestReview(origin=PUSH, target=TARGET),
+            hechos(),
+            POLICY,
+        )
+        self.assertIsInstance(segunda, domain.Commit)
+        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
+        self.assertEqual(segunda.snapshot.request_count, 2)
 
     def test_sin_target_o_sin_revision_no_acreditan(self):
         observacion = domain.Observation(
@@ -347,6 +369,49 @@ class RequestTransitions(unittest.TestCase):
         )
         self.assertIsInstance(sin_revision, domain.Commit)
         self.assertEqual(sin_revision.snapshot.completion, domain.UNKNOWN)
+
+    def test_observacion_rechazada_no_crashea_y_no_acredita(self):
+        """CodeRabbit r1: la frontera valida el artifact antes de aceptar."""
+        estado = snapshot_base()
+        creada = domain.reconcile(
+            estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
+        )
+        rechazada = domain.observation_de_entrada(
+            {
+                "title": "t",
+                "severity": "High",
+                "file": "a.py",
+                "line": 3,
+                "state": "open",
+                "anchor": {
+                    "path": "a.py",
+                    "blob_sha": "a" * 40,
+                    "range": [3],
+                    "excerpt_digest": "x" * 64,
+                },
+            }
+        )
+        self.assertIsInstance(rechazada, domain.ObservationRejected)
+        vencido = domain.reconcile(
+            creada.snapshot,
+            domain.ReportReady(
+                origin=domain.Origin(kind="push", run_id=11),
+                request_id=1,
+                run_id=11,
+                attempt=1,
+                observaciones=(rechazada,),
+                cobertura=domain.COMPLETE_CLAIM,
+            ),
+            hechos(),
+            POLICY,
+        )
+        self.assertIsInstance(vencido, domain.Commit)
+        self.assertEqual(
+            vencido.snapshot.completion,
+            domain.UNKNOWN,
+            "un bloque con formas inválidas no acredita cobertura",
+        )
+        self.assertEqual(vencido.snapshot.pending_requests, [])
 
     def test_transiciones_de_fallo(self):
         estado = snapshot_base()
@@ -576,6 +641,16 @@ class CheckpointRecovery(unittest.TestCase):
         )
         self.assertIn(citado, cuerpo_nuevo, "el bloque citado sobrevive a la escritura")
 
+    def test_forma_real_de_comentarios_no_crashea(self):
+        """CodeRabbit r1: fetch_all_comments trae user como texto."""
+        estado = snapshot_base(generation=1)
+        decision = decision_con_trabajo(estado)
+        falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado), "user": "bot"}])
+        resultado = review.publish_checkpoint(
+            decision, falso.leer()[0], falso, login="bot"
+        )
+        self.assertIsInstance(resultado, review.PublishReceipt)
+
     def test_otros_logins_no_cuentan_como_duplicados(self):
         estado = snapshot_base(generation=1)
         decision = decision_con_trabajo(estado)
@@ -727,10 +802,6 @@ class ResultAuthentication(unittest.TestCase):
                 self.assertIsInstance(rechazado, review.Rejected)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CoordinadorCli(unittest.TestCase):
     """T08 e2e: el comando reconcile con adaptadores falsos."""
 
@@ -797,16 +868,110 @@ class CoordinadorCli(unittest.TestCase):
             Path(tmp, "result.json").write_text(json.dumps(artifact))
             payload_path = Path(tmp, "event.json")
             payload_path.write_text(json.dumps(payload))
+            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
             with self._entorno(
                 tmp,
                 GITHUB_EVENT_NAME="workflow_run",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with self.assertRaises(SystemExit) as ctx:
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                    with mock.patch.object(review, "sh", return_value=gh_confiable):
+                        with self.assertRaises(SystemExit) as ctx:
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(ctx.exception.code, 1)
         self.assertEqual(falso.patches, [], "rechazado: no escribe ni despacha")
+
+    def test_run_desde_otra_ref_es_rechazado(self):
+        estado = snapshot_base(generation=1)
+        creada = decision_con_trabajo(estado)
+        falso = _ComentarioFalso(
+            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
+        )
+        payload = {
+            "workflow_run": {
+                "id": 77,
+                "name": "ai-review-worker",
+                "head_branch": "fork-de-atacante",
+                "head_sha": "1" * 40,
+                "run_attempt": 1,
+            }
+        }
+        artifact = {
+            "request_id": 1,
+            "run_id": 77,
+            "attempt": 1,
+            "pr_head_sha": "c" * 40,
+            "policy_digest": "d" * 64,
+            "observaciones": [],
+            "cobertura": "complete",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "result.json").write_text(json.dumps(artifact))
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps(payload))
+            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+            with self._entorno(
+                tmp,
+                GITHUB_EVENT_NAME="workflow_run",
+                GITHUB_EVENT_PATH=str(payload_path),
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", return_value=gh_confiable):
+                        with self.assertRaises(SystemExit) as ctx:
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(falso.patches, [])
+
+    def test_resultado_vigente_se_acepta(self):
+        estado = snapshot_base(generation=1)
+        digest = review.digest_de_politica(review.politica_de_revision())
+        target = domain.ReviewTarget(
+            repository="o/r",
+            pr_number=1,
+            head_sha="c" * 40,
+            base_sha="b" * 40,
+            policy_digest=digest,
+        )
+        creada = domain.reconcile(
+            estado, domain.RequestReview(origin=PUSH, target=target), hechos(), POLICY
+        )
+        falso = _ComentarioFalso(
+            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
+        )
+        payload = {
+            "workflow_run": {
+                "id": 77,
+                "name": "ai-review-worker",
+                "head_branch": "main",
+                "head_sha": "f" * 40,
+                "run_attempt": 1,
+            }
+        }
+        artifact = {
+            "request_id": 1,
+            "run_id": 77,
+            "attempt": 1,
+            "pr_head_sha": "c" * 40,
+            "policy_digest": digest,
+            "observaciones": [],
+            "cobertura": "complete",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "result.json").write_text(json.dumps(artifact))
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps(payload))
+            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+            with self._entorno(
+                tmp,
+                GITHUB_EVENT_NAME="workflow_run",
+                GITHUB_EVENT_PATH=str(payload_path),
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", return_value=gh_confiable):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        self.assertEqual(len(falso.patches), 1)
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertEqual(carga.snapshot.pending_requests, [])
 
     def test_base_ausente_falla_alto(self):
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(snapshot_base())}])
@@ -815,3 +980,7 @@ class CoordinadorCli(unittest.TestCase):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
                     with self.assertRaises(SystemExit):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
+
+
+if __name__ == "__main__":
+    unittest.main()

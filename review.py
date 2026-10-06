@@ -2525,7 +2525,10 @@ def _cuerpo_con_checkpoint(decision):
 
 
 def _login_de(comentario):
-    return comentario.get("login") or (comentario.get("user") or {}).get("login")
+    user = comentario.get("user")
+    if isinstance(user, str):
+        return user
+    return comentario.get("login") or (user or {}).get("login")
 
 
 def publish_checkpoint(decision, observado, adaptador, login=None):
@@ -2567,7 +2570,12 @@ def publish_checkpoint(decision, observado, adaptador, login=None):
         except Exception as exc:
             return Unconfirmed(f"respuesta de POST incierta: {exc}")
         creado = next(
-            (c for c in adaptador.leer() if MARKER in (c.get("body") or "")),
+            (
+                c
+                for c in adaptador.leer()
+                if MARKER in (c.get("body") or "")
+                and (login is None or _login_de(c) == login)
+            ),
             None,
         )
         return PublishReceipt(
@@ -2934,12 +2942,15 @@ def cmd_reconcile(args):
             sys.exit(
                 f"ai-review: resultado de solicitud desconocida {artifact.get('request_id')!r}"
             )
+        confiable = json.loads(
+            sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
+        )
         request = request_de_solicitud(
             solicitud,
             repository=repo,
-            workflow=wr.get("name"),
-            ref=wr.get("head_branch"),
-            workflow_sha=wr.get("head_sha"),
+            workflow="ai-review-worker",
+            ref=worker_ref,
+            workflow_sha=confiable.get("sha"),
         )
         autenticado = authenticate_result(
             {

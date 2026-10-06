@@ -1878,6 +1878,21 @@ class Commit:
     work_after_commit: tuple = ()
 
 
+def _podar(current, target_json):
+    """Al crear una solicitud nueva: fuera las superseded de otros targets y
+    los tombstones finished salvo el más reciente (el presupuesto del bloque
+    es compartido con los hallazgos y el contador nunca retrocede).
+    """
+    return [
+        r
+        for r in current.pending_requests
+        if r.state != "finished"
+        and not (
+            r.kind == "review" and target_json and not _mismo_target(r, target_json)
+        )
+    ]
+
+
 def _solicitud_nueva(evento, current):
     rid = current.request_count + 1
     kind = (
@@ -1922,7 +1937,7 @@ def _reconcile_revision(current, evento):
     nueva = _solicitud_nueva(evento, current)
     snapshot = replace(
         current,
-        pending_requests=[*current.pending_requests, nueva],
+        pending_requests=[*_podar(current, target_json), nueva],
         request_count=current.request_count + 1,
     )
     return Commit(snapshot=snapshot, work_after_commit=(nueva,))
@@ -2015,11 +2030,7 @@ def _reconcile_resultado(current, evento, facts, policy):
             request_count=podada.request_count + 1,
         )
         return Commit(snapshot=snapshot, work_after_commit=(nueva,))
-    report = ValidatedReport(
-        facts=facts,
-        observations=list(evento.observaciones),
-        claimed_coverage=evento.cobertura,
-    )
+    report = validar_reporte(evento.observaciones, evento.cobertura, facts)
     plan = ReviewPlan(
         revision=facts.revision,
         changed_paths=tuple(facts.changed_paths),
