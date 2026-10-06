@@ -100,7 +100,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T01 | R0 | Rutas Git exactas | Base verificada | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T02 | R0 | Búsqueda de contexto con resultado explícito | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
 | T03 | R0 | Presupuestos medidos sobre bytes escritos | T01 | cc:done (PR #42, squash 91e7c85; evidencia docs/evidence/reviewer/R0.md) |
-| T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:TODO |
+| T04 | S0 | Codec schema 3 y escritor compatible operativo | Base verificada | cc:done (PR #44, squash 9c93844; evidencia docs/evidence/reviewer/S0.md) |
 | T05 | S1 | Capacidad reservada y desborde sin pérdida | T04 | cc:TODO |
 | T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:TODO |
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:TODO |
@@ -128,3 +128,12 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | R0.md:86 | Matiz de redaccion: dice que la vineta no UTF-8 fue reescrita, pero se borro; estado resuelto en seccion Ronda 2 | abierta |
 | R0.md:49-52 | build_conventions lee contenido con sh en modo texto; revisar decodificacion | abierta |
 | R0.md:49-52 | test_utf8_manifest_matches_file: asercion de seleccion por presupuesto no discrimina sola; cubre igualdad diff_bytes | abierta |
+| S0-r5 revisor | N1 review_domain.py:752 state valida str no vacio sin enum (pendiente/donee pasan); endurecer cuando T07 defina estados | abierta |
+| S0-r5 revisor | N2 review_domain.py:750 rechazo basis_generation bool/neg sin subtest (mutante isinstance sobrevive; caso x cubierto) | abierta |
+| S0-r5 revisor | N3 review.py:1884 proxy.wait(timeout=10) en finally puede lanzar TimeoutExpired tras timeout del modelo y tapar ruta infra (preexistente en main) | abierta |
+| S0-r5 revisor | N4 S0.md:122 cifra verify-partition 370 desactualizada (sobre 73d7067 da 371: 186+185) | abierta |
+| S0-r5 LISTO | policy_digest vacio en revision avanzada | abierta |
+| S0-r5 LISTO | prueba de desborde del escritor compatible pendiente | abierta |
+| S0-r5 LISTO | hallazgos legacy con id None pendientes | abierta |
+| S0-r5 LISTO | aviso corto review.py:2050 | abierta |
+| S0-r5 LISTO | N1-N7 de r1, N1-N2 de r3 y F1-F5 del sticky 7a1e2b1 arrastrados (siguen abiertos) | abierta |
