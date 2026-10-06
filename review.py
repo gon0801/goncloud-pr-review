@@ -2093,9 +2093,9 @@ def hechos_de_repo(manifest, reverted_files, renames=(), blobs=None, policy_dige
 def build_findings(result, manifest, sticky, repo, pr, login, comments):
     """Merge previous state with the model's block. Broken block: keep last parseable (B6).
 
-    A v2 or future-version sticky is kept verbatim (the Keep of the design):
-    the memory is never downgraded to legacy, so a confirmed dismissal can't
-    reappear and nothing is lost.
+    A v2/v3 or future-version sticky is kept verbatim (the Keep of the
+    design): the memory is never downgraded to legacy, so a confirmed
+    dismissal can't reappear and nothing is lost.
     """
     load = (
         review_domain.read_snapshot(sticky["body"])

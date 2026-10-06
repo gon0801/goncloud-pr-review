@@ -2313,6 +2313,54 @@ class Schema3Compatibility(unittest.TestCase):
         self.assertEqual(s.pending_requests[0].legacy_id, "req-->1 --!>2")
         self.assertEqual(s.receipts[0].effect, "descarta --> F3")
 
+    def test_v2_rechaza_ids_de_solicitud_duplicados(self):
+        v2 = json.loads(
+            domain.encode_snapshot(snapshot_v2())[
+                len(domain.FINDINGS_PREFIX) : -len(domain.FINDINGS_SUFFIX)
+            ]
+        )
+        v2["pending_requests"].append(dict(v2["pending_requests"][0]))
+        bloque = domain.FINDINGS_PREFIX + json.dumps(v2) + domain.FINDINGS_SUFFIX
+        carga = domain.read_snapshot(bloque)
+        self.assertIsInstance(carga, domain.Invalid)
+        self.assertIn("duplicado", carga.reason)
+
+    def test_validador_v3_rechaza_bloques_malformados(self):
+        """Frontera del codec: un rechazo por regla, tipado y con motivo."""
+        base = json.loads(
+            domain.encode_snapshot(
+                domain.snapshot_a_v3(snapshot_v2()), domain.StorageBudget()
+            ).block[len(domain.FINDINGS_PREFIX) : -len(domain.FINDINGS_SUFFIX)]
+        )
+        casos = []
+        duplicado = json.loads(json.dumps(base))
+        duplicado["pending_requests"].append(
+            dict(duplicado["pending_requests"][0], id=2)
+        )
+        duplicado["request_count"] = 2
+        casos.append(("id de solicitud duplicado", duplicado))
+        fuera = json.loads(json.dumps(base))
+        fuera["pending_requests"][0]["id"] = 2
+        fuera["request_count"] = 1
+        casos.append(("fuera de request_count", fuera))
+        doble_legacy = json.loads(json.dumps(base))
+        doble_legacy["pending_requests"].append(
+            {"id": 2, "legacy_id": "req-1", "kind": "explain", "finding_id": "F1"}
+        )
+        doble_legacy["request_count"] = 2
+        casos.append(("legacy_id duplicado", doble_legacy))
+        recibo_tarde = json.loads(json.dumps(base))
+        recibo_tarde["receipts"].append({"command_id": 99, "effect": "efecto"})
+        casos.append(("recibo con cursor vencido", recibo_tarde))
+        for motivo, payload in casos:
+            with self.subTest(regla=motivo):
+                bloque = (
+                    domain.FINDINGS_PREFIX
+                    + json.dumps(payload)
+                    + domain.FINDINGS_SUFFIX
+                )
+                self.assertIsInstance(domain.read_snapshot(bloque), domain.Invalid)
+
     def test_normaliza_politica_una_vez(self):
         p = domain.normalize_policy(
             {
@@ -2333,6 +2381,9 @@ class Schema3Compatibility(unittest.TestCase):
         self.assertEqual(p.schema_version, 3)
         self.assertEqual(p.diff_mode, "incremental")
         self.assertEqual(domain.normalize_policy({}).finding_identity, "current")
+        self.assertEqual(
+            domain.normalize_policy({"exclude_patterns": None}).exclude_patterns, ()
+        )
         with self.assertRaises(ValueError):
             domain.normalize_policy({"finding_identity": "bogus"})
         with self.assertRaises(ValueError):

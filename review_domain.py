@@ -660,7 +660,7 @@ def _v2_snapshot(data):
     if "pending_requests" in data and not isinstance(data["pending_requests"], list):
         raise _SchemaError("pending_requests debe ser una lista")
     ids = {f.id for f in findings}
-    solicitudes = []
+    solicitudes, textos = [], set()
     for req in data.get("pending_requests") or []:
         if (
             not isinstance(req, dict)
@@ -669,6 +669,9 @@ def _v2_snapshot(data):
             or not isinstance(req.get("kind"), str)
         ):
             raise _SchemaError("solicitud pendiente inválida")
+        if req["id"] in textos:
+            raise _SchemaError(f"id de solicitud duplicado: {req['id']!r}")
+        textos.add(req["id"])
         finding_id = req.get("finding_id")
         if finding_id is not None and finding_id not in ids:
             raise _SchemaError(
@@ -873,7 +876,7 @@ def normalize_policy(boot):
         or max_bytes < 1000
     ):
         raise ValueError(f"findings_max_bytes inválido: {max_bytes!r}")
-    patterns = boot.get("exclude_patterns", ())
+    patterns = boot.get("exclude_patterns") or ()
     if isinstance(patterns, str) or not all(isinstance(x, str) for x in patterns):
         raise ValueError("exclude_patterns debe ser una lista de patrones")
     return ReviewPolicy(
@@ -998,7 +1001,7 @@ def encode_snapshot(snapshot, budget=None):
     """
     limite = budget.max_bytes if budget is not None else FINDINGS_MAX_BYTES
     if snapshot.schema == 1:
-        return serialize_findings(_legacy_raw_of_snapshot(snapshot))
+        return serialize_findings(_legacy_raw_of_snapshot(snapshot), max_bytes=limite)
     if snapshot.schema == 2:
         payload = {
             "schema": 2,
