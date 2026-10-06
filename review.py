@@ -646,7 +646,7 @@ def scope_lines(result, manifest, provider):
     return scope
 
 
-def compose(result, manifest, *, sha, provider, findings=None):
+def compose(result, manifest, *, sha, provider, findings=None, budget=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
     review, coverage, detail = split_coverage(text)
@@ -722,7 +722,13 @@ def compose(result, manifest, *, sha, provider, findings=None):
         "</details>",
     ]
 
-    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    cuerpo = "\n".join(parts)
+    if budget is not None:
+        aviso = "\n\n_(Comentario recortado al presupuesto de capacidad.)_"
+        if len(cuerpo) > budget.comment_max_chars:
+            cuerpo = cuerpo[: max(0, budget.comment_max_chars - len(aviso))] + aviso
+        cuerpo = trim_utf8(cuerpo, budget.comment_max_bytes, aviso)
+    return cuerpo[:GITHUB_COMMENT_MAX]
 
 
 def compose_with_findings(

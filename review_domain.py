@@ -21,6 +21,13 @@ from dataclasses import dataclass, field, replace
 FINDINGS_PREFIX = "<!-- ai-review:findings="
 FINDINGS_SUFFIX = " -->"
 FINDINGS_MAX_BYTES = 8000
+
+# La activación del perfil de capacidad ampliado queda pendiente de la
+# prueba de comentario real (T16): los límites solo aplican vía StorageBudget
+# explícito; compose sin budget conserva los topes actuales.
+STATE_BYTES_PROPOSED = 40000
+COMMENT_MAX_BYTES = 60000
+COMMENT_MAX_CHARS = 60000
 FINDINGS_MAX_COUNT = 60
 FINDINGS_TITLE_MAX = 160
 FINDING_FILES_MAX = 5
@@ -169,6 +176,8 @@ class Receipt:
 @dataclass
 class StorageBudget:
     max_bytes: int = FINDINGS_MAX_BYTES
+    comment_max_bytes: int = COMMENT_MAX_BYTES
+    comment_max_chars: int = COMMENT_MAX_CHARS
 
 
 @dataclass
