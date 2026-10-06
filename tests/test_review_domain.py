@@ -170,11 +170,14 @@ class LectorCompatible(unittest.TestCase):
         self.assertIsNone(review.parse_findings_block(PRE + "{oops" + SUF))
 
     def test_future_version_is_not_legacy(self):
+        SCHEMA_FUTURO = 4
         load = domain.read_snapshot(
-            PRE + json.dumps({"schema": 3, "findings": [], "next_id": 1}) + SUF
+            PRE
+            + json.dumps({"schema": SCHEMA_FUTURO, "findings": [], "next_id": 1})
+            + SUF
         )
         self.assertIsInstance(load, domain.Future)
-        self.assertEqual(load.version, 3)
+        self.assertEqual(load.version, SCHEMA_FUTURO)
         self.assertNotIsInstance(load, domain.Legacy)
         self.assertNotIsInstance(load, domain.Invalid)
 
@@ -2145,3 +2148,192 @@ class TituloUnicoConOtroLegadoEnRango(unittest.TestCase):
     def hechos(self):
         lineas = tuple(f"línea {i}" for i in range(1, 41))
         return domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
+
+
+class Schema3Compatibility(unittest.TestCase):
+    def test_preserva_estado_y_solicitudes(self):
+        legado = domain.serialize_findings(
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": "a.py",
+                        "line": 1,
+                        "severity": "Low",
+                        "title": "legado abierto",
+                        "state": "OPEN",
+                    },
+                    {
+                        "id": "F2",
+                        "file": "b.py",
+                        "line": 2,
+                        "severity": "Low",
+                        "title": "legado descartado",
+                        "state": "DISMISSED",
+                    },
+                ],
+                "next": 5,
+                "seen": 98,
+            }
+        )
+        carga = domain.read_snapshot(legado)
+        self.assertIsInstance(carga, domain.Legacy)
+        self.assertEqual([f.id for f in carga.snapshot.findings], ["F1", "F2"])
+        self.assertEqual(carga.snapshot.next_id, 5)
+        self.assertEqual(carga.snapshot.command_cursor, 98)
+        self.assertEqual(carga.snapshot.completion, domain.UNKNOWN)
+
+        v2 = snapshot_v2()
+        bloque = domain.encode_snapshot(v2)
+        carga = domain.read_snapshot(bloque)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        self.assertEqual(s.schema, 2)
+        self.assertEqual([f.id for f in s.findings], ["F1", "F2", "F3"])
+        self.assertEqual(s.next_id, 4)
+        self.assertIsInstance(s.findings[2].status, domain.StatusDismissed)
+        self.assertEqual(s.command_cursor, 98)
+        self.assertEqual(s.pending_requests[0].id, "req-1")
+        self.assertEqual(s.pending_requests[0].kind, "explain")
+        self.assertEqual(s.pending_requests[0].finding_id, "F1")
+
+        v3 = domain.snapshot_a_v3(v2)
+        self.assertEqual(v3.schema, 3)
+        self.assertEqual(v3.request_count, 1)
+        self.assertEqual(v3.pending_requests[0].id, 1)
+        self.assertEqual(v3.pending_requests[0].legacy_id, "req-1")
+        self.assertEqual(v3.pending_requests[0].kind, "explain")
+        self.assertEqual(v3.pending_requests[0].finding_id, "F1")
+        v3 = domain.replace(
+            v3,
+            receipts=(
+                domain.Receipt(command_id=98, effect="descartado F3 por comando"),
+            ),
+        )
+        enc = domain.encode_snapshot(v3, domain.StorageBudget())
+        self.assertIsInstance(enc, domain.EncodedCheckpoint)
+        self.assertEqual(enc.schema, 3)
+        self.assertEqual(enc.bytes, len(enc.block.encode("utf-8")))
+        carga = domain.read_snapshot(enc.block)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        self.assertEqual(s.schema, 3)
+        self.assertEqual([f.id for f in s.findings], ["F1", "F2", "F3"])
+        self.assertEqual(s.next_id, 4)
+        self.assertIsInstance(s.findings[2].status, domain.StatusDismissed)
+        self.assertEqual(s.findings[2].status.command_id, 98)
+        self.assertEqual(s.command_cursor, 98)
+        self.assertEqual(s.request_count, 1)
+        self.assertEqual(s.pending_requests[0].id, 1)
+        self.assertEqual(s.pending_requests[0].legacy_id, "req-1")
+        self.assertEqual(s.pending_requests[0].kind, "explain")
+        self.assertEqual(s.pending_requests[0].finding_id, "F1")
+        self.assertEqual(s.receipts[0].command_id, 98)
+        self.assertEqual(s.receipts[0].effect, "descartado F3 por comando")
+
+    def test_invalid_or_future_never_initializes_empty(self):
+        carga = domain.read_snapshot("")
+        self.assertIsInstance(carga, domain.Missing)
+        corrupto = domain.read_snapshot(
+            domain.FINDINGS_PREFIX
+            + '{"schema": 3, "generation": 1, "findings": [{"id": "F1"}]}'
+            + domain.FINDINGS_SUFFIX
+        )
+        self.assertIsInstance(corrupto, domain.Invalid)
+        self.assertNotIsInstance(corrupto, domain.Missing)
+        futuro = domain.read_snapshot(
+            domain.FINDINGS_PREFIX
+            + '{"schema": 4, "generation": 1, "findings": []}'
+            + domain.FINDINGS_SUFFIX
+        )
+        self.assertIsInstance(futuro, domain.Future)
+        self.assertEqual(futuro.version, 4)
+        legado = domain.read_snapshot(
+            domain.serialize_findings(
+                {
+                    "findings": [
+                        {
+                            "id": "F1",
+                            "file": "a.py",
+                            "line": 1,
+                            "severity": "Low",
+                            "title": "t",
+                            "state": "OPEN",
+                        }
+                    ],
+                    "next": 2,
+                    "seen": 0,
+                }
+            )
+        )
+        self.assertEqual(legado.snapshot.completion, domain.UNKNOWN)
+
+    def test_identity_strings_roundtrip(self):
+        raro = "src/niño\ttab\nlínea -->x --!>y ✓"
+        v3 = domain.snapshot_a_v3(snapshot_v2())
+        v3 = domain.replace(
+            v3,
+            findings=[
+                domain.replace(
+                    v3.findings[0],
+                    title=raro,
+                    primary_anchor=domain.AnchorLocated(
+                        path=raro,
+                        blob_sha="a" * 40,
+                        range=(10, 20),
+                        excerpt_digest="d1",
+                        symbol_hint=raro,
+                    ),
+                    cause_hint=raro,
+                    evidence=[domain.EvidenceUnverified(text=raro)],
+                )
+            ]
+            + v3.findings[1:],
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1, legacy_id="req-->1 --!>2", kind="explain", finding_id="F1"
+                )
+            ],
+            receipts=[domain.Receipt(command_id=98, effect="descarta --> F3")],
+        )
+        enc = domain.encode_snapshot(v3, domain.StorageBudget())
+        cuerpo = enc.block[: len(enc.block) - len(domain.FINDINGS_SUFFIX)]
+        self.assertNotIn("-->", cuerpo)
+        self.assertNotIn("--!>", cuerpo)
+        self.assertIn("--\\u003e", cuerpo)
+        carga = domain.read_snapshot(enc.block)
+        self.assertIsInstance(carga, domain.Valid)
+        s = carga.snapshot
+        f = s.findings[0]
+        self.assertEqual(f.title, raro)
+        self.assertEqual(f.primary_anchor.path, raro)
+        self.assertEqual(f.primary_anchor.symbol_hint, raro)
+        self.assertEqual(f.cause_hint, raro)
+        self.assertEqual(f.evidence[0].text, raro)
+        self.assertEqual(s.pending_requests[0].legacy_id, "req-->1 --!>2")
+        self.assertEqual(s.receipts[0].effect, "descarta --> F3")
+
+    def test_normaliza_politica_una_vez(self):
+        p = domain.normalize_policy(
+            {
+                "finding_identity": "titles",
+                "findings_max_count": 25,
+                "findings_max_bytes": 9000,
+                "rules_digest": "abc",
+                "exclude_patterns": ["dist/**"],
+                "schema_version": 3,
+                "diff_mode": "incremental",
+            }
+        )
+        self.assertEqual(p.finding_identity, "current")
+        self.assertEqual(p.findings_max_count, 25)
+        self.assertEqual(p.findings_max_bytes, 9000)
+        self.assertEqual(p.rules_digest, "abc")
+        self.assertEqual(p.exclude_patterns, ("dist/**",))
+        self.assertEqual(p.schema_version, 3)
+        self.assertEqual(p.diff_mode, "incremental")
+        self.assertEqual(domain.normalize_policy({}).finding_identity, "current")
+        with self.assertRaises(ValueError):
+            domain.normalize_policy({"finding_identity": "bogus"})
+        with self.assertRaises(ValueError):
+            domain.normalize_policy({"diff_mode": "bogus"})

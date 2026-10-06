@@ -2105,7 +2105,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments):
     model = parse_model_findings((result or {}).get("result") or "")
     if isinstance(load, (review_domain.Valid, review_domain.Future)):
         motivo = (
-            "schema 2"
+            f"schema {load.snapshot.schema}"
             if isinstance(load, review_domain.Valid)
             else f"versión {load.version}"
         )
@@ -2247,7 +2247,7 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2, de versión futura, inválida o desbordada: se conserva
+            # Memoria v2/v3, de versión futura, inválida o desbordada: se conserva
             # el comentario sin modificar (o MARKER + banner si no hay sticky),
             # el sha= y la cobertura no avanzan y se avisa en visible, como en
             # la ruta de falla de infraestructura.

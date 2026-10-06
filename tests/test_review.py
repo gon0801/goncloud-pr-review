@@ -3917,6 +3917,108 @@ if __name__ == "__main__":
 class PersistenciaSinPerdida(unittest.TestCase):
     """M1: el desborde y la memoria inválida conservan el estado y no confirman el commit."""
 
+    def test_publicacion_dos_actualizaciones_v2_y_schema3(self):
+        import dataclasses
+        import hashlib
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        lineas = tuple(f"línea {i}" for i in range(1, 31))
+        digest = hashlib.sha256("\n".join(lineas[9:11]).encode()).hexdigest()
+
+        def construir(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="bug ubicado",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLocated(
+                        path="src/app.py",
+                        blob_sha="a" * 40,
+                        range=(10, 11),
+                        excerpt_digest=digest,
+                    ),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="otro bug",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=3,
+                completion=domain.UNKNOWN,
+                findings=hallazgos,
+                command_cursor=0,
+                pending_requests=[
+                    domain.PendingRequest(id="req-1", kind="explain", finding_id="F1")
+                ],
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def aceptar(estado, head):
+            obs = domain.Observation(
+                title="bug ubicado",
+                severity="High",
+                primary_anchor=domain.AnchorLocated(
+                    path="src/app.py",
+                    blob_sha="a" * 40,
+                    range=(10, 11),
+                    excerpt_digest=digest,
+                ),
+                claim=domain.OPEN,
+            )
+            hechos = domain.RepositoryFacts(blobs={("src/app.py", "a" * 40): lineas})
+            plan = domain.ReviewPlan(
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha=head, policy_digest="d" * 64
+                ),
+                changed_paths=("src/app.py",),
+            )
+            report = domain.validar_reporte([obs], domain.UNKNOWN, hechos)
+            return domain.accept_report(estado, plan, report)
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                base = construir(schema)
+                t1 = aceptar(base, "e" * 40)
+                self.assertIsInstance(t1, domain.Replace)
+                self.assertEqual(t1.snapshot.revision.head_sha, "e" * 40)
+                descartados = tuple(
+                    dataclasses.replace(f, status=domain.StatusDismissed(command_id=5))
+                    if f.id == "F2"
+                    else f
+                    for f in t1.snapshot.findings
+                )
+                con_descarte = dataclasses.replace(
+                    t1.snapshot, findings=descartados, command_cursor=5
+                )
+                t2 = aceptar(con_descarte, "f" * 40)
+                self.assertIsInstance(t2, domain.Replace)
+                enc = domain.encode_snapshot(t2.snapshot, domain.StorageBudget())
+                bloque = enc.block if schema == 3 else enc
+                load = domain.read_snapshot(bloque)
+                self.assertIsInstance(load, domain.Valid)
+                s = load.snapshot
+                self.assertEqual(s.revision.head_sha, "f" * 40)
+                f2 = next(f for f in s.findings if f.id == "F2")
+                self.assertIsInstance(f2.status, domain.StatusDismissed)
+                self.assertEqual(s.command_cursor, 5)
+                if schema == 3:
+                    self.assertEqual(s.schema, 3)
+                    self.assertEqual(s.request_count, 1)
+                    self.assertEqual(s.pending_requests[0].legacy_id, "req-1")
+
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))
         import review_domain as domain
