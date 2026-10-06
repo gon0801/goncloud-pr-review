@@ -4433,6 +4433,26 @@ class ContextSearch(unittest.TestCase):
         self.assertIn("- pkg/b.py", text)
         self.assertIn("búsqueda truncada", text)
 
+    def test_timeout_interrupts_silent_producer(self):
+        wrapper = Path(tempfile.mkdtemp(), "bin")
+        wrapper.mkdir()
+        script = wrapper / "git"
+        script.write_text("#!/bin/sh\nsleep 4\n")
+        script.chmod(0o755)
+        files = {"src/app.py": "app\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.repo_with(tmp, files)
+            os.chdir(Path(tmp, "repo"))
+            try:
+                with mock.patch.dict(
+                    os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
+                ):
+                    result = review.grep_files(["app"], 5, timeout=0.2)
+            finally:
+                os.chdir(ROOT)
+        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIn("tiempo", result.reason)
+
     def test_callers_reports_truncated_and_failed(self):
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
         cases = [
@@ -4522,6 +4542,15 @@ class ContextBudgets(unittest.TestCase):
         tests.encode("utf-8")
         self.assertIn("recortado", callers)
         self.assertNotIn("\ufffd", callers)
+
+    def test_conventions_final_serialization_respects_budget(self):
+        big = "原文の規約テキストです €\n" * 900
+        first = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
+        second = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
+        with mock.patch.object(review, "sh", side_effect=[first, second]):
+            text = review.build_conventions("deadbeef")
+        self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
+        text.encode("utf-8")
 
     def test_conventions_respect_byte_budget(self):
         big = "原文の規約テキストです €\n" * 900

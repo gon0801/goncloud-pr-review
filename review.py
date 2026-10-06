@@ -9,9 +9,11 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 import urllib.request
@@ -189,8 +191,6 @@ class SearchTruncated:
 class SearchFailed:
     reason: str
 
-
-SearchResult = (SearchComplete, SearchTruncated, SearchFailed)
 
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 STOPWORDS = frozenset(
@@ -1082,69 +1082,73 @@ def grep_files(patterns, limit, predicate=None, *, max_bytes=None, timeout=None)
     """
     if not patterns:
         return SearchComplete(())
-    proc = subprocess.Popen(
-        [
-            "git",
-            "grep",
-            "-z",
-            "-l",
-            "--fixed-strings",
-            *[arg for pattern in patterns for arg in ("-e", pattern)],
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
     ceiling = max_bytes if max_bytes is not None else GREP_MAX_EXAMINED_BYTES
     deadline = time.monotonic() + (timeout if timeout is not None else GREP_MAX_SECONDS)
-    accepted, examined, pending = [], 0, b""
-    reason, limit_hit = None, False
+    with tempfile.TemporaryFile() as errors:
+        proc = subprocess.Popen(
+            [
+                "git",
+                "grep",
+                "-z",
+                "-l",
+                "--fixed-strings",
+                *[arg for pattern in patterns for arg in ("-e", pattern)],
+            ],
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        )
 
-    def stop_proc():
-        proc.kill()
-        proc.wait()
-        proc.stdout.close()
-        proc.stderr.close()
+        def stop_proc():
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
 
-    while reason is None and not limit_hit:
-        if time.monotonic() >= deadline:
-            reason = f"techo de tiempo ({timeout if timeout is not None else GREP_MAX_SECONDS:g} s)"
-            break
-        chunk = proc.stdout.read(GREP_READ_CHUNK)
-        if not chunk:
-            break
-        examined += len(chunk)
-        if examined > ceiling:
-            reason = f"techo de salida ({ceiling} bytes examinados)"
-            break
-        parts = (pending + chunk).split(b"\0")
-        pending = parts.pop()
-        for raw in parts:
-            if not raw:
-                continue
-            try:
-                path = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            if predicate is not None and not predicate(path):
-                continue
-            accepted.append(path)
-            if len(accepted) >= limit:
-                limit_hit = True
+        accepted, examined, tail = [], 0, b""
+        reason, limit_hit = None, False
+        while reason is None and not limit_hit:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                reason = f"techo de tiempo ({timeout if timeout is not None else GREP_MAX_SECONDS:g} s)"
                 break
-    if reason is not None or limit_hit:
-        stop_proc()
-        if reason is not None:
-            return SearchTruncated(tuple(accepted), reason)
-        return SearchComplete(tuple(accepted))
-    code = proc.wait()
-    if code not in (0, 1):
-        detail = proc.stderr.read().decode("utf-8", "backslashreplace").strip()
+            ready, _, _ = select.select([proc.stdout], [], [], left)
+            if not ready:
+                reason = f"techo de tiempo ({timeout if timeout is not None else GREP_MAX_SECONDS:g} s)"
+                break
+            chunk = os.read(proc.stdout.fileno(), GREP_READ_CHUNK)
+            if not chunk:
+                break
+            examined += len(chunk)
+            if examined > ceiling:
+                reason = f"techo de salida ({ceiling} bytes examinados)"
+                break
+            parts = (tail + chunk).split(b"\0")
+            tail = parts.pop()
+            for raw in parts:
+                if not raw:
+                    continue
+                try:
+                    path = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                if predicate is not None and not predicate(path):
+                    continue
+                accepted.append(path)
+                if len(accepted) >= limit:
+                    limit_hit = True
+                    break
+        if reason is not None or limit_hit:
+            stop_proc()
+            if reason is not None:
+                return SearchTruncated(tuple(accepted), reason)
+            return SearchComplete(tuple(accepted))
+        code = proc.wait()
+        if code not in (0, 1):
+            errors.seek(0)
+            detail = errors.read().decode("utf-8", "backslashreplace").strip()
+            proc.stdout.close()
+            return SearchFailed(detail or f"git grep terminó con código {code}")
         proc.stdout.close()
-        proc.stderr.close()
-        return SearchFailed(detail or f"git grep terminó con código {code}")
-    proc.stdout.close()
-    proc.stderr.close()
-    return SearchComplete(tuple(accepted))
+        return SearchComplete(tuple(accepted))
 
 
 def build_callers(reviewed, chunks):
@@ -1258,17 +1262,14 @@ def build_conventions(base):
     for name in CONVENTION_FILES:
         found = sh("git", "show", f"{base}:{name}", check=False)
         if found.returncode == 0 and found.stdout.strip():
-            content = found.stdout
-            parts.append(
-                trim_utf8(
-                    f"# {name} (de la rama base, recortado)\n\n{content}",
-                    CONVENTIONS_MAX_BYTES,
-                    "\n\n…(recortado)…\n",
-                )
-            )
+            parts.append(f"# {name} (de la rama base)\n\n{found.stdout}")
     if not parts:
         return "(Este repo no tiene CLAUDE.md ni AGENTS.md en la rama base.)\n"
-    return "\n\n".join(parts)
+    return trim_utf8(
+        "\n\n".join(parts),
+        CONVENTIONS_MAX_BYTES,
+        "\n\n…(recortado)…\n",
+    )
 
 
 # The tier only goes UP for big diffs. Measured 2026-09-26 on 5 real PRs (openclaw #161,
