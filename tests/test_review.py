@@ -4019,6 +4019,118 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     self.assertEqual(s.request_count, 1)
                     self.assertEqual(s.pending_requests[0].legacy_id, "req-1")
 
+    def test_publica_dos_veces_via_build_findings_v2_y_schema3(self):
+        """B1: el escritor compatible actualiza v2/v3 con identidad current."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        def estado(schema):
+            hallazgos = [
+                domain.Finding(
+                    id="F1",
+                    title="abierto uno",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/a.py", line=1),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="abierto dos",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="src/b.py", line=2),
+                ),
+                domain.Finding(
+                    id="F3",
+                    title="descartado antes",
+                    severity="Low",
+                    status=domain.StatusDismissed(command_id=98),
+                    primary_anchor=domain.AnchorLegacy(path="src/c.py", line=3),
+                ),
+            ]
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=4,
+                completion=domain.PARTIAL,
+                findings=hallazgos,
+                command_cursor=98,
+                pending_requests=[
+                    domain.PendingRequest(id="req-1", kind="explain", finding_id="F2")
+                ],
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def publicar(bloque_previo, schema, descartes, head):
+            sticky = {"body": bloque_previo}
+            manifest = {
+                "base": "b" * 40,
+                "head": head,
+                "mode": "full",
+                "reviewed": ["src/a.py"],
+            }
+            with mock.patch.object(
+                review,
+                "collect_dismissals",
+                return_value=(descartes, False, 99),
+            ):
+                return review.build_findings(
+                    {"result": "COVERAGE: partial\n"},
+                    manifest,
+                    sticky,
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                original = domain.encode_snapshot(
+                    estado(schema), domain.StorageBudget()
+                )
+                bloque0 = original.block if schema == 3 else original
+                r1 = publicar(bloque0, schema, {"F1"}, "e" * 40)
+                self.assertIsNone(r1.get("keep"), f"schema {schema}: no debe ser Keep")
+                carga1 = domain.read_snapshot(r1["block"])
+                self.assertIsInstance(carga1, domain.Valid)
+                s1 = carga1.snapshot
+                self.assertEqual(s1.schema, schema)
+                self.assertEqual(s1.revision.head_sha, "e" * 40)
+                f1 = next(f for f in s1.findings if f.id == "F1")
+                self.assertIsInstance(f1.status, domain.StatusDismissed)
+                self.assertEqual(f1.status.command_id, 99)
+                self.assertEqual(
+                    s1.command_cursor,
+                    99,
+                    "el cursor es marca de agua de comentarios, no suma descartes",
+                )
+                self.assertEqual(s1.receipts, s1.receipts)
+                if schema == 3:
+                    self.assertTrue(
+                        any(r.command_id == 99 for r in s1.receipts),
+                        "el descarte deja su recibo en schema 3",
+                    )
+                r2 = publicar(r1["block"], schema, set(), "f" * 40)
+                self.assertIsNone(r2.get("keep"))
+                carga2 = domain.read_snapshot(r2["block"])
+                self.assertIsInstance(carga2, domain.Valid)
+                s2 = carga2.snapshot
+                self.assertEqual(s2.schema, schema)
+                self.assertEqual(s2.revision.head_sha, "f" * 40)
+                f1b = next(f for f in s2.findings if f.id == "F1")
+                self.assertIsInstance(f1b.status, domain.StatusDismissed)
+                self.assertEqual(f1b.status.command_id, 99)
+                if schema == 3:
+                    self.assertEqual(s2.request_count, 1)
+                    self.assertEqual(s2.pending_requests[0].legacy_id, "req-1")
+                self.assertEqual(s2.receipts, s1.receipts)
+
     def sticky_v2_al_limite(self):
         sys.path.insert(0, str(ROOT))
         import review_domain as domain

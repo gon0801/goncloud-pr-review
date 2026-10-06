@@ -717,23 +717,24 @@ def _v3_snapshot(data):
     for req in data.get("pending_requests") or []:
         rid = req.get("id") if isinstance(req, dict) else None
         legacy_id = req.get("legacy_id") if isinstance(req, dict) else None
-        if (
-            not isinstance(req, dict)
-            or not isinstance(rid, int)
-            or isinstance(rid, bool)
-            or rid < 1
-            or rid in numericos
-            or rid > request_count
-            or not isinstance(req.get("kind"), str)
-            or not req["kind"]
-        ):
-            raise _SchemaError("solicitud pendiente inválida")
-        if legacy_id is not None and (
-            not isinstance(legacy_id, str) or not legacy_id or legacy_id in legados
-        ):
+        if not isinstance(req, dict):
+            raise _SchemaError("solicitud pendiente no es un objeto")
+        if not isinstance(rid, int) or isinstance(rid, bool):
+            raise _SchemaError("id de solicitud debe ser entero")
+        if rid < 1:
+            raise _SchemaError("id de solicitud menor que 1")
+        if rid in numericos:
+            raise _SchemaError(f"id de solicitud duplicado: {rid}")
+        if rid > request_count:
             raise _SchemaError(
-                f"legacy_id de solicitud inválido o duplicado: {legacy_id!r}"
+                f"id de solicitud supera request_count ({rid} > {request_count})"
             )
+        if not isinstance(req.get("kind"), str) or not req["kind"]:
+            raise _SchemaError("kind de solicitud inválido")
+        if legacy_id is not None and (not isinstance(legacy_id, str) or not legacy_id):
+            raise _SchemaError(f"legacy_id de solicitud inválido: {legacy_id!r}")
+        if legacy_id is not None and legacy_id in legados:
+            raise _SchemaError(f"legacy_id de solicitud duplicado: {legacy_id!r}")
         legados.add(legacy_id)
         numericos.add(rid)
         finding_id = req.get("finding_id")
@@ -756,17 +757,18 @@ def _v3_snapshot(data):
     for recibo in data.get("receipts") or []:
         cid = recibo.get("command_id") if isinstance(recibo, dict) else None
         efecto = recibo.get("effect") if isinstance(recibo, dict) else None
-        if (
-            not isinstance(recibo, dict)
-            or not isinstance(cid, int)
-            or isinstance(cid, bool)
-            or cid < 1
-            or cid in comandos
-            or cid > cursor
-            or not isinstance(efecto, str)
-            or not efecto
-        ):
-            raise _SchemaError("recibo inválido")
+        if not isinstance(recibo, dict):
+            raise _SchemaError("recibo no es un objeto")
+        if not isinstance(cid, int) or isinstance(cid, bool) or cid < 1:
+            raise _SchemaError("command_id de recibo debe ser entero >= 1")
+        if cid in comandos:
+            raise _SchemaError(f"command_id de recibo duplicado: {cid}")
+        if cid > cursor:
+            raise _SchemaError(
+                f"command_id de recibo supera command_cursor ({cid} > {cursor})"
+            )
+        if not isinstance(efecto, str) or not efecto:
+            raise _SchemaError("effect de recibo vacío")
         comandos.add(cid)
         recibos.append(Receipt(command_id=cid, effect=efecto))
     return Snapshot(
@@ -820,6 +822,51 @@ def read_snapshot(body, *, last=False):
         return Invalid(f"schema desconocido: {schema!r}")
     raw = legacy_raw_of(data)
     return Legacy(snapshot=_migrate_legacy(raw), raw=raw, block=found_block)
+
+
+def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
+    """Descarta hallazgos ABIERTOS por comando (escritor compatible, T04).
+
+    El command_id de cada descarte es el id del comentario que lo ordenó: el
+    cursor es la marca de agua de comentarios procesados y no lo toca (si no,
+    "descartar todo" inflaría el cursor y se tragaría comandos posteriores).
+    En schema 3 deja UN recibo por comando. Sin ids ni `todos` devuelve el
+    snapshot intacto.
+    """
+    if not ids and not todos:
+        return snapshot
+    hallazgos = list(snapshot.findings)
+    descartados = []
+    for i, f in enumerate(hallazgos):
+        if not isinstance(f.status, StatusOpen):
+            continue
+        if not todos and f.id not in ids:
+            continue
+        hallazgos[i] = replace(f, status=StatusDismissed(command_id=comment_id))
+        descartados.append(f.id)
+    if not descartados:
+        return snapshot
+    recibos = list(snapshot.receipts)
+    if snapshot.schema == 3:
+        efecto = (
+            f"descartar todo: {', '.join(sorted(descartados))}"
+            if todos
+            else f"descartados por comando: {', '.join(sorted(descartados))}"
+        )
+        recibos.append(Receipt(command_id=comment_id, effect=efecto))
+    return replace(snapshot, findings=hallazgos, receipts=tuple(recibos))
+
+
+def avanzar_cursor(snapshot, seen):
+    """El cursor de comentarios no retrocede (idempotencia de comandos)."""
+    if seen <= snapshot.command_cursor:
+        return snapshot
+    return replace(snapshot, command_cursor=seen)
+
+
+def hallazgos_legacy(snapshot):
+    """El estado en formato legado (dicts) para el comentario publicado."""
+    return _legacy_raw_of_snapshot(snapshot)["findings"]
 
 
 def snapshot_a_v3(snapshot):
