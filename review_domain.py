@@ -1164,6 +1164,18 @@ class Observation:
 
 
 @dataclass
+class ObservationRejected:
+    """Entrada del modelo con forma inválida: error tipado, sin excepción.
+
+    Nace en `observation_de_entrada` (rango corto, no numérico, booleano o
+    invertido; línea no entera) y `validar_reporte` la aparta en
+    `rechazadas_forma`: no crea hallazgos y no confirma cobertura.
+    """
+
+    motivo: str
+
+
+@dataclass
 class MatchExisting:
     id: str
 
@@ -1185,6 +1197,10 @@ class RepositoryFacts:
     El dominio no ejecuta comandos: recibe la revisión, el delta real,
     correspondencias de renombres confirmadas (pares ruta_nueva -> ruta_vieja)
     y los blobs ya leídos (por (ruta, blob_sha)) para validar las citas.
+    `changed_paths` es el delta real entre revisiones cuando el adaptador
+    puede calcularlo; `omissions` lista omisiones obligatorias (delta no
+    calculable, exclusiones, rutas no representables) que degradan la
+    cobertura completa.
     """
 
     revision: Revision | None = None
@@ -1192,6 +1208,25 @@ class RepositoryFacts:
     reverted_paths: tuple = ()
     renames: tuple = ()
     blobs: dict = field(default_factory=dict)
+    omissions: tuple = ()
+
+
+@dataclass
+class ReviewPolicy:
+    """Filtros, presupuestos, digest de reglas y controles de activación.
+
+    `finding_identity` interno: `titles` (coincidencia compatible) o
+    `anchors` (identidad F0).
+    """
+
+    finding_identity: str = "titles"
+    findings_max_count: int = FINDINGS_MAX_COUNT
+    findings_max_bytes: int = FINDINGS_MAX_BYTES
+    rules_digest: str = ""
+    exclude_patterns: tuple = ()
+    allow_inline_comments: bool = False
+    schema_version: int = 2
+    diff_mode: str = "full"
 
 
 @dataclass
@@ -1205,20 +1240,7 @@ class ReviewPlan:
     context_refs: tuple = ()
     exclusions: tuple = ()
     delivered: tuple = ()
-
-
-@dataclass
-class ReviewPolicy:
-    """Filtros, presupuestos, digest de reglas y controles de activación."""
-
-    finding_identity: str = "titles"
-    findings_max_count: int = FINDINGS_MAX_COUNT
-    findings_max_bytes: int = FINDINGS_MAX_BYTES
-    rules_digest: str = ""
-    exclude_patterns: tuple = ()
-    allow_inline_comments: bool = False
-    schema_version: int = 2
-    diff_mode: str = "full"
+    policy: ReviewPolicy | None = None
 
 
 @dataclass
@@ -1235,6 +1257,8 @@ class ValidatedReport:
     claimed_coverage: str = UNKNOWN
     rechazadas: tuple = ()
     coverage: object = None
+    rechazadas_forma: tuple = ()
+    runtime_terminado: bool = True
 
 
 def _ruta_primaria(algo):
@@ -1242,15 +1266,18 @@ def _ruta_primaria(algo):
     return anchor.path if anchor is not None else ""
 
 
-def validar_reporte(observaciones, cobertura, facts):
+def validar_reporte(observaciones, cobertura, facts, runtime_terminado=True):
     """Valida ruta, blob, rango y digest del extracto contra los blobs que el
     adaptador verificó. Una cita que no verifica se rechaza (y no queda como
     evidencia); las afirmaciones sin evidencia comprobable viajan etiquetadas
     aparte como EvidenceUnverified. La ubicación verificada prueba que la cita
     existe, nunca que el diagnóstico sea correcto.
     """
-    observadas, rechazadas = [], []
+    observadas, rechazadas, rechazadas_forma = [], [], []
     for i, obs in enumerate(observaciones):
+        if isinstance(obs, ObservationRejected):
+            rechazadas_forma.append((i, obs.motivo))
+            continue
         primaria, motivo_primaria = _ancla_verificada(obs.primary_anchor, facts)
         if obs.primary_anchor is not None and not isinstance(
             obs.primary_anchor, AnchorLocated
@@ -1291,6 +1318,8 @@ def validar_reporte(observaciones, cobertura, facts):
         observations=observadas,
         claimed_coverage=cobertura,
         rechazadas=tuple(rechazadas),
+        rechazadas_forma=tuple(rechazadas_forma),
+        runtime_terminado=runtime_terminado,
     )
 
 
@@ -1451,6 +1480,21 @@ def match_finding(previous, observation, facts):
     return MatchNew()
 
 
+def _rango_valido(rango):
+    return (
+        isinstance(rango, (list, tuple))
+        and len(rango) == 2
+        and all(isinstance(v, int) and not isinstance(v, bool) for v in rango)
+        and 1 <= rango[0] <= rango[1]
+    )
+
+
+def _linea_valida(linea):
+    return linea is None or (
+        isinstance(linea, int) and not isinstance(linea, bool) and linea >= 1
+    )
+
+
 def observation_de_entrada(entry):
     """Entrada del bloque del modelo -> Observation (transporte puro del canal claim/state).
 
@@ -1460,37 +1504,58 @@ def observation_de_entrada(entry):
     """
     ancla = entry.get("anchor")
     if isinstance(ancla, dict) and ancla.get("blob_sha"):
-        rango = ancla.get("range") or [0, 0]
+        rango = ancla.get("range")
+        if not _rango_valido(rango):
+            return ObservationRejected(
+                motivo=f"ancla primaria: rango inválido {rango!r}"
+            )
         primaria = AnchorLocated(
             path=str(ancla.get("path") or ""),
             blob_sha=str(ancla.get("blob_sha") or ""),
-            range=(int(rango[0]), int(rango[1])),
+            range=(rango[0], rango[1]),
             excerpt_digest=str(ancla.get("excerpt_digest") or ""),
             symbol_hint=ancla.get("symbol_hint"),
         )
     elif isinstance(ancla, dict):
-        primaria = AnchorLegacy(
-            path=str(ancla.get("path") or ""), line=ancla.get("line")
-        )
+        linea = ancla.get("line")
+        if not _linea_valida(linea):
+            return ObservationRejected(
+                motivo=f"ancla primaria legada: línea inválida {linea!r}"
+            )
+        primaria = AnchorLegacy(path=str(ancla.get("path") or ""), line=linea)
     else:
+        linea = entry.get("line")
+        if not _linea_valida(linea):
+            return ObservationRejected(motivo=f"línea inválida {linea!r}")
         primaria = AnchorLegacy(
             path=str(entry.get("file") or ""), line=entry.get("line")
         )
     relacionadas = []
     for a in entry.get("related_anchors", []) or []:
         if isinstance(a, dict) and a.get("blob_sha"):
-            r = a.get("range") or [0, 0]
+            r = a.get("range")
+            if not _rango_valido(r):
+                return ObservationRejected(
+                    motivo=f"ancla relacionada: rango inválido {r!r}"
+                )
             relacionadas.append(
                 AnchorLocated(
                     path=str(a.get("path") or ""),
                     blob_sha=str(a.get("blob_sha") or ""),
-                    range=(int(r[0]), int(r[1])),
+                    range=(r[0], r[1]),
                     excerpt_digest=str(a.get("excerpt_digest") or ""),
                 )
             )
         elif isinstance(a, dict):
-            relacionadas.append(
-                AnchorLegacy(path=str(a.get("path") or ""), line=a.get("line"))
+            linea = a.get("line")
+            if not _linea_valida(linea):
+                return ObservationRejected(
+                    motivo=f"ancla relacionada legada: línea inválida {linea!r}"
+                )
+            relacionadas.append(AnchorLegacy(path=str(a.get("path") or ""), line=linea))
+        else:
+            return ObservationRejected(
+                motivo=f"ancla relacionada sin estructura válida: {a!r}"
             )
     evidencia = [
         EvidenceUnverified(text=str(ev.get("text") or ""))
@@ -1526,6 +1591,29 @@ def _cambio_pertinente(finding, cambiadas):
     return bool(rutas & set(cambiadas))
 
 
+def _cobertura_persistida(report, plan):
+    """La cobertura completa exige reporte válido, runtime terminado, sin
+    omisiones obligatorias, obligaciones entregadas y claim completo del
+    modelo; faltante, conserva `partial` o `unknown`.
+    """
+    if report.rechazadas_forma:
+        return UNKNOWN
+    claim = report.claimed_coverage
+    if claim in ("complete", COMPLETE_CLAIM):
+        resultado = COMPLETE_CLAIM
+    elif claim in ("partial", PARTIAL):
+        resultado = PARTIAL
+    else:
+        return UNKNOWN
+    if (
+        not report.runtime_terminado
+        or getattr(report.facts, "omissions", ())
+        or set(plan.obligations) - set(plan.delivered)
+    ):
+        return PARTIAL
+    return resultado
+
+
 def accept_report(current, plan, report):
     """Acepta el reporte validado y devuelve la Transition del estado.
 
@@ -1540,7 +1628,11 @@ def accept_report(current, plan, report):
         return Keep(reason="el reconocimiento de identidad requiere estado v2 o v3")
     facts = report.facts
     revertidas = set(facts.reverted_paths)
-    cambiadas = set(plan.changed_paths) | revertidas
+    # el delta real del adaptador manda; `plan.changed_paths` conserva a los
+    # callers directos del dominio que aún no llenan hechos
+    cambiadas = (
+        set(facts.changed_paths) if facts.changed_paths else set(plan.changed_paths)
+    ) | revertidas
     findings = list(current.findings)
     por_id = {f.id: f for f in findings if f.id}
     tocados, next_id = set(), current.next_id
@@ -1660,13 +1752,7 @@ def accept_report(current, plan, report):
                 ),
             )
     findings.sort(key=lambda f: finding_number(f.id) or 0)
-    cobertura = report.claimed_coverage
-    if cobertura in ("complete", COMPLETE_CLAIM):
-        completion = COMPLETE_CLAIM
-    elif cobertura in ("partial", PARTIAL):
-        completion = PARTIAL
-    else:
-        completion = UNKNOWN
+    completion = _cobertura_persistida(report, plan)
     return Replace(
         snapshot=replace(
             current,
