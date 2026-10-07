@@ -55,11 +55,10 @@ jobs:
           python review.py execute-request \
             --request-id "${{ inputs.request_id }}" \
             --work "${RUNNER_TEMP}/ai-review"
-      - name: traer el PR como datos
+      - name: traer el PR como objetos
         run: |
           git fetch --no-tags origin "+${{ inputs.head_sha }}:refs/ai-review/head"
           git fetch --no-tags origin "${{ inputs.base_sha }}"
-          git checkout --detach "refs/ai-review/head"
       - name: preparar contexto
         env:
           HEAD_SHA: ${{ inputs.head_sha }}

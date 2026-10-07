@@ -2078,8 +2078,6 @@ class Workflows(unittest.TestCase):
     def test_los_pasos_del_worker_parsean_contra_el_argparse_y_reciben_sus_variables(
         self,
     ):
-        """B3 r3: cada línea python de la plantilla la acepta el argparse real
-        del CLI y su paso lleva las variables que el comando exige."""
         pasos = self._pasos()
         revisados = 0
         for nombre, paso in pasos.items():
@@ -2131,8 +2129,6 @@ class Workflows(unittest.TestCase):
             yield repo, base, head
 
     def test_las_lineas_del_worker_ejecutan_contra_el_cli_real(self):
-        """B3 r3: execute-request, prepare y run corren de verdad con el env de
-        su paso y result.json termina fusionado en el paquete."""
         import review_domain as domain
 
         pasos = self._pasos()
@@ -2221,6 +2217,88 @@ class Workflows(unittest.TestCase):
                 fusion = json.loads((Path(work) / "result.json").read_text())
                 self.assertEqual(fusion["result"], "texto de revisión")
                 self.assertEqual(fusion["subtype"], "success")
+
+    @contextlib.contextmanager
+    def _repo_con_worker_sandbox(self):
+        with (
+            tempfile.TemporaryDirectory() as origen,
+            tempfile.TemporaryDirectory() as ws,
+        ):
+
+            def git(repo, *args):
+                return subprocess.run(
+                    ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+                )
+
+            git(origen, "init", "-q", "-b", "main")
+            git(origen, "config", "user.email", "prueba@example.com")
+            git(origen, "config", "user.name", "Prueba")
+            git(origen, "config", "uploadpack.allowAnySHA1InWant", "true")
+            for nombre in ("review.py", "review_domain.py", "prompt.md"):
+                shutil.copy(ROOT / nombre, Path(origen) / nombre)
+            (Path(origen) / "README.md").write_text("base\n")
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "m1")
+            b2 = git(origen, "rev-parse", "HEAD").stdout.strip()
+            git(origen, "checkout", "-qb", "feature")
+            (Path(origen) / "README.md").write_text("base avanzada\n")
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "b4")
+            base = git(origen, "rev-parse", "HEAD").stdout.strip()
+            git(origen, "checkout", "-qb", "pr", b2)
+            (Path(origen) / "app.py").write_text("modulo = 1\n")
+            (Path(origen) / "review.py").write_text(
+                "from pathlib import Path\n\n"
+                'Path(__file__).with_name("PR-EJECUTO-CODIGO").write_text("x")\n'
+            )
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "h3")
+            head = git(origen, "rev-parse", "HEAD").stdout.strip()
+            merge_base = git(origen, "merge-base", base, head).stdout.strip()
+            git(origen, "checkout", "-q", "main")
+            git(ws, "clone", "-q", "--depth", "1", f"file://{origen}", ".")
+            yield ws, base, head, merge_base
+
+    def test_el_worker_nunca_ejecuta_codigo_del_pr(self):
+        pasos = self._pasos()
+        lineas_fetch = [
+            linea.strip()
+            for linea in pasos["traer el PR como objetos"]["run"].splitlines()
+            if linea.strip()
+        ]
+        self.assertTrue(lineas_fetch)
+        with self._repo_con_worker_sandbox() as (ws, base, head, merge_base):
+            valores = {"inputs": {"head_sha": head, "base_sha": base}}
+            evento = Path(ws) / "event.json"
+            evento.write_text("{}")
+            env = dict(os.environ)
+            for clave, valor in pasos["preparar contexto"]["env"].items():
+                env[clave] = self._render(valor, valores)
+            env["GITHUB_EVENT_PATH"] = str(evento)
+            for linea in lineas_fetch:
+                subprocess.run(
+                    ["bash", "-c", self._render(linea, valores)], cwd=ws, check=True
+                )
+            subprocess.run(
+                [
+                    sys.executable,
+                    "review.py",
+                    "prepare",
+                    "--work",
+                    str(Path(ws) / "work"),
+                ],
+                cwd=ws,
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+            self.assertFalse(
+                (Path(ws) / "PR-EJECUTO-CODIGO").exists(),
+                "el worker ejecutó el review.py del PR",
+            )
+            manifest = json.loads((Path(ws) / "work" / "manifest.json").read_text())
+            self.assertEqual(manifest["base"], merge_base)
+            self.assertEqual(set(manifest["reviewed"]), {"app.py", "review.py"})
 
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []
