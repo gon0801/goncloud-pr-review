@@ -2798,7 +2798,7 @@ def cmd_publish(args):
             fh.write(summary_text + "\n")
 
 
-def main():
+def _parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
@@ -2818,7 +2818,11 @@ def main():
         default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"),
     )
     parser.add_argument("--prompt", default=str(Path(__file__).with_name("prompt.md")))
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = _parser().parse_args()
     {
         "gate": cmd_gate,
         "prepare": cmd_prepare,
@@ -2888,6 +2892,8 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
         f"pr_number={pr_number}",
         "-f",
         f"head_sha={solicitud.target.get('head_sha', '')}",
+        "-f",
+        f"base_sha={solicitud.target.get('base_sha', '')}",
         "-f",
         f"coordinator_run_id={run_id}",
     )

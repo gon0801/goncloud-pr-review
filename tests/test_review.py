@@ -3,6 +3,8 @@ import contextlib
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1939,7 +1941,7 @@ class Workflows(unittest.TestCase):
     def test_coordinator_exporta_y_worker_recibe_lo_mismo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
-        for input_requerido in ("request_id", "pr_number", "head_sha"):
+        for input_requerido in ("request_id", "pr_number", "head_sha", "base_sha"):
             self.assertIn(f"{input_requerido}:", worker)
         self.assertIn("WORKER_REF=", publish, "el despacho necesita la ref confiable")
 
@@ -1963,41 +1965,283 @@ class Workflows(unittest.TestCase):
             self.coord_texto,
         )
 
-    def test_grupo_y_pr_number_del_workflow_run_vienen_del_titulo(self):
-        """B2 r2: el worker se identifica con su PR; el grupo no cae al run id."""
+    def _render(self, plantilla, contexto):
+        def resuelve(expr):
+            for alternativa in expr.split("||"):
+                valor = contexto
+                for campo in alternativa.strip().split("."):
+                    valor = valor.get(campo) if isinstance(valor, dict) else None
+                if valor not in (None, "", False, 0):
+                    return str(valor)
+            return ""
+
+        return re.sub(
+            r"\$\{\{\s*(.+?)\s*\}\}", lambda m: resuelve(m.group(1)), plantilla
+        )
+
+    def test_grupo_y_pr_number_se_evaluan_igual_que_en_pull_request_target(self):
+        """B2 r3: el display_title del worker es el número del PR, así el
+        grupo y PR_NUMBER del workflow_run evalúan igual que en pull_request_target."""
+        run_name = next(
+            linea.split("run-name: ", 1)[1]
+            for linea in self.worker_lineas
+            if linea.startswith("run-name:")
+        )
+        valores = {"pr_number": "12", "request_id": "3"}
+        titulo = re.sub(
+            r"\$\{\{\s*inputs\.(\w+)\s*\}\}",
+            lambda m: valores[m.group(1)],
+            run_name,
+        )
+        self.assertEqual(titulo, "12", "el display_title del worker es el número")
+        repo = "gon0801/repo"
+        ctx_pr = {
+            "github": {
+                "repository": repo,
+                "event": {
+                    "pull_request": {"number": 12},
+                    "issue": {},
+                    "inputs": {},
+                    "workflow_run": {},
+                },
+            }
+        }
+        ctx_wr = {
+            "github": {
+                "repository": repo,
+                "event": {
+                    "pull_request": {},
+                    "issue": {},
+                    "inputs": {},
+                    "workflow_run": {"display_title": titulo},
+                },
+            }
+        }
         grupo = next(
-            linea
+            linea.strip()
             for linea in self.coord_lineas
             if linea.strip().startswith("group: ai-review-")
         )
-        self.assertIn("display_title", grupo)
+        self.assertEqual(
+            self._render(grupo, ctx_wr),
+            self._render(grupo, ctx_pr),
+            "el grupo del resultado del worker es el mismo grupo del PR",
+        )
         self.assertNotIn("workflow_run.id", grupo)
-        export_pr = next(
-            linea
+        exportado = next(
+            linea.strip()
             for linea in self.coord_lineas
             if linea.strip().startswith('echo "PR_NUMBER=')
         )
-        self.assertIn("display_title", export_pr)
-        self.assertNotIn("workflow_run.pull_requests", export_pr)
-        self.assertRegex(self.worker_texto, r"run-name:.*inputs\.pr_number")
+        pr_number = self._render(exportado, ctx_wr).split("PR_NUMBER=", 1)[1].strip('"')
+        self.assertEqual(int(pr_number), 12, "PR_NUMBER del workflow_run es el número")
 
-    def test_worker_ejecuta_el_runtime_y_produce_result(self):
-        """B3 r2: prepare/run con el PR como datos; result.json para el coordinador."""
-        self.assertIn("review.py execute-request", self.worker_texto)
-        self.assertIn("review.py prepare", self.worker_texto)
-        self.assertIn("review.py run", self.worker_texto)
-        self.assertIn("result.json", self.worker_texto)
-        self.assertIn("--tools", self.worker_texto)
-        self.assertIn("Read,Grep,Glob", self.worker_texto)
-        paso_modelo = self.worker_texto.split("name: modelo")[1].split("- name:")[0]
-        self.assertNotIn("GITHUB_TOKEN", paso_modelo)
-        self.assertNotIn("GH_TOKEN", paso_modelo)
+    PASOS_Y_VARIABLES = {
+        "execute-request": {
+            "REPO",
+            "PR_NUMBER",
+            "HEAD_SHA",
+            "BASE_SHA",
+            "GITHUB_TOKEN",
+        },
+        "prepare": {"HEAD_SHA", "BASE_SHA"},
+        "run": {"API_KEY", "FALLBACK_API_KEY", "REPO", "PR_NUMBER"},
+    }
 
-    def test_execute_request_arma_el_paquete_con_plan(self):
-        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+    def _pasos(self):
+        pasos, nombre, en_run = {}, None, False
+        for linea in self.worker_lineas:
+            inicio = re.match(r"^      - name: (.+)$", linea)
+            if inicio:
+                nombre, en_run = inicio.group(1), False
+                pasos[nombre] = {"env": {}, "run": ""}
+                continue
+            if nombre is None:
+                continue
+            if re.match(r"^        run:", linea):
+                en_run = True
+                en_linea = linea[len("        run:") :].strip()
+                if en_linea and en_linea != "|":
+                    pasos[nombre]["run"] += en_linea + "\n"
+                continue
+            if en_run:
+                if linea.startswith("          "):
+                    pasos[nombre]["run"] += linea[10:] + "\n"
+                else:
+                    en_run = False
+                continue
+            clave = re.match(r"^          ([A-Z_]+): (.*)$", linea)
+            if clave:
+                pasos[nombre]["env"][clave.group(1)] = clave.group(2).strip().strip('"')
+        return pasos
+
+    def test_los_pasos_del_worker_parsean_contra_el_argparse_y_reciben_sus_variables(
+        self,
+    ):
+        """B3 r3: cada línea python de la plantilla la acepta el argparse real
+        del CLI y su paso lleva las variables que el comando exige."""
+        pasos = self._pasos()
+        revisados = 0
+        for nombre, paso in pasos.items():
+            comandos = [
+                linea
+                for linea in re.sub(r"\\\s*\n\s*", " ", paso["run"]).splitlines()
+                if linea.startswith("python review.py ")
+            ]
+            for comando in comandos:
+                tokens = shlex.split(comando)[2:]
+                with self.subTest(paso=nombre, comando=comando):
+                    try:
+                        review._parser().parse_args(tokens)
+                    except SystemExit as error:
+                        self.fail(
+                            f"argparse rechaza la línea del paso '{nombre}': {error}"
+                        )
+                    requeridas = self.PASOS_Y_VARIABLES[tokens[0]]
+                    faltan = requeridas - set(paso["env"])
+                    self.assertEqual(
+                        faltan, set(), f"al paso '{nombre}' le faltan variables"
+                    )
+                    if tokens[0] == "run":
+                        for credencial in ("GITHUB_TOKEN", "GH_TOKEN"):
+                            self.assertNotIn(credencial, paso["env"])
+                    revisados += 1
+        self.assertEqual(revisados, 3)
+
+    @contextlib.contextmanager
+    def _repo_minimo(self):
+        with tempfile.TemporaryDirectory() as repo:
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+                )
+
+            git("init", "-q", "-b", "main")
+            git("config", "user.email", "prueba@example.com")
+            git("config", "user.name", "Prueba")
+            (Path(repo) / "README.md").write_text("base\n")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD").stdout.strip()
+            (Path(repo) / "app.py").write_text("x = 1\n")
+            git("add", "-A")
+            git("commit", "-qm", "cambio")
+            head = git("rev-parse", "HEAD").stdout.strip()
+            yield repo, base, head
+
+    def test_las_lineas_del_worker_ejecutan_contra_el_cli_real(self):
+        """B3 r3: execute-request, prepare y run corren de verdad con el env de
+        su paso y result.json termina fusionado en el paquete."""
         import review_domain as domain
 
-        estado = domain.Snapshot(
+        pasos = self._pasos()
+        estado = self._snapshot_con_solicitud()
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        with self._repo_minimo() as (repo, base, head):
+            valores = {
+                "inputs": {
+                    "request_id": "1",
+                    "pr_number": "12",
+                    "head_sha": head,
+                    "base_sha": base,
+                    "coordinator_run_id": "55",
+                },
+                "github": {"repository": "o/r"},
+                "secrets": {},
+            }
+
+            def env_de(paso, extra):
+                env = {
+                    clave: self._render(valor, valores)
+                    for clave, valor in pasos[paso]["env"].items()
+                }
+                env.update(extra)
+                return env
+
+            with tempfile.TemporaryDirectory() as work:
+                with mock.patch.dict(
+                    os.environ,
+                    env_de(
+                        "preparar solicitud y paquete",
+                        {
+                            "GITHUB_RUN_ID": "55",
+                            "GITHUB_RUN_ATTEMPT": "2",
+                            "BOT_LOGIN": "bot",
+                        },
+                    ),
+                    clear=False,
+                ):
+                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=work, request_id="1")
+                        )
+                paquete = json.loads((Path(work) / "request-package.json").read_text())
+                self.assertEqual(
+                    paquete["plan"],
+                    {"mode": "full", "head_sha": head, "base_sha": base},
+                    "execute-request recibe el BASE_SHA real del paso",
+                )
+                evento = Path(work) / "event.json"
+                evento.write_text(
+                    json.dumps({"pull_request": {"title": "t", "body": "b"}})
+                )
+                with contextlib.chdir(repo):
+                    with mock.patch.dict(
+                        os.environ,
+                        env_de("preparar contexto", {"GITHUB_EVENT_PATH": str(evento)}),
+                        clear=False,
+                    ):
+                        review.cmd_prepare(
+                            argparse.Namespace(
+                                work=work, prompt=str(ROOT / "prompt.md")
+                            )
+                        )
+                manifest = json.loads((Path(work) / "manifest.json").read_text())
+                self.assertEqual(
+                    manifest["base"], base, "el merge-base sale de SHAs reales"
+                )
+                self.assertEqual(manifest["reviewed"], ["app.py"])
+                with mock.patch.dict(os.environ, env_de("modelo", {}), clear=False):
+                    with self.assertRaises(SystemExit):
+                        review.cmd_run(argparse.Namespace(work=work))
+                resultado = json.loads((Path(work) / "result.json").read_text())
+                self.assertIn(
+                    review.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
+                )
+                (Path(work) / "result.json").write_text(
+                    json.dumps({"result": "texto de revisión", "subtype": "success"})
+                )
+                cierre = pasos["cerrar el resultado para el coordinador"]["run"]
+                heredoc = re.search(r"<<'PY'\n(.*?)\nPY", cierre, re.S).group(1)
+                with mock.patch.object(sys, "argv", ["python", work]):
+                    exec(compile(heredoc, "cierre", "exec"), {})
+                fusion = json.loads((Path(work) / "result.json").read_text())
+                self.assertEqual(fusion["result"], "texto de revisión")
+                self.assertEqual(fusion["subtype"], "success")
+
+    def test_el_despacho_pasa_base_sha_al_worker(self):
+        capturado = []
+
+        def sh_falso(*args, **kw):
+            capturado.append(args)
+            return mock.Mock(returncode=0, stdout="")
+
+        solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
+        with mock.patch.object(review, "sh", sh_falso):
+            review.despachar_worker(
+                solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
+            )
+        self.assertIn("head_sha=" + "c" * 40, capturado[0])
+        self.assertIn("base_sha=" + "b" * 40, capturado[0])
+
+    @classmethod
+    def _snapshot_con_solicitud(cls):
+        import review_domain as domain
+
+        return domain.Snapshot(
             schema=3,
             generation=2,
             revision=domain.Revision(
@@ -2026,6 +2270,12 @@ class Workflows(unittest.TestCase):
             ],
             request_count=1,
         )
+
+    def test_execute_request_arma_el_paquete_con_plan(self):
+        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+        import review_domain as domain
+
+        estado = self._snapshot_con_solicitud()
         cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
         comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
         falso = mock.Mock()
