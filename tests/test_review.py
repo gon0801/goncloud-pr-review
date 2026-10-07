@@ -2054,7 +2054,7 @@ class Workflows(unittest.TestCase):
             inicio = re.match(r"^      - name: (.+)$", linea)
             if inicio:
                 nombre, en_run = inicio.group(1), False
-                pasos[nombre] = {"env": {}, "run": ""}
+                pasos[nombre] = {"env": {}, "run": "", "cwd": ""}
                 continue
             if nombre is None:
                 continue
@@ -2070,6 +2070,10 @@ class Workflows(unittest.TestCase):
                 else:
                     en_run = False
                 continue
+            directorio = re.match(r"^        working-directory: (.+)$", linea)
+            if directorio:
+                pasos[nombre]["cwd"] = directorio.group(1).strip()
+                continue
             clave = re.match(r"^          ([A-Z_]+): (.*)$", linea)
             if clave:
                 pasos[nombre]["env"][clave.group(1)] = clave.group(2).strip().strip('"')
@@ -2084,18 +2088,22 @@ class Workflows(unittest.TestCase):
             comandos = [
                 linea
                 for linea in re.sub(r"\\\s*\n\s*", " ", paso["run"]).splitlines()
-                if linea.startswith("python review.py ")
+                if linea.startswith("python ") and "review.py" in linea
             ]
             for comando in comandos:
-                tokens = shlex.split(comando)[2:]
+                tokens = shlex.split(comando)
+                script = next(
+                    i for i, token in enumerate(tokens) if token.endswith("review.py")
+                )
+                argumentos = tokens[script + 1 :]
                 with self.subTest(paso=nombre, comando=comando):
                     try:
-                        review._parser().parse_args(tokens)
+                        review._parser().parse_args(argumentos)
                     except SystemExit as error:
                         self.fail(
                             f"argparse rechaza la línea del paso '{nombre}': {error}"
                         )
-                    requeridas = self.PASOS_Y_VARIABLES[tokens[0]]
+                    requeridas = self.PASOS_Y_VARIABLES[argumentos[0]]
                     faltan = requeridas - set(paso["env"])
                     self.assertEqual(
                         faltan, set(), f"al paso '{nombre}' le faltan variables"
@@ -2236,6 +2244,7 @@ class Workflows(unittest.TestCase):
             git(origen, "config", "uploadpack.allowAnySHA1InWant", "true")
             for nombre in ("review.py", "review_domain.py", "prompt.md"):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
+            (Path(origen) / "app.py").write_text("def total(a, b):\n    return a + b\n")
             (Path(origen) / "README.md").write_text("base\n")
             git(origen, "add", "-A")
             git(origen, "commit", "-qm", "m1")
@@ -2246,7 +2255,10 @@ class Workflows(unittest.TestCase):
             git(origen, "commit", "-qm", "b4")
             base = git(origen, "rev-parse", "HEAD").stdout.strip()
             git(origen, "checkout", "-qb", "pr", b2)
-            (Path(origen) / "app.py").write_text("modulo = 1\n")
+            (Path(origen) / "app.py").write_text(
+                "def total(a, b):\n    return a - b  # bug del PR\n"
+            )
+            (Path(origen) / "nuevo.py").write_text("SECRETO = 'archivo nuevo del PR'\n")
             (Path(origen) / "review.py").write_text(
                 "from pathlib import Path\n\n"
                 'Path(__file__).with_name("PR-EJECUTO-CODIGO").write_text("x")\n'
@@ -2261,44 +2273,91 @@ class Workflows(unittest.TestCase):
 
     def test_el_worker_nunca_ejecuta_codigo_del_pr(self):
         pasos = self._pasos()
+        traer = pasos["traer el PR como datos"]
         lineas_fetch = [
-            linea.strip()
-            for linea in pasos["traer el PR como objetos"]["run"].splitlines()
-            if linea.strip()
+            linea.strip() for linea in traer["run"].splitlines() if linea.strip()
         ]
         self.assertTrue(lineas_fetch)
         with self._repo_con_worker_sandbox() as (ws, base, head, merge_base):
-            valores = {"inputs": {"head_sha": head, "base_sha": base}}
+            ws = Path(ws)
+            valores = {
+                "github": {"workspace": ws, "repository": "o/r"},
+                "secrets": {},
+                "inputs": {
+                    "request_id": "1",
+                    "pr_number": "12",
+                    "head_sha": head,
+                    "base_sha": base,
+                    "coordinator_run_id": "55",
+                },
+            }
             evento = Path(ws) / "event.json"
             evento.write_text("{}")
-            env = dict(os.environ)
-            for clave, valor in pasos["preparar contexto"]["env"].items():
-                env[clave] = self._render(valor, valores)
-            env["GITHUB_EVENT_PATH"] = str(evento)
             for linea in lineas_fetch:
                 subprocess.run(
-                    ["bash", "-c", self._render(linea, valores)], cwd=ws, check=True
+                    ["bash", "-c", self._render(linea, valores)],
+                    cwd=ws,
+                    check=True,
+                    capture_output=True,
                 )
-            subprocess.run(
-                [
-                    sys.executable,
-                    "review.py",
-                    "prepare",
-                    "--work",
-                    str(Path(ws) / "work"),
-                ],
-                cwd=ws,
-                env=env,
-                check=True,
-                capture_output=True,
-            )
+            arbol_modelo = (
+                ws / self._render(pasos["modelo"].get("cwd", "."), valores)
+            ).resolve()
+
+            def correr(paso):
+                env = dict(os.environ)
+                shim = ws / "bin"
+                shim.mkdir(exist_ok=True)
+                if not (shim / "python").exists():
+                    os.symlink(sys.executable, shim / "python")
+                env.update(
+                    {
+                        "GITHUB_WORKSPACE": str(ws),
+                        "RUNNER_TEMP": str(Path(ws) / "runner-temp"),
+                        "GITHUB_EVENT_PATH": str(evento),
+                        "PATH": f"{shim}:{env['PATH']}",
+                    }
+                )
+                for clave, valor in paso["env"].items():
+                    env[clave] = self._render(valor, valores)
+                return subprocess.run(
+                    ["bash", "-c", re.sub(r"\\\s*\n\s*", " ", paso["run"])],
+                    cwd=arbol_modelo,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+
+            preparado = correr(pasos["preparar contexto"])
+            self.assertEqual(preparado.returncode, 0, preparado.stderr)
+            corrido = correr(pasos["modelo"])
+            self.assertEqual(corrido.returncode, 0, corrido.stderr)
             self.assertFalse(
-                (Path(ws) / "PR-EJECUTO-CODIGO").exists(),
+                (ws / "PR-EJECUTO-CODIGO").exists(),
                 "el worker ejecutó el review.py del PR",
             )
-            manifest = json.loads((Path(ws) / "work" / "manifest.json").read_text())
+            self.assertFalse(
+                (arbol_modelo / "PR-EJECUTO-CODIGO").exists(),
+                "el worker ejecutó el review.py del PR",
+            )
+            manifest = json.loads(
+                (Path(ws) / "runner-temp" / "ai-review" / "manifest.json").read_text()
+            )
             self.assertEqual(manifest["base"], merge_base)
-            self.assertEqual(set(manifest["reviewed"]), {"app.py", "review.py"})
+            self.assertIn(
+                "return a - b",
+                (arbol_modelo / "app.py").read_text(),
+                "el árbol del modelo tiene la versión del PR",
+            )
+            self.assertTrue(
+                (arbol_modelo / "nuevo.py").exists(),
+                "los archivos nuevos del PR existen para el modelo",
+            )
+
+    def test_el_artifact_usa_runner_temp_de_github(self):
+        paso = self.worker_texto.split("name: subir resultado como datos")[1]
+        self.assertIn('path: "${{ runner.temp }}/ai-review"', paso)
+        self.assertNotIn("RUNNER_TEMP", paso)
 
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []

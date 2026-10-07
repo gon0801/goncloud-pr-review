@@ -52,26 +52,29 @@ jobs:
           BASE_SHA: ${{ inputs.base_sha }}
         run: |
           mkdir -p "${RUNNER_TEMP}/ai-review"
-          python review.py execute-request \
+          python "$GITHUB_WORKSPACE/review.py" execute-request \
             --request-id "${{ inputs.request_id }}" \
             --work "${RUNNER_TEMP}/ai-review"
-      - name: traer el PR como objetos
+      - name: traer el PR como datos
         run: |
           git fetch --no-tags origin "+${{ inputs.head_sha }}:refs/ai-review/head"
           git fetch --no-tags origin "${{ inputs.base_sha }}"
+          git worktree add --detach pr refs/ai-review/head
       - name: preparar contexto
+        working-directory: pr
         env:
           HEAD_SHA: ${{ inputs.head_sha }}
           BASE_SHA: ${{ inputs.base_sha }}
           MAX_DIFF_BYTES: "1500000"
-        run: python review.py prepare --work "${RUNNER_TEMP}/ai-review"
+        run: python "$GITHUB_WORKSPACE/review.py" prepare --work "${RUNNER_TEMP}/ai-review"
       - name: modelo
+        working-directory: pr
         env:
           API_KEY: ${{ secrets.API_KEY }}
           FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
-        run: python review.py run --work "${RUNNER_TEMP}/ai-review"
+        run: python "$GITHUB_WORKSPACE/review.py" run --work "${RUNNER_TEMP}/ai-review"
       - name: cerrar el resultado para el coordinador
         run: |
           python - "${RUNNER_TEMP}/ai-review" <<'PY'
@@ -87,5 +90,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-review-result-request-${{ inputs.request_id }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: "${RUNNER_TEMP}/ai-review"
+          path: "${{ runner.temp }}/ai-review"
           retention-days: 7
