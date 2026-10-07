@@ -2802,8 +2802,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=["gate", "prepare", "install", "run", "publish", "reconcile"],
+        choices=[
+            "gate",
+            "prepare",
+            "install",
+            "run",
+            "publish",
+            "reconcile",
+            "execute-request",
+        ],
     )
+    parser.add_argument("--request-id", default="")
     parser.add_argument(
         "--work",
         default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"),
@@ -2817,6 +2826,7 @@ def main():
         "run": cmd_run,
         "publish": cmd_publish,
         "reconcile": cmd_reconcile,
+        "execute-request": cmd_execute_request,
     }[args.command](args)
 
 
@@ -2862,7 +2872,7 @@ class ComentariosGh:
             Path(ruta).unlink(missing_ok=True)
 
 
-def despachar_worker(solicitud, *, repo, ref, run_id):
+def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
     sh(
         "gh",
         "workflow",
@@ -2875,9 +2885,11 @@ def despachar_worker(solicitud, *, repo, ref, run_id):
         "-f",
         f"request_id={solicitud.id}",
         "-f",
-        f"coordinator_run_id={run_id}",
+        f"pr_number={pr_number}",
         "-f",
-        f"comment_login={os.environ.get('BOT_LOGIN') or 'github-actions[bot]'}",
+        f"head_sha={solicitud.target.get('head_sha', '')}",
+        "-f",
+        f"coordinator_run_id={run_id}",
     )
 
 
@@ -2966,8 +2978,7 @@ def _comandos_de_comentarios(comentarios, login, cursor):
 
 
 def cmd_reconcile(args):
-    repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
-    base = env("BASE_SHA")
+    repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     policy = politica_de_revision()
@@ -2982,6 +2993,16 @@ def cmd_reconcile(args):
             file=sys.stderr,
         )
         return
+    head = os.environ.get("HEAD_SHA") or (
+        current.revision.head_sha if current.revision else ""
+    )
+    base = os.environ.get("BASE_SHA") or (
+        current.revision.base_sha if current.revision else ""
+    )
+    if not head or not base:
+        sys.exit(
+            "ai-review: faltan HEAD_SHA/BASE_SHA y el checkpoint no tiene revisión"
+        )
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     facts = review_domain.RepositoryFacts(
         revision=review_domain.Revision(
@@ -3105,7 +3126,7 @@ def cmd_reconcile(args):
         dispatch_confirmed(
             resultado,
             despachar=lambda s: despachar_worker(
-                s, repo=repo, ref=worker_ref, run_id=_run_id()
+                s, repo=repo, ref=worker_ref, run_id=_run_id(), pr_number=pr
             ),
         )
         print(
@@ -3113,6 +3134,53 @@ def cmd_reconcile(args):
         )
     else:
         print("ai-review: checkpoint publicado sin trabajo nuevo")
+
+
+def cmd_execute_request(args):
+    """Lee la solicitud persistida y escribe el paquete de datos para el
+    artifact. Nunca publica ni ejecuta contenido del PR."""
+    repo, pr = env("REPO"), env("PR_NUMBER")
+    head = env("HEAD_SHA")
+    adaptador = ComentariosGh(repo, pr)
+    sticky = sticky_from_comments(
+        adaptador.leer(), os.environ.get("BOT_LOGIN") or "github-actions[bot]"
+    )
+    current = _estado_actual(sticky)
+    if current is None:
+        sys.exit(
+            "ai-review: memoria inválida o de versión futura; "
+            "no se ejecuta la solicitud"
+        )
+    solicitud = next(
+        (
+            r
+            for r in current.pending_requests
+            if r.id == int(args.request_id)
+            and r.state in ("pending", "failed_retryable")
+        ),
+        None,
+    )
+    if solicitud is None:
+        sys.exit(f"ai-review: la solicitud {args.request_id!r} no está pendiente")
+    paquete = {
+        "request_id": solicitud.id,
+        "kind": solicitud.kind,
+        "finding_id": solicitud.finding_id,
+        "run_id": _run_id(),
+        "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT") or 0),
+        "pr_head_sha": head,
+        "base_sha": current.revision.base_sha if current.revision else "",
+        "policy_digest": (current.revision.policy_digest if current.revision else ""),
+        "target": dict(solicitud.target),
+        "observaciones": [],
+        "cobertura": review_domain.UNKNOWN,
+    }
+    destino = Path(args.work) / "request-package.json"
+    destino.write_text(json.dumps(paquete))
+    print(
+        f"ai-review: paquete de la solicitud {solicitud.id} preparado "
+        f"(run {paquete['run_id']} attempt {paquete['attempt']})"
+    )
 
 
 if __name__ == "__main__":

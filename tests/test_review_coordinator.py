@@ -1134,13 +1134,48 @@ class CoordinadorCli(unittest.TestCase):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(despachados, [1])
 
-    def test_base_ausente_falla_alto(self):
-        falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(snapshot_base())}])
+    def test_base_ausente_sin_revision_falla_alto(self):
+        """Sin BASE_SHA y sin revisión en el checkpoint no hay nada que haga."""
+        vacio = domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=None,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+        falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(vacio)}])
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp, BASE_SHA=""):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
                     with self.assertRaises(SystemExit):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
+
+    def test_base_ausente_con_revision_usa_la_persistida(self):
+        """BASE_SHA vacío cae a la revisión persistida del checkpoint."""
+        import review_domain as domain
+
+        falso = _ComentarioFalso(
+            [{"id": 7, "body": cuerpo_v3(snapshot_base()), "user": "bot"}]
+        )
+        despachados = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with self._entorno(tmp, BASE_SHA=""):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(
+                        review,
+                        "despachar_worker",
+                        side_effect=lambda s, **kw: despachados.append(s.id),
+                    ):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        self.assertEqual(len(falso.patches), 1)
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertEqual(
+            carga.snapshot.revision.base_sha,
+            "b" * 40,
+            "la revisión persistida suple el BASE_SHA ausente",
+        )
 
 
 if __name__ == "__main__":
