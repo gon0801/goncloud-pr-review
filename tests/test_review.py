@@ -1838,6 +1838,13 @@ class TestFileDetection(unittest.TestCase):
 
 
 class Workflows(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.coord_texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        cls.worker_texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        cls.coord_lineas = cls.coord_texto.splitlines()
+        cls.worker_lineas = cls.worker_texto.splitlines()
+
     def test_dogfood_workflow_matches_template(self):
         template = (ROOT / "templates/ai-review.yml").read_text()
         dogfood = (ROOT / ".github/workflows/ai-review.yml").read_text()
@@ -1936,7 +1943,140 @@ class Workflows(unittest.TestCase):
             self.assertIn(f"{input_requerido}:", worker)
         self.assertIn("WORKER_REF=", publish, "el despacho necesita la ref confiable")
 
-    def test_coordinator_descarga_el_resultado_del_worker(self):
+    def test_coordinator_checkout_y_guard_contra_pwn_request(self):
+        """B1 r2: el coordinador nunca ejecuta código del PR ni de un fork."""
+        lineas = self.coord_lineas
+        tramos = [
+            "\n".join(lineas[i : i + 4])
+            for i, linea in enumerate(lineas)
+            if "actions/checkout" in linea
+        ]
+        self.assertTrue(tramos)
+        for tramo in tramos:
+            self.assertNotIn("workflow_run.head_sha", tramo)
+            self.assertNotIn("pull_request.head", tramo)
+        self.assertIn(
+            "github.event.workflow_run.event == 'workflow_dispatch'", self.coord_texto
+        )
+        self.assertIn(
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            self.coord_texto,
+        )
+
+    def test_grupo_y_pr_number_del_workflow_run_vienen_del_titulo(self):
+        """B2 r2: el worker se identifica con su PR; el grupo no cae al run id."""
+        grupo = next(
+            linea
+            for linea in self.coord_lineas
+            if linea.strip().startswith("group: ai-review-")
+        )
+        self.assertIn("display_title", grupo)
+        self.assertNotIn("workflow_run.id", grupo)
+        export_pr = next(
+            linea
+            for linea in self.coord_lineas
+            if linea.strip().startswith('echo "PR_NUMBER=')
+        )
+        self.assertIn("display_title", export_pr)
+        self.assertNotIn("workflow_run.pull_requests", export_pr)
+        self.assertRegex(self.worker_texto, r"run-name:.*inputs\.pr_number")
+
+    def test_worker_ejecuta_el_runtime_y_produce_result(self):
+        """B3 r2: prepare/run con el PR como datos; result.json para el coordinador."""
+        self.assertIn("review.py execute-request", self.worker_texto)
+        self.assertIn("review.py prepare", self.worker_texto)
+        self.assertIn("review.py run", self.worker_texto)
+        self.assertIn("result.json", self.worker_texto)
+        self.assertIn("--tools", self.worker_texto)
+        self.assertIn("Read,Grep,Glob", self.worker_texto)
+        paso_modelo = self.worker_texto.split("name: modelo")[1].split("- name:")[0]
+        self.assertNotIn("GITHUB_TOKEN", paso_modelo)
+        self.assertNotIn("GH_TOKEN", paso_modelo)
+
+    def test_execute_request_arma_el_paquete_con_plan(self):
+        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+        import review_domain as domain
+
+        estado = domain.Snapshot(
+            schema=3,
+            generation=2,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.PARTIAL,
+            findings=[],
+            command_cursor=0,
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1,
+                    kind="review",
+                    origin="comando",
+                    basis_generation=2,
+                    state="pending",
+                    target=domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest="d" * 64,
+                    ).json(),
+                    solicitante="jefe",
+                )
+            ],
+            request_count=1,
+        )
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso = mock.Mock()
+        falso.leer = lambda: comentarios
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "GITHUB_RUN_ATTEMPT": "2",
+                    "BOT_LOGIN": "bot",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=tmp, request_id="1")
+                    )
+            paquete = json.loads((Path(tmp) / "request-package.json").read_text())
+        self.assertEqual(paquete["request_id"], 1)
+        self.assertEqual(paquete["run_id"], 55)
+        self.assertEqual(paquete["attempt"], 2)
+        self.assertEqual(paquete["pr_head_sha"], "c" * 40)
+        self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
+        self.assertEqual(
+            paquete["plan"],
+            {"mode": "full", "head_sha": "c" * 40, "base_sha": "b" * 40},
+        )
+        self.assertEqual(
+            paquete["policy_digest"],
+            review.digest_de_politica(review.politica_de_revision()),
+            "el digest sale de la política normalizada, no del checkpoint",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {"REPO": "o/r", "PR_NUMBER": "1", "GITHUB_RUN_ID": "55"},
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with self.assertRaises(SystemExit):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=tmp, request_id="99")
+                        )
+
+    def test_actionlint_firma_las_plantillas(self):
         publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
         self.assertIn("workflow_run", publish)
         self.assertIn("download", publish.lower())

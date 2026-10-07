@@ -491,13 +491,19 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
+                pr_api = mock.Mock(
+                    stdout=json.dumps(
+                        {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                    )
+                )
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(
-                        review,
-                        "collaborator_permission",
-                        return_value="write",
-                    ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                    with mock.patch.object(review, "sh", return_value=pr_api):
+                        with mock.patch.object(
+                            review,
+                            "collaborator_permission",
+                            return_value="write",
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(
                 len(falso.patches), 1, "el evento real de GitHub admite comandos"
             )
@@ -509,12 +515,18 @@ class CoordinadorComandos(unittest.TestCase):
             )
             payload_path2 = Path(tmp, "event2.json")
             payload_path2.write_text(json.dumps({"action": "deleted"}))
+            pr_api = mock.Mock(
+                stdout=json.dumps(
+                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                )
+            )
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path2),
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso2):
-                    review.cmd_reconcile(argparse.Namespace(work=tmp))
+                    with mock.patch.object(review, "sh", return_value=pr_api):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(falso2.patches, [])
 
     def test_descartar_por_comentario_aplica_sin_push(self):
@@ -548,13 +560,19 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
+                pr_api = mock.Mock(
+                    stdout=json.dumps(
+                        {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                    )
+                )
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(
-                        review,
-                        "collaborator_permission",
-                        return_value="write",
-                    ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                    with mock.patch.object(review, "sh", return_value=pr_api):
+                        with mock.patch.object(
+                            review,
+                            "collaborator_permission",
+                            return_value="write",
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(len(falso.patches), 1, "el efecto queda guardado sin push")
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
@@ -588,17 +606,23 @@ class CoordinadorComandos(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             payload_path = Path(tmp, "event.json")
             payload_path.write_text(json.dumps({"action": "created"}))
+            pr_api = mock.Mock(
+                stdout=json.dumps(
+                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                )
+            )
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(
-                        review,
-                        "collaborator_permission",
-                        side_effect=RuntimeError("API caída"),
-                    ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                    with mock.patch.object(review, "sh", return_value=pr_api):
+                        with mock.patch.object(
+                            review,
+                            "collaborator_permission",
+                            side_effect=RuntimeError("API caída"),
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(falso.patches, [], "retención: nada se escribe")
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.command_cursor, 0)

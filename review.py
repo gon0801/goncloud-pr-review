@@ -2993,17 +2993,29 @@ def cmd_reconcile(args):
             file=sys.stderr,
         )
         return
-    head = os.environ.get("HEAD_SHA") or (
-        current.revision.head_sha if current.revision else ""
-    )
-    base = os.environ.get("BASE_SHA") or (
-        current.revision.base_sha if current.revision else ""
-    )
-    if not head or not base:
-        sys.exit(
-            "ai-review: faltan HEAD_SHA/BASE_SHA y el checkpoint no tiene revisión"
-        )
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    head = os.environ.get("HEAD_SHA") or ""
+    base = os.environ.get("BASE_SHA") or ""
+    if event_name in ("workflow_run", "issue_comment", "workflow_dispatch"):
+        # el head/base vivos salen del PR por API, nunca del checkpoint
+        try:
+            pr_data = json.loads(sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
+            head = pr_data["head"]["sha"]
+            base = pr_data["base"]["sha"]
+        except Exception as exc:
+            print(
+                f"ai-review: no se pudo consultar el PR ({exc}); "
+                "queda pendiente para el próximo evento",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        head = head or (current.revision.head_sha if current.revision else "")
+        base = base or (current.revision.base_sha if current.revision else "")
+        if not head or not base:
+            sys.exit(
+                "ai-review: faltan HEAD_SHA/BASE_SHA y el checkpoint no tiene revisión"
+            )
     facts = review_domain.RepositoryFacts(
         revision=review_domain.Revision(
             base_sha=base, head_sha=head, policy_digest=digest
@@ -3141,6 +3153,7 @@ def cmd_execute_request(args):
     artifact. Nunca publica ni ejecuta contenido del PR."""
     repo, pr = env("REPO"), env("PR_NUMBER")
     head = env("HEAD_SHA")
+    base = os.environ.get("BASE_SHA", "")
     adaptador = ComentariosGh(repo, pr)
     sticky = sticky_from_comments(
         adaptador.leer(), os.environ.get("BOT_LOGIN") or "github-actions[bot]"
@@ -3162,6 +3175,7 @@ def cmd_execute_request(args):
     )
     if solicitud is None:
         sys.exit(f"ai-review: la solicitud {args.request_id!r} no está pendiente")
+    policy = politica_de_revision()
     paquete = {
         "request_id": solicitud.id,
         "kind": solicitud.kind,
@@ -3169,8 +3183,9 @@ def cmd_execute_request(args):
         "run_id": _run_id(),
         "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT") or 0),
         "pr_head_sha": head,
-        "base_sha": current.revision.base_sha if current.revision else "",
-        "policy_digest": (current.revision.policy_digest if current.revision else ""),
+        "base_sha": base,
+        "policy_digest": digest_de_politica(policy),
+        "plan": {"mode": "full", "head_sha": head, "base_sha": base},
         "target": dict(solicitud.target),
         "observaciones": [],
         "cobertura": review_domain.UNKNOWN,

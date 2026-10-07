@@ -28,6 +28,8 @@ concurrency:
   group: ai-review-worker-${{ github.repository }}-${{ inputs.request_id }}
   cancel-in-progress: false
 
+run-name: PR ${{ inputs.pr_number }} · solicitud ${{ inputs.request_id }}
+
 jobs:
   execute:
     runs-on: ubuntu-latest
@@ -50,12 +52,31 @@ jobs:
       - name: traer el PR como datos
         run: |
           git fetch --no-tags origin "+${{ inputs.head_sha }}:refs/ai-review/head"
+          git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
+          git checkout --detach "refs/ai-review/head"
+      - name: preparar contexto
+        env:
+          BASE_SHA: ${{ github.event.repository.default_branch }}
+          MAX_DIFF_BYTES: "1500000"
+        run: python review.py prepare --work "${RUNNER_TEMP}/ai-review"
       - name: modelo
         env:
           API_KEY: ${{ secrets.API_KEY }}
           FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}
         run: |
-          echo "ejecución del modelo para la solicitud ${{ inputs.request_id }}"
+          python review.py run --work "${RUNNER_TEMP}/ai-review" \
+            --tools Read,Grep,Glob
+      - name: cerrar el resultado para el coordinador
+        run: |
+          python - "${RUNNER_TEMP}/ai-review" <<'PY'
+          import json, sys
+          from pathlib import Path
+          work = Path(sys.argv[1])
+          paquete = json.loads((work / "request-package.json").read_text())
+          resultado = json.loads((work / "result.json").read_text())
+          paquete.update({"result": resultado.get("result"), "subtype": resultado.get("subtype")})
+          (work / "result.json").write_text(json.dumps(paquete))
+          PY
       - name: subir resultado como datos
         uses: actions/upload-artifact@v4
         with:

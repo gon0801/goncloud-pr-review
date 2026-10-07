@@ -22,25 +22,25 @@ permissions:
   actions: write
 
 concurrency:
-  group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
   cancel-in-progress: false
 
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    # El coordinador corre código confiable: un workflow_run sólo se atiende
+    # si es un dispatch nuestro sobre el propio repo (anti pwn-request).
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_repository.full_name == github.repository)
     steps:
       - name: checkout del código confiable
         uses: actions/checkout@v4
         with:
-          # pull_request_target y workflow_dispatch corren código de la base;
-          # workflow_run corre el ref del propio run del worker
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       - name: preparar entorno
         run: |
           {
             echo "REPO=${{ github.repository }}"
-            echo "PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number }}"
+            echo "PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}"
             echo "HEAD_SHA=${{ github.event.pull_request.head.sha }}"
             echo "BASE_SHA=${{ github.event.pull_request.base.sha }}"
             echo "GITHUB_EVENT_PATH=${{ github.event_path }}"
