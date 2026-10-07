@@ -1514,7 +1514,9 @@ def cmd_prepare(args):
     (work / "conventions.md").write_text(build_conventions(base))
 
     event = json.loads(Path(env("GITHUB_EVENT_PATH")).read_text())
-    pr = event.get("pull_request") or {}
+    pr = event.get("pull_request")
+    if pr is None:
+        pr = _pr_via_api()
     (work / "pr.md").write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
 
     rules = sh("git", "show", f"{base}:.github/ai-review.md", check=False)
@@ -1532,6 +1534,27 @@ def cmd_prepare(args):
     )
     for e in excluded:
         print(f"  excluido: {e['path']} ({e['reason']})")
+
+
+def _pr_via_api():
+    """Título y cuerpo del PR por API cuando el evento no los trae
+    (workflow_dispatch del worker). Fallo: degradar a vacío."""
+    repo, pr = os.environ.get("REPO", ""), os.environ.get("PR_NUMBER", "")
+    if not repo or not pr:
+        return {}
+    try:
+        respuesta = sh(
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{pr}",
+            "--jq",
+            "{title: .title, body: .body}",
+            check=False,
+        )
+        datos = json.loads(respuesta.stdout) if respuesta.returncode == 0 else {}
+    except Exception:
+        return {}
+    return datos if isinstance(datos, dict) else {}
 
 
 def get_provider():
@@ -2810,6 +2833,7 @@ def _parser():
             "publish",
             "reconcile",
             "execute-request",
+            "close-result",
         ],
     )
     parser.add_argument("--request-id", default="")
@@ -2831,6 +2855,7 @@ def main():
         "publish": cmd_publish,
         "reconcile": cmd_reconcile,
         "execute-request": cmd_execute_request,
+        "close-result": cmd_close_result,
     }[args.command](args)
 
 
@@ -3202,6 +3227,35 @@ def cmd_execute_request(args):
         f"ai-review: paquete de la solicitud {solicitud.id} preparado "
         f"(run {paquete['run_id']} attempt {paquete['attempt']})"
     )
+
+
+def cmd_close_result(args):
+    """Fusiona el resultado del modelo en el paquete del artifact: los
+    hallazgos y la cobertura se parsean con los mismos helpers del
+    coordinador y la misma política de identidad (FINDING_IDENTITY)."""
+    work = Path(args.work)
+    paquete = json.loads((work / "request-package.json").read_text())
+    resultado = json.loads((work / "result.json").read_text())
+    texto = resultado.get("result") or ""
+    modelo = parse_model_findings(
+        texto, conservar_anclas=politica_de_identidad() == "anchors"
+    )
+    _, cobertura, _ = split_coverage(texto)
+    cobertura = {
+        "complete": review_domain.COMPLETE_CLAIM,
+        "partial": review_domain.PARTIAL,
+    }.get(cobertura, review_domain.UNKNOWN)
+    if modelo is None:
+        cobertura = review_domain.UNKNOWN
+    paquete.update(
+        {
+            "result": texto,
+            "subtype": resultado.get("subtype"),
+            "observaciones": (modelo or {}).get("findings", []),
+            "cobertura": cobertura,
+        }
+    )
+    (work / "result.json").write_text(json.dumps(paquete))
 
 
 if __name__ == "__main__":

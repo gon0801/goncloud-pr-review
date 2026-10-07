@@ -2044,8 +2044,15 @@ class Workflows(unittest.TestCase):
             "BASE_SHA",
             "GITHUB_TOKEN",
         },
-        "prepare": {"HEAD_SHA", "BASE_SHA"},
+        "prepare": {
+            "HEAD_SHA",
+            "BASE_SHA",
+            "REPO",
+            "PR_NUMBER",
+            "GITHUB_TOKEN",
+        },
         "run": {"API_KEY", "FALLBACK_API_KEY", "REPO", "PR_NUMBER"},
+        "close-result": set(),
     }
 
     def _pasos(self):
@@ -2112,7 +2119,7 @@ class Workflows(unittest.TestCase):
                         for credencial in ("GITHUB_TOKEN", "GH_TOKEN"):
                             self.assertNotIn(credencial, paso["env"])
                     revisados += 1
-        self.assertEqual(revisados, 3)
+        self.assertEqual(revisados, 4)
 
     @contextlib.contextmanager
     def _repo_minimo(self):
@@ -2189,20 +2196,36 @@ class Workflows(unittest.TestCase):
                     "execute-request recibe el BASE_SHA real del paso",
                 )
                 evento = Path(work) / "event.json"
-                evento.write_text(
-                    json.dumps({"pull_request": {"title": "t", "body": "b"}})
-                )
+                evento.write_text("{}")
+                sh_real = review.sh
+
+                def sh_mixto(*args, **kw):
+                    if args[0] == "gh":
+                        return mock.Mock(
+                            returncode=0,
+                            stdout=json.dumps(
+                                {"title": "Título del PR", "body": "Cuerpo del PR"}
+                            ),
+                        )
+                    return sh_real(*args, **kw)
+
                 with contextlib.chdir(repo):
                     with mock.patch.dict(
                         os.environ,
                         env_de("preparar contexto", {"GITHUB_EVENT_PATH": str(evento)}),
                         clear=False,
                     ):
-                        review.cmd_prepare(
-                            argparse.Namespace(
-                                work=work, prompt=str(ROOT / "prompt.md")
+                        with mock.patch.object(review, "sh", sh_mixto):
+                            review.cmd_prepare(
+                                argparse.Namespace(
+                                    work=work, prompt=str(ROOT / "prompt.md")
+                                )
                             )
-                        )
+                self.assertEqual(
+                    (Path(work) / "pr.md").read_text(),
+                    "# Título del PR\n\nCuerpo del PR\n",
+                    "el contexto del PR llega por API con evento de despacho",
+                )
                 manifest = json.loads((Path(work) / "manifest.json").read_text())
                 self.assertEqual(
                     manifest["base"], base, "el merge-base sale de SHAs reales"
@@ -2216,15 +2239,32 @@ class Workflows(unittest.TestCase):
                     review.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
                 )
                 (Path(work) / "result.json").write_text(
-                    json.dumps({"result": "texto de revisión", "subtype": "success"})
+                    json.dumps(
+                        {
+                            "result": "**Veredicto:** 1 High.\n\nDetalle.\n\n"
+                            + block_of(make_finding("F1", file="app.py"))
+                            + "\nCOVERAGE: complete",
+                            "subtype": "success",
+                        }
+                    )
                 )
-                cierre = pasos["cerrar el resultado para el coordinador"]["run"]
-                heredoc = re.search(r"<<'PY'\n(.*?)\nPY", cierre, re.S).group(1)
-                with mock.patch.object(sys, "argv", ["python", work]):
-                    exec(compile(heredoc, "cierre", "exec"), {})
+                with mock.patch.dict(
+                    os.environ, {"GITHUB_WORKSPACE": str(ROOT)}, clear=False
+                ):
+                    review.cmd_close_result(argparse.Namespace(work=work))
                 fusion = json.loads((Path(work) / "result.json").read_text())
-                self.assertEqual(fusion["result"], "texto de revisión")
                 self.assertEqual(fusion["subtype"], "success")
+                self.assertIn("Detalle.", fusion["result"])
+                self.assertEqual(
+                    [e["id"] for e in fusion["observaciones"]],
+                    ["F1"],
+                    "los hallazgos del modelo llegan al paquete",
+                )
+                self.assertEqual(
+                    fusion["cobertura"],
+                    domain.COMPLETE_CLAIM,
+                    "la cobertura declarada respaldada llega al paquete",
+                )
 
     @contextlib.contextmanager
     def _repo_con_worker_sandbox(self):
@@ -2308,6 +2348,15 @@ class Workflows(unittest.TestCase):
                 shim.mkdir(exist_ok=True)
                 if not (shim / "python").exists():
                     os.symlink(sys.executable, shim / "python")
+                if not (shim / "gh").exists():
+                    gh = shim / "gh"
+                    gh.write_text(
+                        "#!/bin/sh\n"
+                        "cat <<'JSON'\n"
+                        '{"title": "Título del PR", "body": "Cuerpo del PR"}\n'
+                        "JSON\n"
+                    )
+                    gh.chmod(0o755)
                 env.update(
                     {
                         "GITHUB_WORKSPACE": str(ws),
@@ -2356,6 +2405,204 @@ class Workflows(unittest.TestCase):
         paso = self.worker_texto.split("name: subir resultado como datos")[1]
         self.assertIn('path: "${{ runner.temp }}/ai-review"', paso)
         self.assertNotIn("RUNNER_TEMP", paso)
+
+    def test_prepare_trae_el_pr_por_api_cuando_el_evento_no_lo_trae(self):
+        """B6 r6: el worker corre por workflow_dispatch, cuyo payload no trae
+        pull_request; el título y el cuerpo llegan por API y si la API falla
+        el prepare degrada sin romper el paso."""
+        with self._repo_minimo() as (repo, base, head):
+            evento = Path(repo) / "event.json"
+            evento.write_text("{}")
+            with tempfile.TemporaryDirectory() as work:
+
+                def sh_mixto(returncode, salida):
+                    real = review.sh
+
+                    def falso(*args, **kw):
+                        if args[0] == "gh":
+                            return mock.Mock(returncode=returncode, stdout=salida)
+                        return real(*args, **kw)
+
+                    return falso
+
+                def preparar(con_mock):
+                    with mock.patch.dict(
+                        os.environ,
+                        {
+                            "REPO": "o/r",
+                            "PR_NUMBER": "12",
+                            "HEAD_SHA": head,
+                            "BASE_SHA": base,
+                            "MAX_DIFF_BYTES": "1500000",
+                            "GITHUB_EVENT_PATH": str(evento),
+                        },
+                        clear=False,
+                    ):
+                        with mock.patch.object(review, "sh", con_mock):
+                            with contextlib.chdir(repo):
+                                review.cmd_prepare(
+                                    argparse.Namespace(
+                                        work=work, prompt=str(ROOT / "prompt.md")
+                                    )
+                                )
+                    return (Path(work) / "pr.md").read_text()
+
+                util = sh_mixto(
+                    0, json.dumps({"title": "Título del PR", "body": "Cuerpo"})
+                )
+                self.assertEqual(
+                    preparar(util),
+                    "# Título del PR\n\nCuerpo\n",
+                    "sin pull_request en el evento, el título llega por API",
+                )
+                roto = sh_mixto(1, "")
+                self.assertEqual(
+                    preparar(roto), "# \n\n\n", "la API caída degrada sin romper"
+                )
+
+    def _condicion_del_guard(self):
+        lineas = self.coord_lineas
+        inicio = next(
+            i for i, linea in enumerate(lineas) if linea.strip().startswith("if:")
+        )
+        encabezado = lineas[inicio].strip()[3:].strip()
+        tramos = [] if encabezado in (">-", "|", ">") else [encabezado]
+        for linea in lineas[inicio + 1 :]:
+            if not linea.startswith("      ") or linea.lstrip().startswith("- "):
+                break
+            tramos.append(linea.strip())
+        return " ".join(tramos)
+
+    def _evaluar_github(self, expresion, contexto):
+        tokens = re.findall(r"\|\||&&|!=|==|!|\(|\)|'[^']*'|[^\s()!&|=']+", expresion)
+
+        def ruta(nombre):
+            nodo = contexto
+            for campo in nombre.split("."):
+                nodo = nodo.get(campo) if isinstance(nodo, dict) else None
+            return nodo
+
+        def verdad(valor):
+            return valor not in (None, "", False, 0)
+
+        pos = 0
+
+        def valor():
+            nonlocal pos
+            token = tokens[pos]
+            if token.startswith("'"):
+                pos += 1
+                return token[1:-1]
+            pos += 1
+            return ruta(token)
+
+        def primario():
+            nonlocal pos
+            token = tokens[pos]
+            if token == "(":
+                pos += 1
+                resultado = o()
+                pos += 1
+                return resultado
+            if token == "!":
+                pos += 1
+                return not primario()
+            if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
+                izquierda = valor()
+                operador = tokens[pos]
+                pos += 1
+                derecha = valor()
+                return (
+                    (izquierda == derecha)
+                    if operador == "=="
+                    else (izquierda != derecha)
+                )
+            return verdad(valor())
+
+        def y():
+            nonlocal pos
+            resultado = primario()
+            while pos < len(tokens) and tokens[pos] == "&&":
+                pos += 1
+                derecho = primario()
+                resultado = resultado and derecho
+            return resultado
+
+        def o():
+            nonlocal pos
+            resultado = y()
+            while pos < len(tokens) and tokens[pos] == "||":
+                pos += 1
+                derecho = y()
+                resultado = resultado or derecho
+            return resultado
+
+        return o()
+
+    def test_el_guard_del_coordinador_filtra_drafts_y_forks(self):
+        """F9 r6: la entrada pull_request_target mantiene los filtros de draft
+        y fork del diseño; los demás eventos admitidos no se tocan."""
+        guard = self._condicion_del_guard()
+        repo = "o/r"
+
+        def ctx(nombre, event):
+            return {
+                "github": {
+                    "event_name": nombre,
+                    "repository": repo,
+                    "event": event,
+                }
+            }
+
+        def pr(draft, origen):
+            return {
+                "pull_request": {
+                    "draft": draft,
+                    "head": {"repo": {"full_name": origen}},
+                }
+            }
+
+        casos = [
+            (ctx("pull_request_target", pr(False, repo)), True),
+            (ctx("pull_request_target", pr(True, repo)), False),
+            (ctx("pull_request_target", pr(False, "fork/r")), False),
+            (ctx("issue_comment", {"issue": {"number": 5}}), True),
+            (
+                ctx(
+                    "workflow_run",
+                    {
+                        "workflow_run": {
+                            "event": "workflow_dispatch",
+                            "head_repository": {"full_name": repo},
+                        }
+                    },
+                ),
+                True,
+            ),
+            (
+                ctx(
+                    "workflow_run",
+                    {
+                        "workflow_run": {
+                            "event": "pull_request",
+                            "head_repository": {"full_name": repo},
+                        }
+                    },
+                ),
+                False,
+            ),
+            (ctx("workflow_dispatch", {"inputs": {"pr_number": "3"}}), True),
+        ]
+        for contexto, esperado in casos:
+            with self.subTest(evento=contexto["github"]["event_name"]):
+                self.assertEqual(self._evaluar_github(guard, contexto), esperado)
+
+    def test_la_descarga_fija_el_attempt_del_resultado(self):
+        """El artifact de un rerun de otro attempt no entra por el find a ciegas."""
+        paso = self.coord_texto.split("name: bajar el resultado del worker")[1]
+        self.assertIn("attempt-${WORKER_ATTEMPT}", paso)
+        self.assertIn("-ne 1", paso)
+        self.assertNotIn("-exec cp", paso)
 
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []
@@ -2462,9 +2709,24 @@ class Workflows(unittest.TestCase):
                         )
 
     def test_actionlint_firma_las_plantillas(self):
-        publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
-        self.assertIn("workflow_run", publish)
-        self.assertIn("download", publish.lower())
+        """B7 r6: actionlint corre sobre las dos plantillas, aquí y en CI."""
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        for plantilla in (
+            "templates/ai-review-publish.yml",
+            "templates/ai-review-worker.yml",
+        ):
+            self.assertIn(plantilla, ci, f"el job de actionlint de CI mira {plantilla}")
+        binario = shutil.which("actionlint")
+        if binario is None:
+            self.skipTest("actionlint no está en PATH; lo corre el job workflows de CI")
+        for nombre in ("ai-review-publish.yml", "ai-review-worker.yml"):
+            with self.subTest(plantilla=nombre):
+                salida = subprocess.run(
+                    [binario, "-no-color", str(ROOT / "templates" / nombre)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(salida.returncode, 0, salida.stdout + salida.stderr)
 
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()

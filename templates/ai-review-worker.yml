@@ -63,6 +63,9 @@ jobs:
       - name: preparar contexto
         working-directory: pr
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ inputs.head_sha }}
           BASE_SHA: ${{ inputs.base_sha }}
           MAX_DIFF_BYTES: "1500000"
@@ -76,16 +79,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python "$GITHUB_WORKSPACE/review.py" run --work "${RUNNER_TEMP}/ai-review"
       - name: cerrar el resultado para el coordinador
-        run: |
-          python - "${RUNNER_TEMP}/ai-review" <<'PY'
-          import json, sys
-          from pathlib import Path
-          work = Path(sys.argv[1])
-          paquete = json.loads((work / "request-package.json").read_text())
-          resultado = json.loads((work / "result.json").read_text())
-          paquete.update({"result": resultado.get("result"), "subtype": resultado.get("subtype")})
-          (work / "result.json").write_text(json.dumps(paquete))
-          PY
+        run: python "$GITHUB_WORKSPACE/review.py" close-result --work "${RUNNER_TEMP}/ai-review"
       - name: subir resultado como datos
         uses: actions/upload-artifact@v4
         with:
