@@ -106,7 +106,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done con desvío declarado (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md; desvío: T09 añade parse_comando_reconcile y collect_dismissals queda para el flujo run/publish sin tocar) |
-| T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:TODO |
+| T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:done (PR #54, squash 4f9b263; evidencia docs/evidence/reviewer/UW.md) |
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:TODO |
@@ -164,19 +164,32 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U0-r2 LISTO | GC de solicitudes huerfanas sin target era T04; metadata del worker por API si T10 cambia contrato; runbook de limpieza ante duplicados manuales | abierta |
 | U0-r3 LISTO | snapshot_a_v3 de sticky invalido parcial; admitir issue_comment con verificacion de permisos (T09); explain con digest del hallazgo (T09) | abierta |
 | U1-r2 veredicto N1 | re-autorizacion de explicar sin prueba discriminante (mutante sin solicitante sobrevive; fail-open hoy inalcanzable) | abierta |
-| U1-r2 veredicto N2 | consulta caida en re-verificacion deja comando pending varado hasta T10 (sin despacho indebido ni corrupcion) | abierta |
+| U1-r2 veredicto N2 | consulta caida en re-verificacion deja comando pending varado hasta T11 (sin despacho indebido ni corrupcion) | abierta |
 | U1-r2 veredicto N3 | solicitante para origin re-run es dato muerto (nadie construye Origin con login) | abierta |
 | U1-r2 veredicto N4 | log solicitud terminada antes de publish_checkpoint (Unconfirmed no persistido, se corrige en siguiente evento) | abierta |
 | U1-r2 veredicto N5 | reautorizar no cachea permiso por login (N llamadas con N solicitudes del mismo autor) | abierta |
 | U1-r2 veredicto N6 | U1.md:65 fragmento suelto y desglose por clase 6+3+3+6=18 (total cuadra) | abierta |
 | U1-r2 veredicto N7 | arrastre r1 N3/N4/N5/N6/N8 (carrera issue_comment T10, parser asimetrico, sin dedupe, explain vencido, sticky vacio) + fail-open sin solicitante | abierta |
-| U1-r2 LISTO | recibo de comando optimista aunque la solicitud termine revocada (motivo en tumba y log; render en T10) | abierta |
+| U1-r2 LISTO | recibo de comando optimista aunque la solicitud termine revocada (motivo en tumba y log; render en T11/T16) | abierta |
 | U1-r3 review F4 | reautorizar huerfana follow-up (walkthrough comandos correctos, check en pass) | abierta |
 | U1-r3 review F3+F5 | docs evidencia (desglose y redaccion, sin repro de codigo) | abierta |
 | U1-r3 CodeRabbit | review.py:3083-3094 cache de permisos por login (Trivial, misma familia N5) | abierta |
 | U1 cierre | AuthorizedCommand de reconcile crea explain sin digest (dos entradas divergentes para el mismo concepto) | abierta |
 | U1 cierre | digest se persiste y nadie lo consume aún (entrega de explicaciones) | abierta |
-| U1 cierre | GITHUB_SHA en issue_comment es el tip de la rama default (el workflow de T10 debe resolver el HEAD del PR) | abierta |
-| U1 cierre | falta el render de los rechazos al usuario (T10 publicador; hoy visibles en log y recibos del checkpoint) | abierta |
+| U1 cierre | GITHUB_SHA en issue_comment era el tip de la rama default; resuelta en T10 (cmd_reconcile toma head/base vivos del PR por API; activa al instalar las plantillas en T11) | resuelta en T10 |
+| U1 cierre | falta el render de los rechazos al usuario (T11/T16; T10 cerro sin render, solo log) | abierta |
 | U1 cierre | descartar F1 y F2 multi-id del legado se ignora silenciosamente en reconcile (soportar o rechazo visible) | abierta |
 | U1 cierre | escritor legado vivo puede avanzar el cursor por encima de un explicar pendiente + sticky sin previo crea checkpoint vacío (ruido) | abierta |
+| UW-r7 review F5 | UW.md:54 sigue citando prueba inexistente en lista de mutantes (parte fuerte corregida; queda nombre muerto documental) | abierta |
+| UW-r7 review F9 | guard del coordinador filtra draft/fork pero no la bandera AI_REVIEW_DISABLED (depende de variables del consumidor, T11) | abierta |
+| UW-r7 veredicto N1 | falta prueba punta a punta F10->F11 (fallo blando luego recuperacion re-despacha esa failed_retryable); sin prueba de orden autenticacion->fallo; motivo sin validacion/truncado; artifact de solicitud podada deja run en rojo sin dano; abreviaturas con ellipsis en UW.md:54 historico | abierta |
+| UW-r7 veredicto N2 | recuperacion por workflow_dispatch solo re-deriva solicitudes de origen push; las de comando varadas (U1-r2 N2) siguen sin derivarse | abierta |
+| UW-r6 veredicto N1 | descarga sin diagnostico con pipefail (grep -c falla antes del mensaje) y patron attempt-1 coincide con attempt-10; usar grep -c . \|\| true y patron anclado | abierta |
+| UW-r6 veredicto N2 | subtype del resultado viaja en paquete pero el carril workflow_run no lo usa para degradar cobertura ni reintentar (costura de fallos del worker, T11) | abierta |
+| UW-r6 veredicto N3 | FINDING_IDENTITY no viaja al worker; close-result parsea con current aunque el coordinador opere en anchors (T16) | abierta |
+| UW-r4 LISTO | flags de aislamiento del runtime sin prueba que los fije; working-directory de preparar contexto sin discriminante (benigno); instalacion y firma del proveedor en T11 | abierta |
+| UW cierre | timeout-minutes de las plantillas nuevas sin valor fijado (UW.md:97; AI_REVIEW_DISABLED ya en F9) | abierta |
+| UW cierre | secrets.API_KEY vs el nombre real en consumidores (UW.md:97, T11) | abierta |
+| UW cierre | git fetch sin credenciales en repos privados (UW.md:97, T11) | abierta |
+| UW cierre | filtros de issue vs PR en issue_comment (UW.md:97, T11) | abierta |
+| UW cierre | intent no numerico en execute-request deja traceback crudo (UW.md:97, T11) | abierta |
