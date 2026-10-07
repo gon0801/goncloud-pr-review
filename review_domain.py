@@ -149,7 +149,11 @@ class PendingRequest:
 
 @dataclass
 class WorkRequest:
-    """Solicitud pendiente con id numérico monotónico."""
+    """Solicitud pendiente con id numérico monotónico.
+
+    `target` registra el head/base/digest de política para los que se creó:
+    un resultado que llega con otra revisión o política no acredita cobertura.
+    """
 
     id: int
     kind: str
@@ -158,6 +162,8 @@ class WorkRequest:
     origin: str = ""
     basis_generation: int = 0
     state: str = "pending"
+    target: dict = field(default_factory=dict)
+    motivo: str = ""
 
 
 @dataclass
@@ -187,10 +193,23 @@ class EncodedCheckpoint:
     bytes: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class ReviewTarget:
-    revision: Revision | None = None
-    basis_generation: int = 0
+    """Revisión que la solicitud atiende, congelada al crear la solicitud."""
+
+    repository: str = ""
+    pr_number: int = 0
+    head_sha: str = ""
+    base_sha: str = ""
+    merge_base_sha: str = ""
+    policy_digest: str = ""
+
+    def json(self):
+        return {
+            "head_sha": self.head_sha,
+            "base_sha": self.base_sha,
+            "policy_digest": self.policy_digest,
+        }
 
 
 @dataclass
@@ -768,12 +787,20 @@ def _v3_snapshot(data):
         origin = req.get("origin", "")
         basis = req.get("basis_generation", 0)
         state = req.get("state", "pending")
+        target = req.get("target", {})
+        motivo = req.get("motivo", "")
         if not isinstance(origin, str):
             raise _SchemaError("origin de solicitud debe ser texto")
         if not isinstance(basis, int) or isinstance(basis, bool) or basis < 0:
             raise _SchemaError("basis_generation de solicitud inválida")
         if not isinstance(state, str) or not state:
             raise _SchemaError("state de solicitud inválido")
+        if not isinstance(target, dict) or any(
+            not isinstance(v, str) for v in target.values()
+        ):
+            raise _SchemaError(f"target de solicitud inválido: {target!r}")
+        if not isinstance(motivo, str):
+            raise _SchemaError("motivo de solicitud debe ser texto")
         solicitudes.append(
             WorkRequest(
                 id=rid,
@@ -783,6 +810,8 @@ def _v3_snapshot(data):
                 origin=origin,
                 basis_generation=basis,
                 state=state,
+                target=dict(target),
+                motivo=motivo,
             )
         )
     recibos, comandos = [], set()
@@ -1140,6 +1169,8 @@ def encode_snapshot(snapshot, budget=None):
                     "origin": r.origin,
                     "basis_generation": r.basis_generation,
                     "state": r.state,
+                    **({"target": r.target} if r.target else {}),
+                    **({"motivo": r.motivo} if r.motivo else {}),
                 }
                 for r in snapshot.pending_requests
             ],
@@ -1787,3 +1818,266 @@ def accept_report(current, plan, report):
             findings=findings,
         )
     )
+
+
+@dataclass(frozen=True)
+class Origin:
+    """Evento autenticado que origina la solicitud o el resultado."""
+
+    kind: str
+    comment_id: int | None = None
+    run_id: int | None = None
+
+
+@dataclass(frozen=True)
+class RequestReview:
+    """Push (o recuperación) que pide revisión del target vigente."""
+
+    origin: Origin
+    target: ReviewTarget
+
+
+@dataclass(frozen=True)
+class AuthorizedCommand:
+    """Comando ya autorizado (permiso verificado en el adaptador, T09)."""
+
+    origin: Origin
+    target: ReviewTarget
+    action: str
+    finding_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ReportReady:
+    """Resultado de un worker: sólo satisface una solicitud no finalizada."""
+
+    origin: Origin
+    request_id: int
+    run_id: int
+    attempt: int
+    observaciones: tuple = ()
+    cobertura: str = UNKNOWN
+
+
+@dataclass(frozen=True)
+class ReportFailed:
+    """Fallo del worker: retryable deja la solicitud para otro intento."""
+
+    request_id: int
+    run_id: int
+    attempt: int
+    motivo: str
+    retryable: bool = True
+
+
+@dataclass
+class Commit:
+    """Estado y trabajo que sólo puede arrancar después de guardarlo."""
+
+    snapshot: Snapshot
+    work_after_commit: tuple = ()
+
+
+def _podar(current, target_json):
+    """Al crear una solicitud nueva: fuera las superseded de otros targets y
+    los tombstones finished (el presupuesto del bloque es compartido con los
+    hallazgos y el contador nunca retrocede).
+    """
+    return [
+        r
+        for r in current.pending_requests
+        if r.state != "finished"
+        and not (
+            r.kind == "review" and target_json and not _mismo_target(r, target_json)
+        )
+    ]
+
+
+def _solicitud_nueva(evento, current):
+    rid = current.request_count + 1
+    kind = (
+        "explain"
+        if isinstance(evento, AuthorizedCommand) and evento.action == "explicar"
+        else "review"
+    )
+    return WorkRequest(
+        id=rid,
+        kind=kind,
+        finding_id=getattr(evento, "finding_id", None),
+        origin=evento.origin.kind,
+        basis_generation=current.generation,
+        state="pending",
+        target=evento.target.json(),
+    )
+
+
+def _mismo_target(solicitud, target_json):
+    return solicitud.target == target_json
+
+
+def _reconcile_revision(current, evento):
+    """Push o recuperación: agrupa automáticas, siempre crea las explícitas."""
+    target_json = evento.target.json()
+    explícito = evento.origin.kind in ("comando", "re-run")
+    if not explícito:
+        agrupables = tuple(
+            r
+            for r in current.pending_requests
+            if (
+                r.kind == "review"
+                and r.state in ("pending", "failed_retryable")
+                and r.origin == "push"
+                and _mismo_target(r, target_json)
+            )
+        )
+        if agrupables:
+            # nada nuevo que persistir; el trabajo ya persistido se re-deriva
+            # para que la recuperación vuelva a despachar (at-least-once)
+            return Commit(snapshot=current, work_after_commit=agrupables)
+    nueva = _solicitud_nueva(evento, current)
+    snapshot = replace(
+        current,
+        pending_requests=[*_podar(current, target_json), nueva],
+        request_count=current.request_count + 1,
+    )
+    return Commit(snapshot=snapshot, work_after_commit=(nueva,))
+
+
+def _reconcile_comando(current, evento):
+    nueva = _solicitud_nueva(evento, current)
+    snapshot = replace(
+        current,
+        pending_requests=[*current.pending_requests, nueva],
+        request_count=current.request_count + 1,
+    )
+    return Commit(snapshot=snapshot, work_after_commit=(nueva,))
+
+
+def _solicitud_viva(current, rid):
+    """La solicitud por id entre las no finalizadas; None si no existe."""
+    return next(
+        (r for r in current.pending_requests if r.id == rid and r.state != "finished"),
+        None,
+    )
+
+
+def _sin_solicitud(current, rid):
+    return replace(
+        current, pending_requests=[r for r in current.pending_requests if r.id != rid]
+    )
+
+
+def _target_vigente(solicitud, facts, policy):
+    """El target de la solicitud coincide con la revisión y política actuales.
+
+    Sin target registrado (solicitudes previas a U0) o sin revisión actual,
+    nada acredita: fail-closed.
+    """
+    if not solicitud.target:
+        return False
+    revision = facts.revision
+    if revision is None:
+        return False
+    return (
+        solicitud.target.get("head_sha") == (revision.head_sha or "")
+        and solicitud.target.get("base_sha") == (revision.base_sha or "")
+        and solicitud.target.get("policy_digest") == (revision.policy_digest or "")
+    )
+
+
+def _reconcile_resultado(current, evento, facts, policy):
+    solicitud = _solicitud_viva(current, evento.request_id)
+    if solicitud is None:
+        return Keep(reason="resultado de solicitud desconocida o ya finalizada")
+    if not _target_vigente(solicitud, facts, policy):
+        podada = _sin_solicitud(current, evento.request_id)
+        revision = facts.revision
+        target_json = ReviewTarget(
+            repository="",
+            pr_number=0,
+            head_sha=revision.head_sha if revision else "",
+            base_sha=revision.base_sha if revision else "",
+            policy_digest=revision.policy_digest if revision else "",
+        ).json()
+        viva = next(
+            (
+                r
+                for r in podada.pending_requests
+                if r.kind == "review"
+                and r.state in ("pending", "failed_retryable")
+                and _mismo_target(r, target_json)
+            ),
+            None,
+        )
+        if viva is not None:
+            return Commit(snapshot=podada, work_after_commit=(viva,))
+        nueva = _solicitud_nueva(
+            RequestReview(
+                origin=Origin(kind="push"),
+                target=ReviewTarget(
+                    repository="",
+                    pr_number=0,
+                    head_sha=target_json["head_sha"],
+                    base_sha=target_json["base_sha"],
+                    policy_digest=target_json["policy_digest"],
+                ),
+            ),
+            podada,
+        )
+        snapshot = replace(
+            podada,
+            pending_requests=[*podada.pending_requests, nueva],
+            request_count=podada.request_count + 1,
+        )
+        return Commit(snapshot=snapshot, work_after_commit=(nueva,))
+    report = validar_reporte(evento.observaciones, evento.cobertura, facts)
+    plan = ReviewPlan(
+        revision=facts.revision,
+        changed_paths=tuple(facts.changed_paths),
+        policy=policy,
+    )
+    decision = accept_report(current, plan, report)
+    if isinstance(decision, Keep):
+        snapshot = _sin_solicitud(current, evento.request_id)
+        return Commit(snapshot=snapshot, work_after_commit=())
+    snapshot = replace(
+        _sin_solicitud(decision.snapshot, evento.request_id),
+    )
+    return Commit(snapshot=snapshot, work_after_commit=())
+
+
+def _reconcile_fallo(current, evento):
+    """Fallo del worker: reintento deja la solicitud con su motivo; el rechazo
+    terminal queda Finished con el motivo persistido (auditoría e idempotencia).
+    """
+    solicitud = _solicitud_viva(current, evento.request_id)
+    if solicitud is None:
+        return Keep(reason="fallo de solicitud desconocida o ya finalizada")
+    estado = "failed_retryable" if evento.retryable else "finished"
+    vivas = [
+        replace(r, state=estado, motivo=evento.motivo)
+        if r.id == evento.request_id
+        else r
+        for r in current.pending_requests
+    ]
+    return Commit(snapshot=replace(current, pending_requests=vivas))
+
+
+def reconcile(current, event, facts, policy):
+    """Decisión persistible para cualquier evento del coordinador (U0).
+
+    RequestReview agrupa las automáticas repetidas y siempre crea las
+    explícitas; AuthorizedCommand crea una solicitud nueva; ReportReady sólo
+    satisface una solicitud no finalizada y vigente (acepta sobre el snapshot
+    actual con la aceptación del dominio y compacta la solicitud); ReportFailed
+    marca reintento o cierra con motivo. El dominio nunca despacha trabajo.
+    """
+    if isinstance(event, RequestReview):
+        return _reconcile_revision(current, event)
+    if isinstance(event, AuthorizedCommand):
+        return _reconcile_comando(current, event)
+    if isinstance(event, ReportReady):
+        return _reconcile_resultado(current, event, facts, policy)
+    if isinstance(event, ReportFailed):
+        return _reconcile_fallo(current, event)
+    return Keep(reason="evento desconocido")
