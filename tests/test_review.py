@@ -2407,9 +2407,6 @@ class Workflows(unittest.TestCase):
         self.assertNotIn("RUNNER_TEMP", paso)
 
     def test_prepare_trae_el_pr_por_api_cuando_el_evento_no_lo_trae(self):
-        """B6 r6: el worker corre por workflow_dispatch, cuyo payload no trae
-        pull_request; el título y el cuerpo llegan por API y si la API falla
-        el prepare degrada sin romper el paso."""
         with self._repo_minimo() as (repo, base, head):
             evento = Path(repo) / "event.json"
             evento.write_text("{}")
@@ -2540,8 +2537,6 @@ class Workflows(unittest.TestCase):
         return o()
 
     def test_el_guard_del_coordinador_filtra_drafts_y_forks(self):
-        """F9 r6: la entrada pull_request_target mantiene los filtros de draft
-        y fork del diseño; los demás eventos admitidos no se tocan."""
         guard = self._condicion_del_guard()
         repo = "o/r"
 
@@ -2598,7 +2593,6 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(self._evaluar_github(guard, contexto), esperado)
 
     def test_la_descarga_fija_el_attempt_del_resultado(self):
-        """El artifact de un rerun de otro attempt no entra por el find a ciegas."""
         paso = self.coord_texto.split("name: bajar el resultado del worker")[1]
         self.assertIn("attempt-${WORKER_ATTEMPT}", paso)
         self.assertIn("-ne 1", paso)
@@ -2709,7 +2703,6 @@ class Workflows(unittest.TestCase):
                         )
 
     def test_actionlint_firma_las_plantillas(self):
-        """B7 r6: actionlint corre sobre las dos plantillas, aquí y en CI."""
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         for plantilla in (
             "templates/ai-review-publish.yml",

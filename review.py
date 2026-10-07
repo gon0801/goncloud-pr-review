@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Glue for the AI PR review action. Subcommands: gate, prepare, install, run, publish, reconcile."""
+"""Glue for the AI PR review action."""
 
 import argparse
 import dataclasses
@@ -1537,8 +1537,6 @@ def cmd_prepare(args):
 
 
 def _pr_via_api():
-    """Título y cuerpo del PR por API cuando el evento no los trae
-    (workflow_dispatch del worker). Fallo: degradar a vacío."""
     repo, pr = os.environ.get("REPO", ""), os.environ.get("PR_NUMBER", "")
     if not repo or not pr:
         return {}
@@ -2284,6 +2282,16 @@ def anclas_locadas(snapshot):
     return vistas
 
 
+def cobertura_declarada(texto, modelo):
+    """Cobertura respaldada por el bloque del modelo; sin bloque, UNKNOWN."""
+    _, cobertura, _ = split_coverage(texto)
+    mapeada = {
+        "complete": review_domain.COMPLETE_CLAIM,
+        "partial": review_domain.PARTIAL,
+    }.get(cobertura, review_domain.UNKNOWN)
+    return review_domain.UNKNOWN if modelo is None else mapeada
+
+
 def actualizar_memoria_valida(
     load, result, manifest, repo, pr, login, comments, policy=None
 ):
@@ -2319,15 +2327,8 @@ def actualizar_memoria_valida(
         review_domain.observation_de_entrada(entry)
         for entry in (model or {}).get("findings", [])
     ]
-    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
-    cobertura = {
-        "complete": review_domain.COMPLETE_CLAIM,
-        "partial": review_domain.PARTIAL,
-    }.get(cobertura, review_domain.UNKNOWN)
     runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
-    if model is None:
-        # sin bloque del modelo, la cobertura declarada no está respaldada
-        cobertura = review_domain.UNKNOWN
+    cobertura = cobertura_declarada((result or {}).get("result") or "", model)
     excluidos = manifest.get("excluded", []) or []
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
@@ -3230,9 +3231,6 @@ def cmd_execute_request(args):
 
 
 def cmd_close_result(args):
-    """Fusiona el resultado del modelo en el paquete del artifact: los
-    hallazgos y la cobertura se parsean con los mismos helpers del
-    coordinador y la misma política de identidad (FINDING_IDENTITY)."""
     work = Path(args.work)
     paquete = json.loads((work / "request-package.json").read_text())
     resultado = json.loads((work / "result.json").read_text())
@@ -3240,19 +3238,12 @@ def cmd_close_result(args):
     modelo = parse_model_findings(
         texto, conservar_anclas=politica_de_identidad() == "anchors"
     )
-    _, cobertura, _ = split_coverage(texto)
-    cobertura = {
-        "complete": review_domain.COMPLETE_CLAIM,
-        "partial": review_domain.PARTIAL,
-    }.get(cobertura, review_domain.UNKNOWN)
-    if modelo is None:
-        cobertura = review_domain.UNKNOWN
     paquete.update(
         {
             "result": texto,
             "subtype": resultado.get("subtype"),
             "observaciones": (modelo or {}).get("findings", []),
-            "cobertura": cobertura,
+            "cobertura": cobertura_declarada(texto, modelo),
         }
     )
     (work / "result.json").write_text(json.dumps(paquete))
