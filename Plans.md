@@ -195,8 +195,9 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | UW cierre | intent no numerico en execute-request deja traceback crudo (UW.md:97, T11) | abierta |
 | IN-r1 veredicto N1 (ai-review F4) | `gh pr list --head` sin dueño puede casar un PR de fork con la misma rama y editarle título/cuerpo (T11/T16) | abierta |
 | IN-r1 veredicto N2 (ai-review F5) | ACTION_SHA sin validar como 40 hex; entrada del operador, sin shell en modo coordinado (T11/T16) | abierta |
-| IN-r1 veredicto N3 (ai-review F2) | `|| true` en lectura de rama confunde fallo transitorio con ausencia; sin corrupción (POST falla y set -e corta) | abierta |
+| IN-r1 veredicto N3 (ai-review F2) | or-true en lectura de rama confunde fallo transitorio con ausencia; sin corrupcion (POST falla y set -e corta) | abierta |
 | IN-r1 veredicto N4 | `rutas` se calcula una sola vez antes de reintentos; si la rama cambia y alguien borró ai-review.yml, sale sin publicar (seguro, sin reintento) | abierta |
 | IN-r1 veredicto N5 (LISTO, T16) | ejercer contra API real `sha: null` en path ausente y `truncated: true` en árboles grandes; rama `gh pr edit` del modo coordinado sin prueba propia; falta bandera AI_REVIEW_DISABLED en plantillas nuevas | abierta |
 | IN-r1 review F1 Medium | worker instalado sin fetch con credenciales en repos privados (rastreada desde UW; solo públicos por límite gasto $0) | abierta |
 | IN-r1 review F7 Low | IN.md:38 dice 6 pruebas, hay 8 (errata documental) | abierta |
+| IN-r1 cierre (IN.md) | el modo actual conserva el reset con fuerza de la rama propia solo en la actualizacion trivial de una rama ya existente (preexistente de la base, fuera del delta; el retorno usa via atomica sin fuerza) (T11/T16) | abierta |
