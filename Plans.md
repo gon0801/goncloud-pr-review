@@ -164,20 +164,20 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U0-r2 LISTO | GC de solicitudes huerfanas sin target era T04; metadata del worker por API si T10 cambia contrato; runbook de limpieza ante duplicados manuales | abierta |
 | U0-r3 LISTO | snapshot_a_v3 de sticky invalido parcial; admitir issue_comment con verificacion de permisos (T09); explain con digest del hallazgo (T09) | abierta |
 | U1-r2 veredicto N1 | re-autorizacion de explicar sin prueba discriminante (mutante sin solicitante sobrevive; fail-open hoy inalcanzable) | abierta |
-| U1-r2 veredicto N2 | consulta caida en re-verificacion deja comando pending varado hasta T10 (sin despacho indebido ni corrupcion) | abierta |
+| U1-r2 veredicto N2 | consulta caida en re-verificacion deja comando pending varado hasta T11 (sin despacho indebido ni corrupcion) | abierta |
 | U1-r2 veredicto N3 | solicitante para origin re-run es dato muerto (nadie construye Origin con login) | abierta |
 | U1-r2 veredicto N4 | log solicitud terminada antes de publish_checkpoint (Unconfirmed no persistido, se corrige en siguiente evento) | abierta |
 | U1-r2 veredicto N5 | reautorizar no cachea permiso por login (N llamadas con N solicitudes del mismo autor) | abierta |
 | U1-r2 veredicto N6 | U1.md:65 fragmento suelto y desglose por clase 6+3+3+6=18 (total cuadra) | abierta |
 | U1-r2 veredicto N7 | arrastre r1 N3/N4/N5/N6/N8 (carrera issue_comment T10, parser asimetrico, sin dedupe, explain vencido, sticky vacio) + fail-open sin solicitante | abierta |
-| U1-r2 LISTO | recibo de comando optimista aunque la solicitud termine revocada (motivo en tumba y log; render en T10) | abierta |
+| U1-r2 LISTO | recibo de comando optimista aunque la solicitud termine revocada (motivo en tumba y log; render en T11/T16) | abierta |
 | U1-r3 review F4 | reautorizar huerfana follow-up (walkthrough comandos correctos, check en pass) | abierta |
 | U1-r3 review F3+F5 | docs evidencia (desglose y redaccion, sin repro de codigo) | abierta |
 | U1-r3 CodeRabbit | review.py:3083-3094 cache de permisos por login (Trivial, misma familia N5) | abierta |
 | U1 cierre | AuthorizedCommand de reconcile crea explain sin digest (dos entradas divergentes para el mismo concepto) | abierta |
 | U1 cierre | digest se persiste y nadie lo consume aún (entrega de explicaciones) | abierta |
 | U1 cierre | GITHUB_SHA en issue_comment era el tip de la rama default; resuelta en T10 (cmd_reconcile toma head/base vivos del PR por API; activa al instalar las plantillas en T11) | resuelta en T10 |
-| U1 cierre | falta el render de los rechazos al usuario (T11/T16; T10 cerro sin render, solo log; desvio declarado en T10) | abierta |
+| U1 cierre | falta el render de los rechazos al usuario (T11/T16; T10 cerro sin render, solo log) | abierta |
 | U1 cierre | descartar F1 y F2 multi-id del legado se ignora silenciosamente en reconcile (soportar o rechazo visible) | abierta |
 | U1 cierre | escritor legado vivo puede avanzar el cursor por encima de un explicar pendiente + sticky sin previo crea checkpoint vacío (ruido) | abierta |
 | UW-r7 review F5 | UW.md:54 sigue citando prueba inexistente en lista de mutantes (parte fuerte corregida; queda nombre muerto documental) | abierta |
