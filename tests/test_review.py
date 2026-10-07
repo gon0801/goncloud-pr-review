@@ -2721,8 +2721,6 @@ class Workflows(unittest.TestCase):
         return falso.patches, despachados
 
     def test_el_error_del_worker_no_se_publica_como_revision(self):
-        """F10 r7: el fallo blando del worker es ReportFailed reintenable,
-        no una revisión vacía que consume la solicitud."""
         import review_domain as domain
 
         estado = self._estado_pendiente()
@@ -2781,9 +2779,6 @@ class Workflows(unittest.TestCase):
         self.assertEqual(solicitud.motivo, "falta el secret AI_REVIEW_API_KEY")
 
     def test_la_recuperacion_redescubre_lo_pendiente(self):
-        """F11 r7: workflow_dispatch vuelve a despachar el trabajo pendiente
-        del PR vigente en vez de morir en reconcile; sin cambio de estado no
-        reescribe el checkpoint."""
         with tempfile.TemporaryDirectory() as tmp:
             patches, despachados = self._reconciliar(
                 self._estado_pendiente(), tmp, "workflow_dispatch"

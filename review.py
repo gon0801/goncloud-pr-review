@@ -3010,8 +3010,6 @@ def _comandos_de_comentarios(comentarios, login, cursor):
 
 
 def fallo_de_resultado(artifact, run_id, attempt):
-    """El ERROR_KEY del paso modelo como fallo reintenable del carril
-    workflow_run; None cuando el resultado no trae error."""
     motivo = (artifact or {}).get(ERROR_KEY)
     if not motivo:
         return None
