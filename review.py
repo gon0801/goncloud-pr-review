@@ -454,6 +454,25 @@ def dismiss_wants_all(rest):
     )
 
 
+def parse_comando_reconcile(body):
+    """Dict con acción y argumento del comentario-comando ai-review:, o None."""
+    texto = (body or "").strip()
+    m = re.match(r"ai-review:\s*explicar\s+(F\d+)\b", texto, re.IGNORECASE)
+    if m:
+        return {"action": "explicar", "arg": f"F{int(m.group(1)[1:])}"}
+    if re.fullmatch(r"ai-review:\s*revisar\s*", texto, re.IGNORECASE):
+        return {"action": "revisar", "arg": ""}
+    m = re.match(r"ai-review:\s*descartar\s+(.+)", texto, re.IGNORECASE)
+    if m:
+        rest = m.group(1)
+        if dismiss_wants_all(rest):
+            return {"action": "descartar", "arg": "todo"}
+        numeros = re.findall(r"F(\d+)", rest, re.IGNORECASE)
+        if len(numeros) == 1:
+            return {"action": "descartar", "arg": f"F{int(numeros[0])}"}
+    return None
+
+
 def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
     ids, all_open = set(), False
@@ -960,7 +979,7 @@ def fetch_all_comments(repo, pr):
         "--paginate",
         f"repos/{repo}/issues/{pr}/comments?per_page=100",
         "--jq",
-        ".[] | {id: .id, user: .user.login, body: .body} | tojson",
+        ".[] | {id: .id, user: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at} | tojson",
     ).stdout
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
@@ -2919,6 +2938,33 @@ def _estado_actual(sticky):
     )
 
 
+def _comandos_de_comentarios(comentarios, login, cursor):
+    """El checkpoint es datos, nunca comandos: fuera los comentarios del
+    propio bot y el texto que no arranca con el comando."""
+
+    comandos = []
+    for c in comentarios or []:
+        cid = c.get("id")
+        if not isinstance(cid, int) or cid <= cursor:
+            continue
+        autor = _login_de(c)
+        if login and autor == login:
+            continue
+        parsed = parse_comando_reconcile(c.get("body") or "")
+        if parsed is None:
+            continue
+        comandos.append(
+            {
+                "cid": cid,
+                "login": autor,
+                "creado": c.get("created_at") or "",
+                "editado": c.get("updated_at") or "",
+                **parsed,
+            }
+        )
+    return tuple(comandos)
+
+
 def cmd_reconcile(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     base = env("BASE_SHA")
@@ -3002,11 +3048,50 @@ def cmd_reconcile(args):
     elif event_name in ("pull_request", "pull_request_target"):
         evento = _evento_de_entorno(repo, pr, head, base, digest)
         decision = review_domain.reconcile(current, evento, facts, policy)
+    elif event_name == "issue_comment":
+        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+        if payload.get("action") != "created":
+            print(
+                f"ai-review: issue_comment {payload.get('action')!r} no admite comandos",
+                file=sys.stderr,
+            )
+            return
+        comandos = _comandos_de_comentarios(
+            comments, login=login, cursor=current.command_cursor
+        )
+        snapshot, work, rechazos = review_domain.procesar_comandos(
+            current,
+            tuple(comandos),
+            lambda login: collaborator_permission(repo, login),
+            review_domain.ReviewTarget(
+                repository=repo,
+                pr_number=int(pr),
+                head_sha=head,
+                base_sha=base,
+                policy_digest=digest,
+            ),
+        )
+        for cid, effect in rechazos:
+            print(f"ai-review: comando {cid} rechazado ({effect})")
+        decision = review_domain.Commit(snapshot=snapshot, work_after_commit=work)
     else:
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
-            "(pull_request, pull_request_target o workflow_run)"
+            "(pull_request, pull_request_target, issue_comment o workflow_run)"
         )
+
+    if isinstance(decision, review_domain.Commit) and decision.work_after_commit:
+        snapshot_ra, despachables, terminadas = review_domain.reautorizar(
+            decision.snapshot,
+            decision.work_after_commit,
+            lambda login_consultado: collaborator_permission(repo, login_consultado),
+        )
+        decision = review_domain.Commit(
+            snapshot=snapshot_ra or decision.snapshot,
+            work_after_commit=tuple(despachables),
+        )
+        for terminada in terminadas:
+            print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
 
     observado = sticky if sticky else None
     resultado = publish_checkpoint(decision, observado, adaptador, login=login)
