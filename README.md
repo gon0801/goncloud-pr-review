@@ -29,7 +29,19 @@ scripts/set-secret.sh gon0801/mi-repo          # pide la key una vez, sin eco
 SECRET_NAME=DEEPSEEK_API_KEY scripts/set-secret.sh gon0801/mi-repo  # llave de respaldo
 scripts/install.sh gon0801/mi-repo             # abre el PR con el workflow
 EXCLUDE=$'data/**\nout/**' scripts/install.sh gon0801/mi-repo   # con exclusiones extra
+ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado (en vez de @main)
 ```
+
+Modo coordinado (coordinador + worker con el escritor anterior retirado, en
+un único commit atómico; ver `docs/reviewer-rollout.md` para el corte):
+
+```bash
+ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+```
+
+El modo coordinado fija ambos workflows al SHA candidato del repo central
+(obligatorio) y abre el PR del conjunto en `chore/ai-review`; si la rama
+cambió durante la instalación reintenta sobre la punta nueva sin forzar.
 
 `AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración, `DEEPSEEK_API_KEY` guarda la llave de la API directa de DeepSeek y la plantilla la pasa como respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal, hay que sustituir también `fallback_api_key` por `${{ secrets.OPENCODE_GO_API_KEY }}` y guardar allí una llave de OpenCode Go.
 
