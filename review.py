@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Glue for the AI PR review action. Subcommands: gate, prepare, install, run, publish, reconcile."""
+"""Glue for the AI PR review action."""
 
 import argparse
 import dataclasses
@@ -1514,7 +1514,9 @@ def cmd_prepare(args):
     (work / "conventions.md").write_text(build_conventions(base))
 
     event = json.loads(Path(env("GITHUB_EVENT_PATH")).read_text())
-    pr = event.get("pull_request") or {}
+    pr = event.get("pull_request")
+    if pr is None:
+        pr = _pr_via_api()
     (work / "pr.md").write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
 
     rules = sh("git", "show", f"{base}:.github/ai-review.md", check=False)
@@ -1532,6 +1534,25 @@ def cmd_prepare(args):
     )
     for e in excluded:
         print(f"  excluido: {e['path']} ({e['reason']})")
+
+
+def _pr_via_api():
+    repo, pr = os.environ.get("REPO", ""), os.environ.get("PR_NUMBER", "")
+    if not repo or not pr:
+        return {}
+    try:
+        respuesta = sh(
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{pr}",
+            "--jq",
+            "{title: .title, body: .body}",
+            check=False,
+        )
+        datos = json.loads(respuesta.stdout) if respuesta.returncode == 0 else {}
+    except Exception:
+        return {}
+    return datos if isinstance(datos, dict) else {}
 
 
 def get_provider():
@@ -2261,6 +2282,16 @@ def anclas_locadas(snapshot):
     return vistas
 
 
+def cobertura_declarada(texto, modelo):
+    """Cobertura respaldada por el bloque del modelo; sin bloque, UNKNOWN."""
+    _, cobertura, _ = split_coverage(texto)
+    mapeada = {
+        "complete": review_domain.COMPLETE_CLAIM,
+        "partial": review_domain.PARTIAL,
+    }.get(cobertura, review_domain.UNKNOWN)
+    return review_domain.UNKNOWN if modelo is None else mapeada
+
+
 def actualizar_memoria_valida(
     load, result, manifest, repo, pr, login, comments, policy=None
 ):
@@ -2296,15 +2327,8 @@ def actualizar_memoria_valida(
         review_domain.observation_de_entrada(entry)
         for entry in (model or {}).get("findings", [])
     ]
-    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
-    cobertura = {
-        "complete": review_domain.COMPLETE_CLAIM,
-        "partial": review_domain.PARTIAL,
-    }.get(cobertura, review_domain.UNKNOWN)
     runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
-    if model is None:
-        # sin bloque del modelo, la cobertura declarada no está respaldada
-        cobertura = review_domain.UNKNOWN
+    cobertura = cobertura_declarada((result or {}).get("result") or "", model)
     excluidos = manifest.get("excluded", []) or []
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
@@ -2798,18 +2822,32 @@ def cmd_publish(args):
             fh.write(summary_text + "\n")
 
 
-def main():
+def _parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=["gate", "prepare", "install", "run", "publish", "reconcile"],
+        choices=[
+            "gate",
+            "prepare",
+            "install",
+            "run",
+            "publish",
+            "reconcile",
+            "execute-request",
+            "close-result",
+        ],
     )
+    parser.add_argument("--request-id", default="")
     parser.add_argument(
         "--work",
         default=os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review"),
     )
     parser.add_argument("--prompt", default=str(Path(__file__).with_name("prompt.md")))
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = _parser().parse_args()
     {
         "gate": cmd_gate,
         "prepare": cmd_prepare,
@@ -2817,6 +2855,8 @@ def main():
         "run": cmd_run,
         "publish": cmd_publish,
         "reconcile": cmd_reconcile,
+        "execute-request": cmd_execute_request,
+        "close-result": cmd_close_result,
     }[args.command](args)
 
 
@@ -2862,7 +2902,7 @@ class ComentariosGh:
             Path(ruta).unlink(missing_ok=True)
 
 
-def despachar_worker(solicitud, *, repo, ref, run_id):
+def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
     sh(
         "gh",
         "workflow",
@@ -2875,9 +2915,13 @@ def despachar_worker(solicitud, *, repo, ref, run_id):
         "-f",
         f"request_id={solicitud.id}",
         "-f",
-        f"coordinator_run_id={run_id}",
+        f"pr_number={pr_number}",
         "-f",
-        f"comment_login={os.environ.get('BOT_LOGIN') or 'github-actions[bot]'}",
+        f"head_sha={solicitud.target.get('head_sha', '')}",
+        "-f",
+        f"base_sha={solicitud.target.get('base_sha', '')}",
+        "-f",
+        f"coordinator_run_id={run_id}",
     )
 
 
@@ -2965,9 +3009,21 @@ def _comandos_de_comentarios(comentarios, login, cursor):
     return tuple(comandos)
 
 
+def fallo_de_resultado(artifact, run_id, attempt):
+    motivo = (artifact or {}).get(ERROR_KEY)
+    if not motivo:
+        return None
+    return review_domain.ReportFailed(
+        request_id=(artifact or {}).get("request_id"),
+        run_id=run_id,
+        attempt=attempt,
+        motivo=motivo,
+        retryable=True,
+    )
+
+
 def cmd_reconcile(args):
-    repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
-    base = env("BASE_SHA")
+    repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     policy = politica_de_revision()
@@ -2983,6 +3039,28 @@ def cmd_reconcile(args):
         )
         return
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    head = os.environ.get("HEAD_SHA") or ""
+    base = os.environ.get("BASE_SHA") or ""
+    if event_name in ("workflow_run", "issue_comment", "workflow_dispatch"):
+        # el head/base vivos salen del PR por API, nunca del checkpoint
+        try:
+            pr_data = json.loads(sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
+            head = pr_data["head"]["sha"]
+            base = pr_data["base"]["sha"]
+        except Exception as exc:
+            print(
+                f"ai-review: no se pudo consultar el PR ({exc}); "
+                "queda pendiente para el próximo evento",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        head = head or (current.revision.head_sha if current.revision else "")
+        base = base or (current.revision.base_sha if current.revision else "")
+        if not head or not base:
+            sys.exit(
+                "ai-review: faltan HEAD_SHA/BASE_SHA y el checkpoint no tiene revisión"
+            )
     facts = review_domain.RepositoryFacts(
         revision=review_domain.Revision(
             base_sha=base, head_sha=head, policy_digest=digest
@@ -3029,18 +3107,39 @@ def cmd_reconcile(args):
                 file=sys.stderr,
             )
             sys.exit(1)
-        observaciones = [
-            review_domain.observation_de_entrada(e) for e in autenticado.observaciones
-        ]
+        fallo = fallo_de_resultado(artifact, wr.get("id"), wr.get("run_attempt"))
+        if fallo is not None:
+            decision = review_domain.reconcile(current, fallo, facts, policy)
+        else:
+            observaciones = [
+                review_domain.observation_de_entrada(e)
+                for e in autenticado.observaciones
+            ]
+            decision = review_domain.reconcile(
+                current,
+                review_domain.ReportReady(
+                    origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
+                    request_id=artifact.get("request_id"),
+                    run_id=autenticado.run_id,
+                    attempt=autenticado.attempt,
+                    observaciones=tuple(observaciones),
+                    cobertura=autenticado.cobertura,
+                ),
+                facts,
+                policy,
+            )
+    elif event_name == "workflow_dispatch":
         decision = review_domain.reconcile(
             current,
-            review_domain.ReportReady(
-                origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
-                request_id=artifact.get("request_id"),
-                run_id=autenticado.run_id,
-                attempt=autenticado.attempt,
-                observaciones=tuple(observaciones),
-                cobertura=autenticado.cobertura,
+            review_domain.RequestReview(
+                origin=review_domain.Origin(kind="push", run_id=_run_id()),
+                target=review_domain.ReviewTarget(
+                    repository=repo,
+                    pr_number=int(pr),
+                    head_sha=head,
+                    base_sha=base,
+                    policy_digest=digest,
+                ),
             ),
             facts,
             policy,
@@ -3077,7 +3176,8 @@ def cmd_reconcile(args):
     else:
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
-            "(pull_request, pull_request_target, issue_comment o workflow_run)"
+            "(pull_request, pull_request_target, issue_comment, "
+            "workflow_run o workflow_dispatch)"
         )
 
     if isinstance(decision, review_domain.Commit) and decision.work_after_commit:
@@ -3105,7 +3205,7 @@ def cmd_reconcile(args):
         dispatch_confirmed(
             resultado,
             despachar=lambda s: despachar_worker(
-                s, repo=repo, ref=worker_ref, run_id=_run_id()
+                s, repo=repo, ref=worker_ref, run_id=_run_id(), pr_number=pr
             ),
         )
         print(
@@ -3113,6 +3213,77 @@ def cmd_reconcile(args):
         )
     else:
         print("ai-review: checkpoint publicado sin trabajo nuevo")
+
+
+def cmd_execute_request(args):
+    """Lee la solicitud persistida y escribe el paquete de datos para el
+    artifact. Nunca publica ni ejecuta contenido del PR."""
+    repo, pr = env("REPO"), env("PR_NUMBER")
+    head = env("HEAD_SHA")
+    base = os.environ.get("BASE_SHA", "")
+    adaptador = ComentariosGh(repo, pr)
+    sticky = sticky_from_comments(
+        adaptador.leer(), os.environ.get("BOT_LOGIN") or "github-actions[bot]"
+    )
+    current = _estado_actual(sticky)
+    if current is None:
+        sys.exit(
+            "ai-review: memoria inválida o de versión futura; "
+            "no se ejecuta la solicitud"
+        )
+    solicitud = next(
+        (
+            r
+            for r in current.pending_requests
+            if r.id == int(args.request_id)
+            and r.state in ("pending", "failed_retryable")
+        ),
+        None,
+    )
+    if solicitud is None:
+        sys.exit(f"ai-review: la solicitud {args.request_id!r} no está pendiente")
+    policy = politica_de_revision()
+    paquete = {
+        "request_id": solicitud.id,
+        "kind": solicitud.kind,
+        "finding_id": solicitud.finding_id,
+        "run_id": _run_id(),
+        "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT") or 0),
+        "pr_head_sha": head,
+        "base_sha": base,
+        "policy_digest": digest_de_politica(policy),
+        "plan": {"mode": "full", "head_sha": head, "base_sha": base},
+        "target": dict(solicitud.target),
+        "observaciones": [],
+        "cobertura": review_domain.UNKNOWN,
+    }
+    destino = Path(args.work) / "request-package.json"
+    destino.write_text(json.dumps(paquete))
+    print(
+        f"ai-review: paquete de la solicitud {solicitud.id} preparado "
+        f"(run {paquete['run_id']} attempt {paquete['attempt']})"
+    )
+
+
+def cmd_close_result(args):
+    work = Path(args.work)
+    paquete = json.loads((work / "request-package.json").read_text())
+    resultado = json.loads((work / "result.json").read_text())
+    texto = resultado.get("result") or ""
+    modelo = parse_model_findings(
+        texto, conservar_anclas=politica_de_identidad() == "anchors"
+    )
+    paquete.update(
+        {
+            "result": texto,
+            "subtype": resultado.get("subtype"),
+            "observaciones": (modelo or {}).get("findings", []),
+            "cobertura": cobertura_declarada(texto, modelo),
+        }
+    )
+    if ERROR_KEY in resultado:
+        paquete[ERROR_KEY] = resultado[ERROR_KEY]
+    (work / "result.json").write_text(json.dumps(paquete))
 
 
 if __name__ == "__main__":

@@ -37,3 +37,4 @@ jobs:
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
+          ./actionlint -color templates/ai-review-publish.yml templates/ai-review-worker.yml

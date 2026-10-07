@@ -3,6 +3,8 @@ import contextlib
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1838,6 +1840,13 @@ class TestFileDetection(unittest.TestCase):
 
 
 class Workflows(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.coord_texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        cls.worker_texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        cls.coord_lineas = cls.coord_texto.splitlines()
+        cls.worker_lineas = cls.worker_texto.splitlines()
+
     def test_dogfood_workflow_matches_template(self):
         template = (ROOT / "templates/ai-review.yml").read_text()
         dogfood = (ROOT / ".github/workflows/ai-review.yml").read_text()
@@ -1863,6 +1872,1044 @@ class Workflows(unittest.TestCase):
     def test_action_disabled_check_is_case_insensitive(self):
         action = (ROOT / "action.yml").read_text()
         self.assertIn("${DISABLED,,}", action)
+
+    def test_coordinator_is_only_writer(self):
+        texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        self.assertIn("permissions:", texto)
+        self.assertIn("contents: read", texto)
+        self.assertIn("pull-requests: write", texto)
+        self.assertIn("actions: write", texto)
+        for clave in ("API_KEY", "FALLBACK_API_KEY", "DEEPSEEK_API_KEY"):
+            self.assertNotIn(clave, texto, f"el coordinador no lleva {clave}")
+
+    def test_worker_cannot_publish(self):
+        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        bloque = texto.split("permissions:")[1].split("\n\n")[0]
+        self.assertIn("contents: read", bloque)
+        self.assertIn("pull-requests: read", bloque, "lee el checkpoint sin publicar")
+        self.assertNotIn("pull-requests: write", bloque)
+        self.assertNotIn("issues", bloque)
+        self.assertNotIn("gh api -X PATCH", texto)
+
+    def test_eventos_resuelven_el_mismo_grupo_por_pr(self):
+        texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        self.assertIn("pull_request_target:", texto)
+        self.assertIn("issue_comment:", texto)
+        self.assertIn("types: [created]", texto)
+        self.assertIn("workflow_run:", texto)
+        self.assertIn("types: [completed]", texto)
+        self.assertIn("workflows: [ai-review-worker]", texto)
+        self.assertIn("workflow_dispatch:", texto)
+        grupo = next(
+            linea
+            for linea in texto.splitlines()
+            if linea.strip().startswith("group: ai-review-")
+        )
+        self.assertIn("github.repository", grupo)
+        for acceso in (
+            "github.event.pull_request.number",
+            "github.event.issue.number",
+            "github.event.inputs.pr_number",
+        ):
+            self.assertIn(acceso, grupo, f"el grupo resuelve el PR de {acceso}")
+        self.assertIn("cancel-in-progress: false", texto)
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn("cancel-in-progress: false", worker)
+        grupo_worker = next(
+            linea
+            for linea in worker.splitlines()
+            if linea.strip().startswith("group: ")
+        )
+        self.assertIn("inputs.request_id", grupo_worker)
+
+    def test_entorno_del_modelo(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn("API_KEY: ${{ secrets.API_KEY }}", worker)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}", worker)
+        self.assertIn("retention-days: 7", worker)
+        for campo in ("request_id", "run_id", "attempt"):
+            self.assertIn(campo, worker)
+        checkouts = [
+            linea for linea in worker.splitlines() if "actions/checkout" in linea
+        ]
+        self.assertTrue(checkouts, "el worker fija su código a revisión confiable")
+        self.assertNotIn("pull_request.head.sha", worker)
+        # las herramientas del modelo las fija el runtime compartido del repo
+        runtime = (ROOT / "review.py").read_text()
+        self.assertIn('"Read,Grep,Glob"', runtime)
+
+    def test_coordinator_exporta_y_worker_recibe_lo_mismo(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        for input_requerido in ("request_id", "pr_number", "head_sha", "base_sha"):
+            self.assertIn(f"{input_requerido}:", worker)
+        self.assertIn("WORKER_REF=", publish, "el despacho necesita la ref confiable")
+
+    def test_coordinator_checkout_y_guard_contra_pwn_request(self):
+        """B1 r2: el coordinador nunca ejecuta código del PR ni de un fork."""
+        lineas = self.coord_lineas
+        tramos = [
+            "\n".join(lineas[i : i + 4])
+            for i, linea in enumerate(lineas)
+            if "actions/checkout" in linea
+        ]
+        self.assertTrue(tramos)
+        for tramo in tramos:
+            self.assertNotIn("workflow_run.head_sha", tramo)
+            self.assertNotIn("pull_request.head", tramo)
+        self.assertIn(
+            "github.event.workflow_run.event == 'workflow_dispatch'", self.coord_texto
+        )
+        self.assertIn(
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            self.coord_texto,
+        )
+
+    def _render(self, plantilla, contexto):
+        def resuelve(expr):
+            for alternativa in expr.split("||"):
+                valor = contexto
+                for campo in alternativa.strip().split("."):
+                    valor = valor.get(campo) if isinstance(valor, dict) else None
+                if valor not in (None, "", False, 0):
+                    return str(valor)
+            return ""
+
+        return re.sub(
+            r"\$\{\{\s*(.+?)\s*\}\}", lambda m: resuelve(m.group(1)), plantilla
+        )
+
+    def test_grupo_y_pr_number_se_evaluan_igual_que_en_pull_request_target(self):
+        """B2 r3: el display_title del worker es el número del PR, así el
+        grupo y PR_NUMBER del workflow_run evalúan igual que en pull_request_target."""
+        run_name = next(
+            linea.split("run-name: ", 1)[1]
+            for linea in self.worker_lineas
+            if linea.startswith("run-name:")
+        )
+        valores = {"pr_number": "12", "request_id": "3"}
+        titulo = re.sub(
+            r"\$\{\{\s*inputs\.(\w+)\s*\}\}",
+            lambda m: valores[m.group(1)],
+            run_name,
+        )
+        self.assertEqual(titulo, "12", "el display_title del worker es el número")
+        repo = "gon0801/repo"
+        ctx_pr = {
+            "github": {
+                "repository": repo,
+                "event": {
+                    "pull_request": {"number": 12},
+                    "issue": {},
+                    "inputs": {},
+                    "workflow_run": {},
+                },
+            }
+        }
+        ctx_wr = {
+            "github": {
+                "repository": repo,
+                "event": {
+                    "pull_request": {},
+                    "issue": {},
+                    "inputs": {},
+                    "workflow_run": {"display_title": titulo},
+                },
+            }
+        }
+        grupo = next(
+            linea.strip()
+            for linea in self.coord_lineas
+            if linea.strip().startswith("group: ai-review-")
+        )
+        self.assertEqual(
+            self._render(grupo, ctx_wr),
+            self._render(grupo, ctx_pr),
+            "el grupo del resultado del worker es el mismo grupo del PR",
+        )
+        self.assertNotIn("workflow_run.id", grupo)
+        exportado = next(
+            linea.strip()
+            for linea in self.coord_lineas
+            if linea.strip().startswith('echo "PR_NUMBER=')
+        )
+        pr_number = self._render(exportado, ctx_wr).split("PR_NUMBER=", 1)[1].strip('"')
+        self.assertEqual(int(pr_number), 12, "PR_NUMBER del workflow_run es el número")
+
+    PASOS_Y_VARIABLES = {
+        "execute-request": {
+            "REPO",
+            "PR_NUMBER",
+            "HEAD_SHA",
+            "BASE_SHA",
+            "GITHUB_TOKEN",
+        },
+        "prepare": {
+            "HEAD_SHA",
+            "BASE_SHA",
+            "REPO",
+            "PR_NUMBER",
+            "GITHUB_TOKEN",
+        },
+        "run": {"API_KEY", "FALLBACK_API_KEY", "REPO", "PR_NUMBER"},
+        "close-result": set(),
+    }
+
+    def _pasos(self):
+        pasos, nombre, en_run = {}, None, False
+        for linea in self.worker_lineas:
+            inicio = re.match(r"^      - name: (.+)$", linea)
+            if inicio:
+                nombre, en_run = inicio.group(1), False
+                pasos[nombre] = {"env": {}, "run": "", "cwd": ""}
+                continue
+            if nombre is None:
+                continue
+            if re.match(r"^        run:", linea):
+                en_run = True
+                en_linea = linea[len("        run:") :].strip()
+                if en_linea and en_linea != "|":
+                    pasos[nombre]["run"] += en_linea + "\n"
+                continue
+            if en_run:
+                if linea.startswith("          "):
+                    pasos[nombre]["run"] += linea[10:] + "\n"
+                else:
+                    en_run = False
+                continue
+            directorio = re.match(r"^        working-directory: (.+)$", linea)
+            if directorio:
+                pasos[nombre]["cwd"] = directorio.group(1).strip()
+                continue
+            clave = re.match(r"^          ([A-Z_]+): (.*)$", linea)
+            if clave:
+                pasos[nombre]["env"][clave.group(1)] = clave.group(2).strip().strip('"')
+        return pasos
+
+    def test_los_pasos_del_worker_parsean_contra_el_argparse_y_reciben_sus_variables(
+        self,
+    ):
+        pasos = self._pasos()
+        revisados = 0
+        for nombre, paso in pasos.items():
+            comandos = [
+                linea
+                for linea in re.sub(r"\\\s*\n\s*", " ", paso["run"]).splitlines()
+                if linea.startswith("python ") and "review.py" in linea
+            ]
+            for comando in comandos:
+                tokens = shlex.split(comando)
+                script = next(
+                    i for i, token in enumerate(tokens) if token.endswith("review.py")
+                )
+                argumentos = tokens[script + 1 :]
+                with self.subTest(paso=nombre, comando=comando):
+                    try:
+                        review._parser().parse_args(argumentos)
+                    except SystemExit as error:
+                        self.fail(
+                            f"argparse rechaza la línea del paso '{nombre}': {error}"
+                        )
+                    requeridas = self.PASOS_Y_VARIABLES[argumentos[0]]
+                    faltan = requeridas - set(paso["env"])
+                    self.assertEqual(
+                        faltan, set(), f"al paso '{nombre}' le faltan variables"
+                    )
+                    if argumentos[0] == "run":
+                        for credencial in ("GITHUB_TOKEN", "GH_TOKEN"):
+                            self.assertNotIn(credencial, paso["env"])
+                    revisados += 1
+        self.assertEqual(revisados, 4)
+
+    @contextlib.contextmanager
+    def _repo_minimo(self):
+        with tempfile.TemporaryDirectory() as repo:
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+                )
+
+            git("init", "-q", "-b", "main")
+            git("config", "user.email", "prueba@example.com")
+            git("config", "user.name", "Prueba")
+            (Path(repo) / "README.md").write_text("base\n")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD").stdout.strip()
+            (Path(repo) / "app.py").write_text("x = 1\n")
+            git("add", "-A")
+            git("commit", "-qm", "cambio")
+            head = git("rev-parse", "HEAD").stdout.strip()
+            yield repo, base, head
+
+    def test_las_lineas_del_worker_ejecutan_contra_el_cli_real(self):
+        import review_domain as domain
+
+        pasos = self._pasos()
+        estado = self._snapshot_con_solicitud()
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        with self._repo_minimo() as (repo, base, head):
+            valores = {
+                "inputs": {
+                    "request_id": "1",
+                    "pr_number": "12",
+                    "head_sha": head,
+                    "base_sha": base,
+                    "coordinator_run_id": "55",
+                },
+                "github": {"repository": "o/r"},
+                "secrets": {},
+            }
+
+            def env_de(paso, extra):
+                env = {
+                    clave: self._render(valor, valores)
+                    for clave, valor in pasos[paso]["env"].items()
+                }
+                env.update(extra)
+                return env
+
+            with tempfile.TemporaryDirectory() as work:
+                with mock.patch.dict(
+                    os.environ,
+                    env_de(
+                        "preparar solicitud y paquete",
+                        {
+                            "GITHUB_RUN_ID": "55",
+                            "GITHUB_RUN_ATTEMPT": "2",
+                            "BOT_LOGIN": "bot",
+                        },
+                    ),
+                    clear=False,
+                ):
+                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=work, request_id="1")
+                        )
+                paquete = json.loads((Path(work) / "request-package.json").read_text())
+                self.assertEqual(
+                    paquete["plan"],
+                    {"mode": "full", "head_sha": head, "base_sha": base},
+                    "execute-request recibe el BASE_SHA real del paso",
+                )
+                evento = Path(work) / "event.json"
+                evento.write_text("{}")
+                sh_real = review.sh
+
+                def sh_mixto(*args, **kw):
+                    if args[0] == "gh":
+                        return mock.Mock(
+                            returncode=0,
+                            stdout=json.dumps(
+                                {"title": "Título del PR", "body": "Cuerpo del PR"}
+                            ),
+                        )
+                    return sh_real(*args, **kw)
+
+                with contextlib.chdir(repo):
+                    with mock.patch.dict(
+                        os.environ,
+                        env_de("preparar contexto", {"GITHUB_EVENT_PATH": str(evento)}),
+                        clear=False,
+                    ):
+                        with mock.patch.object(review, "sh", sh_mixto):
+                            review.cmd_prepare(
+                                argparse.Namespace(
+                                    work=work, prompt=str(ROOT / "prompt.md")
+                                )
+                            )
+                self.assertEqual(
+                    (Path(work) / "pr.md").read_text(),
+                    "# Título del PR\n\nCuerpo del PR\n",
+                    "el contexto del PR llega por API con evento de despacho",
+                )
+                manifest = json.loads((Path(work) / "manifest.json").read_text())
+                self.assertEqual(
+                    manifest["base"], base, "el merge-base sale de SHAs reales"
+                )
+                self.assertEqual(manifest["reviewed"], ["app.py"])
+                with mock.patch.dict(os.environ, env_de("modelo", {}), clear=False):
+                    with self.assertRaises(SystemExit):
+                        review.cmd_run(argparse.Namespace(work=work))
+                resultado = json.loads((Path(work) / "result.json").read_text())
+                self.assertIn(
+                    review.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
+                )
+                (Path(work) / "result.json").write_text(
+                    json.dumps(
+                        {
+                            "result": "**Veredicto:** 1 High.\n\nDetalle.\n\n"
+                            + block_of(make_finding("F1", file="app.py"))
+                            + "\nCOVERAGE: complete",
+                            "subtype": "success",
+                        }
+                    )
+                )
+                with mock.patch.dict(
+                    os.environ, {"GITHUB_WORKSPACE": str(ROOT)}, clear=False
+                ):
+                    review.cmd_close_result(argparse.Namespace(work=work))
+                fusion = json.loads((Path(work) / "result.json").read_text())
+                self.assertEqual(fusion["subtype"], "success")
+                self.assertIn("Detalle.", fusion["result"])
+                self.assertEqual(
+                    [e["id"] for e in fusion["observaciones"]],
+                    ["F1"],
+                    "los hallazgos del modelo llegan al paquete",
+                )
+                self.assertEqual(
+                    fusion["cobertura"],
+                    domain.COMPLETE_CLAIM,
+                    "la cobertura declarada respaldada llega al paquete",
+                )
+
+    @contextlib.contextmanager
+    def _repo_con_worker_sandbox(self):
+        with (
+            tempfile.TemporaryDirectory() as origen,
+            tempfile.TemporaryDirectory() as ws,
+        ):
+
+            def git(repo, *args):
+                return subprocess.run(
+                    ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+                )
+
+            git(origen, "init", "-q", "-b", "main")
+            git(origen, "config", "user.email", "prueba@example.com")
+            git(origen, "config", "user.name", "Prueba")
+            git(origen, "config", "uploadpack.allowAnySHA1InWant", "true")
+            for nombre in ("review.py", "review_domain.py", "prompt.md"):
+                shutil.copy(ROOT / nombre, Path(origen) / nombre)
+            (Path(origen) / "app.py").write_text("def total(a, b):\n    return a + b\n")
+            (Path(origen) / "README.md").write_text("base\n")
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "m1")
+            b2 = git(origen, "rev-parse", "HEAD").stdout.strip()
+            git(origen, "checkout", "-qb", "feature")
+            (Path(origen) / "README.md").write_text("base avanzada\n")
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "b4")
+            base = git(origen, "rev-parse", "HEAD").stdout.strip()
+            git(origen, "checkout", "-qb", "pr", b2)
+            (Path(origen) / "app.py").write_text("def total(a, b):\n    return a - b\n")
+            (Path(origen) / "nuevo.py").write_text("VALOR = 1\n")
+            (Path(origen) / "review.py").write_text(
+                "from pathlib import Path\n\n"
+                'Path(__file__).with_name("PR-EJECUTO-CODIGO").write_text("x")\n'
+            )
+            git(origen, "add", "-A")
+            git(origen, "commit", "-qm", "h3")
+            head = git(origen, "rev-parse", "HEAD").stdout.strip()
+            merge_base = git(origen, "merge-base", base, head).stdout.strip()
+            git(origen, "checkout", "-q", "main")
+            git(ws, "clone", "-q", "--depth", "1", f"file://{origen}", ".")
+            yield ws, base, head, merge_base
+
+    def test_el_worker_nunca_ejecuta_codigo_del_pr(self):
+        pasos = self._pasos()
+        traer = pasos["traer el PR como datos"]
+        lineas_fetch = [
+            linea.strip() for linea in traer["run"].splitlines() if linea.strip()
+        ]
+        self.assertTrue(lineas_fetch)
+        with self._repo_con_worker_sandbox() as (ws, base, head, merge_base):
+            ws = Path(ws)
+            valores = {
+                "github": {"workspace": ws, "repository": "o/r"},
+                "secrets": {},
+                "inputs": {
+                    "request_id": "1",
+                    "pr_number": "12",
+                    "head_sha": head,
+                    "base_sha": base,
+                    "coordinator_run_id": "55",
+                },
+            }
+            evento = Path(ws) / "event.json"
+            evento.write_text("{}")
+            for linea in lineas_fetch:
+                subprocess.run(
+                    ["bash", "-c", self._render(linea, valores)],
+                    cwd=ws,
+                    check=True,
+                    capture_output=True,
+                )
+            arbol_modelo = (
+                ws / self._render(pasos["modelo"].get("cwd", "."), valores)
+            ).resolve()
+
+            def correr(paso):
+                env = dict(os.environ)
+                shim = ws / "bin"
+                shim.mkdir(exist_ok=True)
+                if not (shim / "python").exists():
+                    os.symlink(sys.executable, shim / "python")
+                if not (shim / "gh").exists():
+                    gh = shim / "gh"
+                    gh.write_text(
+                        "#!/bin/sh\n"
+                        "cat <<'JSON'\n"
+                        '{"title": "Título del PR", "body": "Cuerpo del PR"}\n'
+                        "JSON\n"
+                    )
+                    gh.chmod(0o755)
+                env.update(
+                    {
+                        "GITHUB_WORKSPACE": str(ws),
+                        "RUNNER_TEMP": str(Path(ws) / "runner-temp"),
+                        "GITHUB_EVENT_PATH": str(evento),
+                        "PATH": f"{shim}:{env['PATH']}",
+                    }
+                )
+                for clave, valor in paso["env"].items():
+                    env[clave] = self._render(valor, valores)
+                return subprocess.run(
+                    ["bash", "-c", re.sub(r"\\\s*\n\s*", " ", paso["run"])],
+                    cwd=arbol_modelo,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+
+            preparado = correr(pasos["preparar contexto"])
+            self.assertEqual(preparado.returncode, 0, preparado.stderr)
+            corrido = correr(pasos["modelo"])
+            self.assertEqual(corrido.returncode, 0, corrido.stderr)
+            self.assertFalse(
+                (ws / "PR-EJECUTO-CODIGO").exists(),
+                "el worker ejecutó el review.py del PR",
+            )
+            self.assertFalse(
+                (arbol_modelo / "PR-EJECUTO-CODIGO").exists(),
+                "el worker ejecutó el review.py del PR",
+            )
+            manifest = json.loads(
+                (Path(ws) / "runner-temp" / "ai-review" / "manifest.json").read_text()
+            )
+            self.assertEqual(manifest["base"], merge_base)
+            self.assertIn(
+                "return a - b",
+                (arbol_modelo / "app.py").read_text(),
+                "el árbol del modelo tiene la versión del PR",
+            )
+            self.assertTrue(
+                (arbol_modelo / "nuevo.py").exists(),
+                "los archivos nuevos del PR existen para el modelo",
+            )
+
+    def test_el_artifact_usa_runner_temp_de_github(self):
+        paso = self.worker_texto.split("name: subir resultado como datos")[1]
+        self.assertIn('path: "${{ runner.temp }}/ai-review"', paso)
+        self.assertNotIn("RUNNER_TEMP", paso)
+
+    def test_prepare_trae_el_pr_por_api_cuando_el_evento_no_lo_trae(self):
+        with self._repo_minimo() as (repo, base, head):
+            evento = Path(repo) / "event.json"
+            evento.write_text("{}")
+            with tempfile.TemporaryDirectory() as work:
+
+                def sh_mixto(returncode, salida):
+                    real = review.sh
+
+                    def falso(*args, **kw):
+                        if args[0] == "gh":
+                            return mock.Mock(returncode=returncode, stdout=salida)
+                        return real(*args, **kw)
+
+                    return falso
+
+                def preparar(con_mock):
+                    with mock.patch.dict(
+                        os.environ,
+                        {
+                            "REPO": "o/r",
+                            "PR_NUMBER": "12",
+                            "HEAD_SHA": head,
+                            "BASE_SHA": base,
+                            "MAX_DIFF_BYTES": "1500000",
+                            "GITHUB_EVENT_PATH": str(evento),
+                        },
+                        clear=False,
+                    ):
+                        with mock.patch.object(review, "sh", con_mock):
+                            with contextlib.chdir(repo):
+                                review.cmd_prepare(
+                                    argparse.Namespace(
+                                        work=work, prompt=str(ROOT / "prompt.md")
+                                    )
+                                )
+                    return (Path(work) / "pr.md").read_text()
+
+                util = sh_mixto(
+                    0, json.dumps({"title": "Título del PR", "body": "Cuerpo"})
+                )
+                self.assertEqual(
+                    preparar(util),
+                    "# Título del PR\n\nCuerpo\n",
+                    "sin pull_request en el evento, el título llega por API",
+                )
+                roto = sh_mixto(1, "")
+                self.assertEqual(
+                    preparar(roto), "# \n\n\n", "la API caída degrada sin romper"
+                )
+
+    def _condicion_del_guard(self):
+        lineas = self.coord_lineas
+        inicio = next(
+            i for i, linea in enumerate(lineas) if linea.strip().startswith("if:")
+        )
+        encabezado = lineas[inicio].strip()[3:].strip()
+        tramos = [] if encabezado in (">-", "|", ">") else [encabezado]
+        for linea in lineas[inicio + 1 :]:
+            if not linea.startswith("      ") or linea.lstrip().startswith("- "):
+                break
+            tramos.append(linea.strip())
+        return " ".join(tramos)
+
+    def _evaluar_github(self, expresion, contexto):
+        tokens = re.findall(r"\|\||&&|!=|==|!|\(|\)|'[^']*'|[^\s()!&|=']+", expresion)
+
+        def ruta(nombre):
+            nodo = contexto
+            for campo in nombre.split("."):
+                nodo = nodo.get(campo) if isinstance(nodo, dict) else None
+            return nodo
+
+        def verdad(valor):
+            return valor not in (None, "", False, 0)
+
+        pos = 0
+
+        def valor():
+            nonlocal pos
+            token = tokens[pos]
+            if token.startswith("'"):
+                pos += 1
+                return token[1:-1]
+            pos += 1
+            return ruta(token)
+
+        def primario():
+            nonlocal pos
+            token = tokens[pos]
+            if token == "(":
+                pos += 1
+                resultado = o()
+                pos += 1
+                return resultado
+            if token == "!":
+                pos += 1
+                return not primario()
+            if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
+                izquierda = valor()
+                operador = tokens[pos]
+                pos += 1
+                derecha = valor()
+                return (
+                    (izquierda == derecha)
+                    if operador == "=="
+                    else (izquierda != derecha)
+                )
+            return verdad(valor())
+
+        def y():
+            nonlocal pos
+            resultado = primario()
+            while pos < len(tokens) and tokens[pos] == "&&":
+                pos += 1
+                derecho = primario()
+                resultado = resultado and derecho
+            return resultado
+
+        def o():
+            nonlocal pos
+            resultado = y()
+            while pos < len(tokens) and tokens[pos] == "||":
+                pos += 1
+                derecho = y()
+                resultado = resultado or derecho
+            return resultado
+
+        return o()
+
+    def test_el_guard_del_coordinador_filtra_drafts_y_forks(self):
+        guard = self._condicion_del_guard()
+        repo = "o/r"
+
+        def ctx(nombre, event):
+            return {
+                "github": {
+                    "event_name": nombre,
+                    "repository": repo,
+                    "event": event,
+                }
+            }
+
+        def pr(draft, origen):
+            return {
+                "pull_request": {
+                    "draft": draft,
+                    "head": {"repo": {"full_name": origen}},
+                }
+            }
+
+        casos = [
+            (ctx("pull_request_target", pr(False, repo)), True),
+            (ctx("pull_request_target", pr(True, repo)), False),
+            (ctx("pull_request_target", pr(False, "fork/r")), False),
+            (ctx("issue_comment", {"issue": {"number": 5}}), True),
+            (
+                ctx(
+                    "workflow_run",
+                    {
+                        "workflow_run": {
+                            "event": "workflow_dispatch",
+                            "head_repository": {"full_name": repo},
+                        }
+                    },
+                ),
+                True,
+            ),
+            (
+                ctx(
+                    "workflow_run",
+                    {
+                        "workflow_run": {
+                            "event": "pull_request",
+                            "head_repository": {"full_name": repo},
+                        }
+                    },
+                ),
+                False,
+            ),
+            (ctx("workflow_dispatch", {"inputs": {"pr_number": "3"}}), True),
+        ]
+        for contexto, esperado in casos:
+            with self.subTest(evento=contexto["github"]["event_name"]):
+                self.assertEqual(self._evaluar_github(guard, contexto), esperado)
+
+    def test_la_descarga_fija_el_attempt_del_resultado(self):
+        paso = self.coord_texto.split("name: bajar el resultado del worker")[1]
+        self.assertIn("attempt-${WORKER_ATTEMPT}", paso)
+        self.assertIn("-ne 1", paso)
+        self.assertNotIn("-exec cp", paso)
+
+    def test_close_result_conserva_la_senal_de_error(self):
+        import review_domain as domain
+
+        estado = self._snapshot_con_solicitud()
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        with tempfile.TemporaryDirectory() as work:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "GITHUB_RUN_ATTEMPT": "2",
+                    "BOT_LOGIN": "bot",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=work, request_id="1")
+                    )
+            (Path(work) / "result.json").write_text(
+                json.dumps({review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
+            )
+            review.cmd_close_result(argparse.Namespace(work=work))
+            paquete = json.loads((Path(work) / "result.json").read_text())
+        self.assertEqual(
+            paquete[review.ERROR_KEY],
+            "falta el secret AI_REVIEW_API_KEY",
+            "la señal de error del paso modelo llega al coordinador",
+        )
+        self.assertEqual(paquete["observaciones"], [])
+        self.assertEqual(paquete["cobertura"], domain.UNKNOWN)
+
+    def _estado_pendiente(self):
+        import review_domain as domain
+
+        digest = review.digest_de_politica(review.politica_de_revision())
+        return domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=digest
+            ),
+            next_id=2,
+            completion=domain.PARTIAL,
+            findings=[],
+            command_cursor=0,
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1,
+                    kind="review",
+                    origin="push",
+                    basis_generation=1,
+                    state="pending",
+                    target=domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest=digest,
+                    ).json(),
+                    solicitante="",
+                )
+            ],
+            request_count=1,
+        )
+
+    def _reconciliar(self, estado, tmp, evento, **entorno):
+        import review_domain as domain
+
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso.patches = []
+        falso.parchar = lambda cid, body: falso.patches.append((cid, body))
+        falso.crear = lambda body: falso.patches.append((None, body))
+        despachados = []
+
+        def sh_falso(*args, **kw):
+            ruta = args[2] if len(args) > 2 else ""
+            if "/pulls/" in ruta:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                    ),
+                )
+            if "/commits/" in ruta:
+                return mock.Mock(returncode=0, stdout=json.dumps({"sha": "f" * 40}))
+            if "/collaborators/" in ruta:
+                return mock.Mock(
+                    returncode=0, stdout=json.dumps({"permission": "admin"})
+                )
+            raise AssertionError(f"sh inesperado: {args}")
+
+        base_env = {
+            "REPO": "o/r",
+            "PR_NUMBER": "1",
+            "HEAD_SHA": "c" * 40,
+            "BASE_SHA": "b" * 40,
+            "WORKER_REF": "main",
+            "BOT_LOGIN": "bot",
+            "GITHUB_EVENT_NAME": evento,
+            "GITHUB_RUN_ID": "55",
+        }
+        base_env.update(entorno)
+        with mock.patch.dict(os.environ, base_env, clear=False):
+            with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review, "sh", sh_falso):
+                    with mock.patch.object(
+                        review,
+                        "despachar_worker",
+                        side_effect=lambda s, **kw: despachados.append(s.id),
+                    ):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        return falso.patches, despachados
+
+    def test_el_error_del_worker_no_se_publica_como_revision(self):
+        import review_domain as domain
+
+        estado = self._estado_pendiente()
+        with tempfile.TemporaryDirectory() as tmp:
+            evento = Path(tmp) / "event.json"
+            evento.write_text(
+                json.dumps(
+                    {
+                        "workflow_run": {
+                            "id": 77,
+                            "name": "ai-review-worker",
+                            "head_branch": "main",
+                            "head_sha": "f" * 40,
+                            "run_attempt": 1,
+                            "event": "workflow_dispatch",
+                            "head_repository": {"full_name": "o/r"},
+                        }
+                    }
+                )
+            )
+            (Path(tmp) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": 1,
+                        "run_id": 77,
+                        "attempt": 1,
+                        "pr_head_sha": "c" * 40,
+                        "policy_digest": review.digest_de_politica(
+                            review.politica_de_revision()
+                        ),
+                        "target": domain.ReviewTarget(
+                            repository="o/r",
+                            pr_number=1,
+                            head_sha="c" * 40,
+                            base_sha="b" * 40,
+                            policy_digest=review.digest_de_politica(
+                                review.politica_de_revision()
+                            ),
+                        ).json(),
+                        "observaciones": [],
+                        "cobertura": "unknown",
+                        review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
+                    }
+                )
+            )
+            patches, _ = self._reconciliar(
+                estado, tmp, "workflow_run", GITHUB_EVENT_PATH=str(evento)
+            )
+        self.assertTrue(patches, "el checkpoint se publica")
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertIsInstance(publicado, domain.Valid)
+        solicitud = publicado.snapshot.pending_requests[0]
+        self.assertEqual(
+            solicitud.state, "failed_retryable", "el fallo deja la solicitud viva"
+        )
+        self.assertEqual(solicitud.motivo, "falta el secret AI_REVIEW_API_KEY")
+
+    def test_la_recuperacion_redescubre_lo_pendiente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            patches, despachados = self._reconciliar(
+                self._estado_pendiente(), tmp, "workflow_dispatch"
+            )
+        self.assertEqual(
+            despachados, [1], "la recuperación vuelve a despachar lo pendiente"
+        )
+        self.assertEqual(patches, [], "sin cambio de estado no reescribe")
+
+    def test_el_despacho_pasa_base_sha_al_worker(self):
+        capturado = []
+
+        def sh_falso(*args, **kw):
+            capturado.append(args)
+            return mock.Mock(returncode=0, stdout="")
+
+        solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
+        with mock.patch.object(review, "sh", sh_falso):
+            review.despachar_worker(
+                solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
+            )
+        self.assertIn("head_sha=" + "c" * 40, capturado[0])
+        self.assertIn("base_sha=" + "b" * 40, capturado[0])
+
+    @classmethod
+    def _snapshot_con_solicitud(cls):
+        import review_domain as domain
+
+        return domain.Snapshot(
+            schema=3,
+            generation=2,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.PARTIAL,
+            findings=[],
+            command_cursor=0,
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1,
+                    kind="review",
+                    origin="comando",
+                    basis_generation=2,
+                    state="pending",
+                    target=domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest="d" * 64,
+                    ).json(),
+                    solicitante="jefe",
+                )
+            ],
+            request_count=1,
+        )
+
+    def test_execute_request_arma_el_paquete_con_plan(self):
+        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+        import review_domain as domain
+
+        estado = self._snapshot_con_solicitud()
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso = mock.Mock()
+        falso.leer = lambda: comentarios
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "GITHUB_RUN_ATTEMPT": "2",
+                    "BOT_LOGIN": "bot",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=tmp, request_id="1")
+                    )
+            paquete = json.loads((Path(tmp) / "request-package.json").read_text())
+        self.assertEqual(paquete["request_id"], 1)
+        self.assertEqual(paquete["run_id"], 55)
+        self.assertEqual(paquete["attempt"], 2)
+        self.assertEqual(paquete["pr_head_sha"], "c" * 40)
+        self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
+        self.assertEqual(
+            paquete["plan"],
+            {"mode": "full", "head_sha": "c" * 40, "base_sha": "b" * 40},
+        )
+        self.assertEqual(
+            paquete["policy_digest"],
+            review.digest_de_politica(review.politica_de_revision()),
+            "el digest sale de la política normalizada, no del checkpoint",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {"REPO": "o/r", "PR_NUMBER": "1", "GITHUB_RUN_ID": "55"},
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with self.assertRaises(SystemExit):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=tmp, request_id="99")
+                        )
+
+    def test_actionlint_firma_las_plantillas(self):
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        for plantilla in (
+            "templates/ai-review-publish.yml",
+            "templates/ai-review-worker.yml",
+        ):
+            self.assertIn(plantilla, ci, f"el job de actionlint de CI mira {plantilla}")
+        binario = shutil.which("actionlint")
+        if binario is None:
+            self.skipTest("actionlint no está en PATH; lo corre el job workflows de CI")
+        for nombre in ("ai-review-publish.yml", "ai-review-worker.yml"):
+            with self.subTest(plantilla=nombre):
+                salida = subprocess.run(
+                    [binario, "-no-color", str(ROOT / "templates" / nombre)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(salida.returncode, 0, salida.stdout + salida.stderr)
 
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()
