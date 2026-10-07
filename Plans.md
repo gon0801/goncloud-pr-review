@@ -105,7 +105,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:done (PR #48, squash b2b82e4; evidencia docs/evidence/reviewer/F1.md) |
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
-| T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md) |
+| T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done con desvío declarado (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md; desvío: T09 añade parse_comando_reconcile y collect_dismissals queda para el flujo run/publish sin tocar) |
 | T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:TODO |
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
@@ -174,3 +174,9 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U1-r3 review F4 | reautorizar huerfana follow-up (walkthrough comandos correctos, check en pass) | abierta |
 | U1-r3 review F3+F5 | docs evidencia (desglose y redaccion, sin repro de codigo) | abierta |
 | U1-r3 CodeRabbit | review.py:3083-3094 cache de permisos por login (Trivial, misma familia N5) | abierta |
+| U1 cierre | AuthorizedCommand de reconcile crea explain sin digest (dos entradas divergentes para el mismo concepto) | abierta |
+| U1 cierre | digest se persiste y nadie lo consume aún (entrega de explicaciones) | abierta |
+| U1 cierre | GITHUB_SHA en issue_comment es el tip de la rama default (el workflow de T10 debe resolver el HEAD del PR) | abierta |
+| U1 cierre | falta el render de los rechazos al usuario (T10 publicador; hoy visibles en log y recibos del checkpoint) | abierta |
+| U1 cierre | descartar F1 y F2 multi-id del legado se ignora silenciosamente en reconcile (soportar o rechazo visible) | abierta |
+| U1 cierre | escritor legado vivo puede avanzar el cursor por encima de un explicar pendiente + sticky sin previo crea checkpoint vacío (ruido) | abierta |
