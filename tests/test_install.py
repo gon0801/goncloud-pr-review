@@ -533,13 +533,13 @@ class CompatibleRollback(InstaladorTest):
                 "body": "cuerpo viejo",
             }
         )
-        resultado = self._correr("o/r", extra={"ACTION_SHA": "e" * 40})
+        resultado = self._correr("o/r")
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         pr = repo["prs"][0]
         self.assertEqual(pr["number"], 9)
+        self.assertNotIn("@" + "e" * 40, pr["body"], "sin ACTION_SHA no hay pin")
         self.assertIn("ci: revisión automática", pr["title"])
-        self.assertIn("e" * 40, pr["body"])
         self.assertNotIn("cuerpo viejo", pr["body"])
 
     def test_updates_expanded_schema3_in_current_mode(self):

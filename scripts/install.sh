@@ -321,9 +321,10 @@ PY
 
     numero_pr="$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[].number' | head -n1)"
     if [ -n "$numero_pr" ]; then
+      referencia="${ACTION_SHA:+@$ACTION_SHA}"
       gh pr edit "$numero_pr" -R "$repo" \
         --title "ci: revisión automática de PRs con IA" \
-        --body "Instala el workflow de revisión automática (gon0801/goncloud-pr-review@$ACTION_SHA). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo." >/dev/null
+        --body "Instala el workflow de revisión automática (gon0801/goncloud-pr-review$referencia). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo." >/dev/null
       echo "$repo: el PR ya existía, rama y descripción actualizadas"
     else
       gh pr create -R "$repo" --head "$branch" --base "$default" \

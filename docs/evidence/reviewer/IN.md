@@ -159,7 +159,7 @@ verde: `Ran 6 tests in 1.888s` + `OK`.
 - Fila: detener la admisión hoy es por congelación de eventos; la bandera de
   desactivación de las plantillas nuevas sigue pendiente (AI_REVIEW_DISABLED,
   fila de T11).
-- Fila: el modo actual conserva el reset con fuerza de la rama propia en la
-  actualización trivial (preexistente de la base; el retorno usa la vía
-  atómica sin fuerza).
+- Fila: el modo actual conserva el reset con fuerza de la rama propia solo en
+  la actualización trivial de una rama ya existente (preexistente de la base,
+  fuera del delta; el retorno usa la vía atómica sin fuerza).
 - Filas previas de UW y bloques anteriores siguen en el ledger.
