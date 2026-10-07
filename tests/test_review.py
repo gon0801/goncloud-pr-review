@@ -2108,7 +2108,7 @@ class Workflows(unittest.TestCase):
                     self.assertEqual(
                         faltan, set(), f"al paso '{nombre}' le faltan variables"
                     )
-                    if tokens[0] == "run":
+                    if argumentos[0] == "run":
                         for credencial in ("GITHUB_TOKEN", "GH_TOKEN"):
                             self.assertNotIn(credencial, paso["env"])
                     revisados += 1
@@ -2255,10 +2255,8 @@ class Workflows(unittest.TestCase):
             git(origen, "commit", "-qm", "b4")
             base = git(origen, "rev-parse", "HEAD").stdout.strip()
             git(origen, "checkout", "-qb", "pr", b2)
-            (Path(origen) / "app.py").write_text(
-                "def total(a, b):\n    return a - b  # bug del PR\n"
-            )
-            (Path(origen) / "nuevo.py").write_text("SECRETO = 'archivo nuevo del PR'\n")
+            (Path(origen) / "app.py").write_text("def total(a, b):\n    return a - b\n")
+            (Path(origen) / "nuevo.py").write_text("VALOR = 1\n")
             (Path(origen) / "review.py").write_text(
                 "from pathlib import Path\n\n"
                 'Path(__file__).with_name("PR-EJECUTO-CODIGO").write_text("x")\n'
