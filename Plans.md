@@ -176,8 +176,8 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U1-r3 CodeRabbit | review.py:3083-3094 cache de permisos por login (Trivial, misma familia N5) | abierta |
 | U1 cierre | AuthorizedCommand de reconcile crea explain sin digest (dos entradas divergentes para el mismo concepto) | abierta |
 | U1 cierre | digest se persiste y nadie lo consume aún (entrega de explicaciones) | abierta |
-| U1 cierre | GITHUB_SHA en issue_comment es el tip de la rama default (el workflow de T10 debe resolver el HEAD del PR) | abierta |
-| U1 cierre | falta el render de los rechazos al usuario (T10 publicador; hoy visibles en log y recibos del checkpoint) | abierta |
+| U1 cierre | GITHUB_SHA en issue_comment era el tip de la rama default; resuelta en T10 (cmd_reconcile toma head/base vivos del PR por API; activa al instalar las plantillas en T11) | resuelta en T10 |
+| U1 cierre | falta el render de los rechazos al usuario (T11/T16; T10 cerro sin render, solo log; desvio declarado en T10) | abierta |
 | U1 cierre | descartar F1 y F2 multi-id del legado se ignora silenciosamente en reconcile (soportar o rechazo visible) | abierta |
 | U1 cierre | escritor legado vivo puede avanzar el cursor por encima de un explicar pendiente + sticky sin previo crea checkpoint vacío (ruido) | abierta |
 | UW-r7 review F5 | UW.md:54 sigue citando prueba inexistente en lista de mutantes (parte fuerte corregida; queda nombre muerto documental) | abierta |
@@ -188,3 +188,8 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | UW-r6 veredicto N2 | subtype del resultado viaja en paquete pero el carril workflow_run no lo usa para degradar cobertura ni reintentar (costura de fallos del worker, T11) | abierta |
 | UW-r6 veredicto N3 | FINDING_IDENTITY no viaja al worker; close-result parsea con current aunque el coordinador opere en anchors (T16) | abierta |
 | UW-r4 LISTO | flags de aislamiento del runtime sin prueba que los fije; working-directory de preparar contexto sin discriminante (benigno); instalacion y firma del proveedor en T11 | abierta |
+| UW cierre | timeout-minutes de las plantillas nuevas sin valor fijado (UW.md:97; AI_REVIEW_DISABLED ya en F9) | abierta |
+| UW cierre | secrets.API_KEY vs el nombre real en consumidores (UW.md:97, T11) | abierta |
+| UW cierre | git fetch sin credenciales en repos privados (UW.md:97, T11) | abierta |
+| UW cierre | filtros de issue vs PR en issue_comment (UW.md:97, T11) | abierta |
+| UW cierre | intent no numerico en execute-request deja traceback crudo (UW.md:97, T11) | abierta |
