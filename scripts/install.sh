@@ -99,6 +99,12 @@ if not punta:
 contenido_publicador = plantilla("ai-review-publish.yml")
 contenido_worker = plantilla("ai-review-worker.yml")
 
+rutas = consulta(
+    f"repos/{repo}/git/trees/{punta}?recursive=1", expr=".tree[].path"
+)
+if rutas is None:
+    fail("no pude leer el árbol de la punta; no se publica nada")
+
 for intento in range(1, INTENTOS + 1):
     arbol_base = consulta(f"repos/{repo}/git/commits/{punta}", expr=".tree.sha")
     if not arbol_base:
@@ -115,31 +121,30 @@ for intento in range(1, INTENTOS + 1):
         if hecho.returncode != 0:
             fail(f"no pude crear el blob ({hecho.stderr.strip()})")
         blobs.append(json.loads(hecho.stdout)["sha"])
-    cuerpo = json.dumps(
+    entradas = [
         {
-            "base_tree": arbol_base,
-            "tree": [
-                {
-                    "path": ".github/workflows/ai-review-publish.yml",
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blobs[0],
-                },
-                {
-                    "path": ".github/workflows/ai-review-worker.yml",
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blobs[1],
-                },
-                {
-                    "path": ".github/workflows/ai-review.yml",
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": None,
-                },
-            ],
-        }
-    )
+            "path": ".github/workflows/ai-review-publish.yml",
+            "mode": "100644",
+            "type": "blob",
+            "sha": blobs[0],
+        },
+        {
+            "path": ".github/workflows/ai-review-worker.yml",
+            "mode": "100644",
+            "type": "blob",
+            "sha": blobs[1],
+        },
+    ]
+    if ".github/workflows/ai-review.yml" in rutas.splitlines():
+        entradas.append(
+            {
+                "path": ".github/workflows/ai-review.yml",
+                "mode": "100644",
+                "type": "blob",
+                "sha": None,
+            }
+        )
+    cuerpo = json.dumps({"base_tree": arbol_base, "tree": entradas})
     arbol = api(f"repos/{repo}/git/trees", entrada=cuerpo)
     if arbol.returncode != 0:
         fail(f"no pude crear el árbol ({arbol.stderr.strip()})")
@@ -212,7 +217,25 @@ abiertos = subprocess.run(
     text=True,
 )
 if abiertos.stdout.strip():
-    print(f"{repo}: el PR ya existía, rama actualizada")
+    editado = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "edit",
+            abiertos.stdout.strip(),
+            "-R",
+            repo,
+            "--title",
+            titulo,
+            "--body",
+            cuerpo_pr,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if editado.returncode != 0:
+        fail(f"no pude actualizar el PR ({editado.stderr.strip()})")
+    print(f"{repo}: el PR ya existía, rama y descripción actualizadas")
 else:
     creado = subprocess.run(
         [
@@ -296,8 +319,12 @@ PY
       gh api "${args[@]}" >/dev/null
     fi
 
-    if [ -n "$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[].number')" ]; then
-      echo "$repo: el PR ya existía, rama actualizada"
+    numero_pr="$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[].number' | head -n1)"
+    if [ -n "$numero_pr" ]; then
+      gh pr edit "$numero_pr" -R "$repo" \
+        --title "ci: revisión automática de PRs con IA" \
+        --body "Instala el workflow de revisión automática (gon0801/goncloud-pr-review@$ACTION_SHA). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo." >/dev/null
+      echo "$repo: el PR ya existía, rama y descripción actualizadas"
     else
       gh pr create -R "$repo" --head "$branch" --base "$default" \
         --title "ci: revisión automática de PRs con IA" \

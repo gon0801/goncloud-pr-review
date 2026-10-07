@@ -44,7 +44,8 @@ FAKE_GH = textwrap.dedent(
             prefijo, campo = expr.split("[].", 1)
             lista = dato
             for parte in prefijo.strip(".").split("."):
-                lista = lista.get(parte) if isinstance(lista, dict) else None
+                if parte:
+                    lista = lista.get(parte) if isinstance(lista, dict) else None
             campo_final = campo.strip(".")
             return [
                 fila.get(campo_final) for fila in (lista or []) if isinstance(fila, dict)
@@ -95,6 +96,17 @@ FAKE_GH = textwrap.dedent(
             ]
             emitir([{'number': p['number']} for p in abiertos])
             guardar()
+            sys.exit(0)
+        if args[1] == "edit":
+            numero = int(args[2])
+            for p in r["prs"]:
+                if p["number"] == numero:
+                    if "--title" in args:
+                        p["title"] = args[args.index("--title") + 1]
+                    if "--body" in args:
+                        p["body"] = args[args.index("--body") + 1]
+            guardar()
+            print(f"https://github.com/{repo}/pull/{numero}")
             sys.exit(0)
         if args[1] == "create":
             numero = 1 + max((p["number"] for p in r["prs"]), default=0)
@@ -236,6 +248,8 @@ FAKE_GH = textwrap.dedent(
             base = {}
         for entrada_arbol in cuerpo["tree"]:
             if entrada_arbol.get("sha") is None:
+                if entrada_arbol["path"] not in base:
+                    fallar(1, f"no se puede borrar un path ausente: {entrada_arbol['path']}")
                 base.pop(entrada_arbol["path"], None)
             else:
                 base[entrada_arbol["path"]] = entrada_arbol["sha"]
@@ -485,6 +499,48 @@ class CompatibleRollback(InstaladorTest):
         )
         repo = self._repo_final("o/r")
         self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
+
+    def test_coordinado_funciona_sin_el_escritor_anterior(self):
+        self._repo(
+            "o/r", {"README.md": "readme del consumidor\n", "src/app.py": "x = 1\n"}
+        )
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "f" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        archivos = self._archivos_de(repo, "chore/ai-review")
+        self.assertIn(".github/workflows/ai-review-publish.yml", archivos)
+        self.assertIn(".github/workflows/ai-review-worker.yml", archivos)
+        self.assertNotIn(".github/workflows/ai-review.yml", archivos)
+        self.assertIn("README.md", archivos)
+
+    def test_el_pr_existente_se_actualiza_con_el_cuerpo_del_modo(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+                "README.md": "readme\n",
+            },
+        )
+        repo_antes = self.estado["repos"]["o/r"]
+        repo_antes["branches"]["chore/ai-review"] = repo_antes["branches"]["main"]
+        repo_antes["prs"].append(
+            {
+                "number": 9,
+                "head": "chore/ai-review",
+                "base": "main",
+                "title": "viejo",
+                "body": "cuerpo viejo",
+            }
+        )
+        resultado = self._correr("o/r", extra={"ACTION_SHA": "e" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        pr = repo["prs"][0]
+        self.assertEqual(pr["number"], 9)
+        self.assertIn("ci: revisión automática", pr["title"])
+        self.assertIn("e" * 40, pr["body"])
+        self.assertNotIn("cuerpo viejo", pr["body"])
 
     def test_updates_expanded_schema3_in_current_mode(self):
         import hashlib
