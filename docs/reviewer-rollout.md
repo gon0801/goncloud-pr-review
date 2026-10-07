@@ -23,8 +23,9 @@ ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
   cambia lo que ejecutan los consumidores instalados.
 - Si la rama cambió durante la instalación, el instalador reintenta sobre la
   punta nueva sin forzar; si no logra en tres intentos, falla con error.
-- El PR del conjunto exige el secret `AI_REVIEW_API_KEY` en el consumidor
-  (`scripts/set-secret.sh`).
+- El conjunto lee los secrets `API_KEY` (proveedor principal) y
+  `FALLBACK_API_KEY` (respaldo) del consumidor; el escritor que el retorno
+  repone lee `AI_REVIEW_API_KEY` y `DEEPSEEK_API_KEY`.
 
 El modo actual (`scripts/install.sh gon0801/mi-repo`) no cambia: instala
 `ai-review.yml` y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de
@@ -65,11 +66,12 @@ compatible probado (modo actual, `ai-review.yml` con `ACTION_SHA` fijado).
 3. **Instalar el retorno.** `ACTION_SHA=<sha compatible probado>
    scripts/install.sh gon0801/mi-repo` genera el commit que repone
    `ai-review.yml` y retira el conjunto coordinado, con la misma atomicidad.
-4. **Conservar schema y presupuesto.** El escritor de retorno lee y actualiza
-   el estado con estrategia `current`: conserva el schema 3, el presupuesto
-   de memoria y avanza la generación sin recortar hallazgos. La prueba
+4. **Conservar schema y hallazgos.** El escritor de retorno lee y actualiza
+   el estado con estrategia `current`: conserva el schema 3, los hallazgos y
+   avanza la generación. La prueba
    `CompatibleRollback.test_updates_expanded_schema3_in_current_mode` fija
-   esta garantía sobre una memoria con descarte y solicitud pendiente.
+   esta garantía sobre una memoria con descarte, solicitud pendiente y
+   generación en curso.
 5. **Verificar la memoria.** Tras la primera revisión del escritor de
    retorno, el comentario fijo conserva los descartes confirmados y las
    solicitudes pendientes (sobreviven a la desactivación por diseño).

@@ -40,8 +40,15 @@ FAKE_GH = textwrap.dedent(
     def jq(dato, expr):
         if expr == ".":
             return dato
-        if expr.startswith(".[]."):
-            return [fila.get(expr[4:]) for fila in dato]
+        if "[]." in expr:
+            prefijo, campo = expr.split("[].", 1)
+            lista = dato
+            for parte in prefijo.strip(".").split("."):
+                lista = lista.get(parte) if isinstance(lista, dict) else None
+            campo_final = campo.strip(".")
+            return [
+                fila.get(campo_final) for fila in (lista or []) if isinstance(fila, dict)
+            ]
         actual = dato
         for campo in expr.strip(".").split("."):
             actual = actual.get(campo) if isinstance(actual, dict) else None
@@ -115,6 +122,12 @@ FAKE_GH = textwrap.dedent(
         fallar(1, f"repo desconocido: {repo}")
     resto = partes[3:]
 
+    for falla, pendientes in list(estado.get("fallos", {}).items()):
+        if pendientes > 0 and falla in ruta:
+            estado["fallos"][falla] = pendientes - 1
+            guardar()
+            fallar(1, f"fallo transitorio inyectado en {ruta}")
+
     if not resto:
         emitir({'default_branch': r['default']})
         guardar()
@@ -145,7 +158,7 @@ FAKE_GH = textwrap.dedent(
         if estado.get("razas", {}).get(repo, 0) > 0:
             estado["razas"][repo] -= 1
             punta_actual = r["branches"][rama]
-            ajeno = "cambio ajeno durante la instalacion"
+            ajeno = "cambio ajeno"
             blob_ajeno = base64.b64encode(ajeno.encode()).decode()
             sha_ajeno = sha_de(blob_ajeno)
             r["blobs"][sha_ajeno] = blob_ajeno
@@ -199,11 +212,25 @@ FAKE_GH = textwrap.dedent(
         guardar()
         sys.exit(0)
 
+    if resto[:2] == ["git", "trees"] and len(resto) == 3:
+        apuntador = resto[2]
+        if apuntador in r["commits"]:
+            apuntador = r["commits"][apuntador]["tree"]
+        arbol = r["trees"].get(apuntador)
+        if arbol is None:
+            fallar(1, "árbol desconocido")
+        emitir({"tree": [{"path": ruta_hijo} for ruta_hijo in arbol]})
+        guardar()
+        sys.exit(0)
+
     if resto[:2] == ["git", "trees"]:
         if not entrada:
             fallar(2, f"arbol sin cuerpo: args={args!r}")
         cuerpo = json.loads(entrada)
-        base = dict(r["trees"][cuerpo["base_tree"]])
+        if cuerpo.get("base_tree"):
+            base = dict(r["trees"][cuerpo["base_tree"]])
+        else:
+            base = {}
         for entrada_arbol in cuerpo["tree"]:
             if entrada_arbol.get("sha") is None:
                 base.pop(entrada_arbol["path"], None)
@@ -221,7 +248,6 @@ FAKE_GH = textwrap.dedent(
 
 
 def _sembrar(repo, archivos, mensaje="base"):
-    """Estado inicial: rama default con un commit raíz y sus archivos (texto)."""
     arbol = {}
     blobs = {}
     for ruta, contenido in archivos.items():
@@ -261,7 +287,9 @@ class InstaladorTest(unittest.TestCase):
     def _guardar(self):
         json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
 
-    def _correr(self, *argumentos, raza=None, extra=None):
+    def _correr(self, *argumentos, raza=None, extra=None, fallos=None):
+        if fallos:
+            self.estado["fallos"] = dict(fallos)
         if raza:
             self.estado["razas"] = dict(raza)
         self._guardar()
@@ -295,8 +323,6 @@ class InstaladorTest(unittest.TestCase):
 
 class AtomicInstall(InstaladorTest):
     def test_single_commit_replaces_writer_set(self):
-        """T11: un único commit instala coordinador y worker y retira al
-        escritor anterior, conservando los cambios ajenos del árbol."""
         viejo = "name: AI review\nuses: gon0801/goncloud-pr-review@main\n"
         self._repo(
             "o/r",
@@ -321,25 +347,26 @@ class AtomicInstall(InstaladorTest):
         publicador = self._contenido(
             repo, archivos, ".github/workflows/ai-review-publish.yml"
         )
-        self.assertIn("repository: gon0801/goncloud-pr-review", publicador)
-        self.assertIn("ref: " + "a" * 40, publicador)
-        self.assertEqual(
-            commit["parents"],
-            [punta_previa],
-            "un solo commit sobre la punta: sin commits partidos",
+        worker = self._contenido(
+            repo, archivos, ".github/workflows/ai-review-worker.yml"
         )
-        self.assertEqual(
-            len(repo["commits"]), 2, "el instalador agrega exactamente un commit"
-        )
-        abiertos = [p for p in repo["prs"] if p["head"] == "chore/ai-review"]
-        self.assertEqual(len(abiertos), 1, "el PR del conjunto queda abierto")
+        for instalado in (publicador, worker):
+            self.assertIn("repository: gon0801/goncloud-pr-review", instalado)
+            self.assertIn("ref: " + "a" * 40, instalado)
+            self.assertIn("path: ai-review-code", instalado)
+            self.assertIn("$GITHUB_WORKSPACE/ai-review-code/review.py", instalado)
         self.assertIn(
-            "a" * 40, abiertos[0]["body"], "el piloto queda fijado al SHA candidato"
+            "uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
+            worker,
+            "el checkout del consumidor queda para traer el PR como datos",
         )
+        self.assertEqual(commit["parents"], [punta_previa])
+        self.assertEqual(len(repo["commits"]), 2)
+        abiertos = [p for p in repo["prs"] if p["head"] == "chore/ai-review"]
+        self.assertEqual(len(abiertos), 1)
+        self.assertIn("a" * 40, abiertos[0]["body"])
 
     def test_retry_preserves_unrelated_changes(self):
-        """T11: si la rama cambia durante la instalación, reintenta sobre la
-        punta nueva sin forzar y conserva el cambio ajeno."""
         viejo = "name: AI review\n"
         self._repo(
             "o/r", {".github/workflows/ai-review.yml": viejo, "README.md": "v1\n"}
@@ -371,9 +398,64 @@ class AtomicInstall(InstaladorTest):
 
 
 class CompatibleRollback(InstaladorTest):
+    def test_el_retiro_atomico_restaura_el_escritor_anterior(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+                "README.md": "readme del consumidor\n",
+            },
+        )
+        repo_antes = self.estado["repos"]["o/r"]
+        repo_antes["branches"]["chore/ai-review"] = repo_antes["branches"]["main"]
+        punta_previa = repo_antes["branches"]["main"]
+        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        punta = repo["branches"]["chore/ai-review"]
+        commit = repo["commits"][punta]
+        archivos = self._archivos_de(repo, "chore/ai-review")
+        self.assertIn(".github/workflows/ai-review.yml", archivos)
+        self.assertNotIn(".github/workflows/ai-review-publish.yml", archivos)
+        self.assertNotIn(".github/workflows/ai-review-worker.yml", archivos)
+        restituido = self._contenido(repo, archivos, ".github/workflows/ai-review.yml")
+        self.assertIn("gon0801/goncloud-pr-review@" + "c" * 40, restituido)
+        self.assertIn("README.md", archivos, "los cambios ajenos se conservan")
+        self.assertEqual(commit["parents"], [punta_previa], "un solo commit atómico")
+        self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+
+    def test_un_fallo_transitorio_no_publica_arbol_sin_base(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review.yml": "viejo\n",
+                "README.md": "readme del consumidor\n",
+            },
+        )
+        punta_previa = self.estado["repos"]["o/r"]["branches"]["main"]
+        resultado = self._correr(
+            "--coordinado",
+            "o/r",
+            extra={"ACTION_SHA": "d" * 40},
+            fallos={"git/commits/": 1},
+        )
+        self.assertNotEqual(
+            resultado.returncode, 0, "el fallo transitorio debe salir alto"
+        )
+        repo = self._repo_final("o/r")
+        self.assertEqual(
+            len(repo["commits"]),
+            1,
+            "sin fallo de referencia no se publica ningún commit",
+        )
+        self.assertEqual(
+            repo["branches"].get("chore/ai-review"),
+            punta_previa,
+            "la rama queda en la punta de partida",
+        )
+
     def test_updates_expanded_schema3_in_current_mode(self):
-        """T11: el escritor de retorno (modo actual) actualiza una memoria
-        ampliada schema 3 conservando descarte, solicitud pendiente y presupuesto."""
         import hashlib
         import sys
 
@@ -465,15 +547,12 @@ class CompatibleRollback(InstaladorTest):
         recarga = domain.read_snapshot(f"{review.MARKER}\n{bloque}")
         self.assertIsInstance(recarga, domain.Valid)
         final = recarga.snapshot
-        self.assertEqual(final.schema, 3, "el esquema se conserva en el retorno")
+        self.assertEqual(final.schema, 3)
         descartado = next(f for f in final.findings if f.id == "F2")
         self.assertIsInstance(descartado.status, domain.StatusDismissed)
-        self.assertEqual(
-            len(final.pending_requests), 1, "la solicitud pendiente sobrevive"
-        )
+        self.assertEqual(len(final.pending_requests), 1)
         self.assertEqual(final.pending_requests[0].id, 2)
         self.assertEqual(final.pending_requests[0].state, "pending")
         self.assertEqual(final.command_cursor, 7)
-        self.assertEqual(
-            final.generation, 5, "la generación avanza con el escritor de retorno"
-        )
+        self.assertEqual(final.generation, 5)
+        self.assertEqual([f.id for f in final.findings], ["F1", "F2"])

@@ -57,16 +57,20 @@ def consulta(*args, expr):
 def plantilla(nombre):
     texto = (pathlib.Path(here) / "templates" / nombre).read_text()
     ancla = "        with:\n          persist-credentials: false"
-    inserto = (
+    paso_central = (
+        "      - name: checkout del CLI confiable del repo central\n"
+        "        uses: actions/checkout@v4\n"
         "        with:\n"
         f"          repository: {central}\n"
         f"          ref: {action_sha}\n"
         "          path: ai-review-code\n"
-        "          persist-credentials: false"
+        "          persist-credentials: false\n"
     )
     if ancla not in texto:
         sys.exit(f"instalador: no encontré el checkout confiable en {nombre}")
-    return texto.replace(ancla, inserto, 1).replace(
+    return texto.replace(
+        ancla, ancla + "\n" + paso_central.rstrip("\n"), 1
+    ).replace(
         '"$GITHUB_WORKSPACE/review.py"',
         '"$GITHUB_WORKSPACE/ai-review-code/review.py"',
     ).replace(
@@ -97,6 +101,8 @@ contenido_worker = plantilla("ai-review-worker.yml")
 
 for intento in range(1, INTENTOS + 1):
     arbol_base = consulta(f"repos/{repo}/git/commits/{punta}", expr=".tree.sha")
+    if not arbol_base:
+        fail("no pude leer el árbol de la punta; no se publica nada")
     blobs = []
     for contenido in (contenido_publicador, contenido_worker):
         hecho = api(
@@ -142,7 +148,7 @@ for intento in range(1, INTENTOS + 1):
         "ci: revisión coordinada de PRs con IA (coordinador + worker)\n\n"
         f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
         f"candidato {action_sha} de {central} y retira ai-review.yml.\n"
-        "Requiere el secret AI_REVIEW_API_KEY en este repo."
+        "Requiere los secrets API_KEY y FALLBACK_API_KEY en este repo."
     )
     hecho = api(
         f"repos/{repo}/git/commits",
@@ -174,6 +180,8 @@ for intento in range(1, INTENTOS + 1):
         file=sys.stderr,
     )
     punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+    if not punta:
+        fail("no pude releer la punta para el reintento")
 
 titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
 cuerpo_pr = (
@@ -243,17 +251,46 @@ PY
     content+=$'\n'
 
     default="$(gh api "repos/$repo" --jq .default_branch)"
-    base_sha="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
-    gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$base_sha" >/dev/null 2>&1 \
-      || gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$base_sha" -F force=true >/dev/null
+    punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha 2>/dev/null || true)"
+    if [ -z "$punta" ]; then
+      punta="$(gh api "repos/$repo/git/ref/heads/$default" --jq .object.sha)"
+      gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$punta" >/dev/null
+    fi
+    conjunto="$(gh api "repos/$repo/git/trees/$punta" --jq '.tree[].path' | grep -c 'workflows/ai-review-' || true)"
 
-    path=".github/workflows/ai-review.yml"
-    existing="$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)"
-    args=(-X PUT "repos/$repo/contents/$path" -f branch="$branch"
-          -f message="ci: revisión automática de PRs con IA"
-          -f content="$(printf '%s' "$content" | base64 | tr -d '\n')")
-    [ -n "$existing" ] && args+=(-f sha="$existing")
-    gh api "${args[@]}" >/dev/null
+    if [ "${conjunto:-0}" -ge 2 ]; then
+      # Retorno: un commit atómico repone ai-review.yml y retira coordinador
+      # y worker, sobre la punta y sin forzar (misma disciplina del coordinado).
+      for intento in 1 2 3; do
+        arbol_base="$(gh api "repos/$repo/git/commits/$punta" --jq .tree.sha)"
+        if [ -z "$arbol_base" ]; then
+          echo "instalador: $repo: no pude leer el árbol; no se publica nada" >&2
+          exit 1
+        fi
+        blob_b64="$(printf '%s' "$content" | base64 | tr -d '\n')"
+        bsha="$(gh api "repos/$repo/git/blobs" -f content="$blob_b64" -f encoding=base64 --jq .sha)"
+        cuerpo="$(printf '{"base_tree":"%s","tree":[{"path":".github/workflows/ai-review.yml","mode":"100644","type":"blob","sha":"%s"},{"path":".github/workflows/ai-review-publish.yml","mode":"100644","type":"blob","sha":null},{"path":".github/workflows/ai-review-worker.yml","mode":"100644","type":"blob","sha":null}]}' "$arbol_base" "$bsha")"
+        arbol_sha="$(gh api "repos/$repo/git/trees" --input - <<< "$cuerpo" --jq .sha)"
+        commit_sha="$(gh api "repos/$repo/git/commits" -f message="ci: retorno al escritor compatible de revisión con IA" -F "tree=$arbol_sha" -F "parents[]=$punta" --jq .sha)"
+        if gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$commit_sha" >/dev/null 2>&1; then
+          punta="$commit_sha"
+          break
+        fi
+        if [ "$intento" = "3" ]; then
+          echo "instalador: $repo: la rama cambió durante el retorno y no se puede forzar" >&2
+          exit 1
+        fi
+        punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+      done
+    else
+      path=".github/workflows/ai-review.yml"
+      existing="$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)"
+      args=(-X PUT "repos/$repo/contents/$path" -f branch="$branch"
+            -f message="ci: revisión automática de PRs con IA"
+            -f content="$(printf '%s' "$content" | base64 | tr -d '\n')")
+      [ -n "$existing" ] && args+=(-f sha="$existing")
+      gh api "${args[@]}" >/dev/null
+    fi
 
     if [ -n "$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[].number')" ]; then
       echo "$repo: el PR ya existía, rama actualizada"
