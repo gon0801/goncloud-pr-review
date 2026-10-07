@@ -369,6 +369,7 @@ class AtomicInstall(InstaladorTest):
         self.assertEqual(len(abiertos), 1)
         self.assertIn("a" * 40, abiertos[0]["body"])
         self.assertIn("API_KEY", abiertos[0]["body"])
+        self.assertIn("FALLBACK_API_KEY", abiertos[0]["body"])
         self.assertNotIn("AI_REVIEW_API_KEY", abiertos[0]["body"])
         self.assertIn("API_KEY", commit["message"])
 
@@ -460,6 +461,30 @@ class CompatibleRollback(InstaladorTest):
             punta_previa,
             "la rama queda en la punta de partida",
         )
+
+    def test_el_retorno_sale_alto_si_no_puede_leer_el_arbol(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+                "README.md": "readme\n",
+            },
+        )
+        repo_antes = self.estado["repos"]["o/r"]
+        repo_antes["branches"]["chore/ai-review"] = repo_antes["branches"]["main"]
+        punta_previa = repo_antes["branches"]["main"]
+        resultado = self._correr(
+            "o/r", extra={"ACTION_SHA": "e" * 40}, fallos={"git/trees": 1}
+        )
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertIn(
+            "no pude leer el árbol",
+            resultado.stderr,
+            "sale alto por la lectura del árbol, no degradando al PUT",
+        )
+        repo = self._repo_final("o/r")
+        self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
 
     def test_updates_expanded_schema3_in_current_mode(self):
         import hashlib
