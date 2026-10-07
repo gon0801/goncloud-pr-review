@@ -1864,6 +1864,82 @@ class Workflows(unittest.TestCase):
         action = (ROOT / "action.yml").read_text()
         self.assertIn("${DISABLED,,}", action)
 
+    def test_coordinator_is_only_writer(self):
+        texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        self.assertIn("permissions:", texto)
+        self.assertIn("contents: read", texto)
+        self.assertIn("pull-requests: write", texto)
+        self.assertIn("actions: write", texto)
+        for clave in ("API_KEY", "FALLBACK_API_KEY", "DEEPSEEK_API_KEY"):
+            self.assertNotIn(clave, texto, f"el coordinador no lleva {clave}")
+
+    def test_worker_cannot_publish(self):
+        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        bloque = texto.split("permissions:")[1].split("\n\n")[0]
+        self.assertIn("contents: read", bloque)
+        self.assertNotIn("pull-requests", bloque, "el worker no escribe comentarios")
+        self.assertNotIn("issues", bloque)
+        self.assertNotIn("gh api -X PATCH", texto)
+
+    def test_eventos_resuelven_el_mismo_grupo_por_pr(self):
+        texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        self.assertIn("pull_request_target:", texto)
+        self.assertIn("issue_comment:", texto)
+        self.assertIn("types: [created]", texto)
+        self.assertIn("workflow_run:", texto)
+        self.assertIn("types: [completed]", texto)
+        self.assertIn("workflows: [ai-review-worker]", texto)
+        self.assertIn("workflow_dispatch:", texto)
+        grupo = next(
+            linea
+            for linea in texto.splitlines()
+            if linea.strip().startswith("group: ai-review-")
+        )
+        self.assertIn("github.repository", grupo)
+        for acceso in (
+            "github.event.pull_request.number",
+            "github.event.issue.number",
+            "github.event.inputs.pr_number",
+        ):
+            self.assertIn(acceso, grupo, f"el grupo resuelve el PR de {acceso}")
+        self.assertIn("cancel-in-progress: false", texto)
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn("cancel-in-progress: false", worker)
+        grupo_worker = next(
+            linea
+            for linea in worker.splitlines()
+            if linea.strip().startswith("group: ")
+        )
+        self.assertIn("inputs.request_id", grupo_worker)
+
+    def test_entorno_del_modelo(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn("API_KEY: ${{ secrets.API_KEY }}", worker)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}", worker)
+        self.assertIn("retention-days: 7", worker)
+        for campo in ("request_id", "run_id", "attempt"):
+            self.assertIn(campo, worker)
+        checkouts = [
+            linea for linea in worker.splitlines() if "actions/checkout" in linea
+        ]
+        self.assertTrue(checkouts, "el worker fija su código a revisión confiable")
+        self.assertNotIn("pull_request.head.sha", worker)
+        # las herramientas del modelo las fija el runtime compartido del repo
+        runtime = (ROOT / "review.py").read_text()
+        self.assertIn('"Read,Grep,Glob"', runtime)
+
+    def test_coordinator_exporta_y_worker_recibe_lo_mismo(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        for input_requerido in ("request_id", "pr_number", "head_sha"):
+            self.assertIn(f"{input_requerido}:", worker)
+        self.assertIn("WORKER_REF=", publish, "el despacho necesita la ref confiable")
+
+    def test_coordinator_descarga_el_resultado_del_worker(self):
+        publish = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        self.assertIn("workflow_run", publish)
+        self.assertIn("download", publish.lower())
+
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()
         self.assertIn("30 on small incremental pushes", action)
