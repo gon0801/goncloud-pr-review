@@ -188,7 +188,7 @@ cuerpo_pr = (
     f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
     f"candidato `{action_sha}` de {central} y retira el escritor anterior\n"
     "ai-review.yml en un único commit.\n\n"
-    "Requiere el secret `AI_REVIEW_API_KEY` en este repo.\n"
+    "Requiere los secrets `API_KEY` y `FALLBACK_API_KEY` en este repo.\n"
     "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
     "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
 )
@@ -256,7 +256,11 @@ PY
       punta="$(gh api "repos/$repo/git/ref/heads/$default" --jq .object.sha)"
       gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$punta" >/dev/null
     fi
-    conjunto="$(gh api "repos/$repo/git/trees/$punta" --jq '.tree[].path' | grep -c 'workflows/ai-review-' || true)"
+    rutas="$(gh api "repos/$repo/git/trees/$punta?recursive=1" --jq '.tree[].path')" || {
+      echo "instalador: $repo: no pude leer el árbol; no se publica nada" >&2
+      exit 1
+    }
+    conjunto="$(printf '%s' "$rutas" | grep -c 'workflows/ai-review-' || true)"
 
     if [ "${conjunto:-0}" -ge 2 ]; then
       # Retorno: un commit atómico repone ai-review.yml y retira coordinador

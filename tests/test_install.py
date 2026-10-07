@@ -219,7 +219,10 @@ FAKE_GH = textwrap.dedent(
         arbol = r["trees"].get(apuntador)
         if arbol is None:
             fallar(1, "árbol desconocido")
-        emitir({"tree": [{"path": ruta_hijo} for ruta_hijo in arbol]})
+        rutas = sorted(arbol)
+        if "recursive=1" not in ruta:
+            rutas = [ruta_hijo for ruta_hijo in rutas if "/" not in ruta_hijo]
+        emitir({"tree": [{"path": ruta_hijo} for ruta_hijo in rutas]})
         guardar()
         sys.exit(0)
 
@@ -365,6 +368,9 @@ class AtomicInstall(InstaladorTest):
         abiertos = [p for p in repo["prs"] if p["head"] == "chore/ai-review"]
         self.assertEqual(len(abiertos), 1)
         self.assertIn("a" * 40, abiertos[0]["body"])
+        self.assertIn("API_KEY", abiertos[0]["body"])
+        self.assertNotIn("AI_REVIEW_API_KEY", abiertos[0]["body"])
+        self.assertIn("API_KEY", commit["message"])
 
     def test_retry_preserves_unrelated_changes(self):
         viejo = "name: AI review\n"
