@@ -273,7 +273,15 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "Major",
                         "Cuidado con 🤖 y <details>marca de herramienta</details> en "
                         "el texto ✅ Addressed in commit a1b2c3d",
-                    )
+                    ),
+                    hallazgo(
+                        "c1-a02",
+                        "Alinea el orden de los campos",
+                        "x.py",
+                        9,
+                        "Low",
+                        "El orden declarado no coincide con el aplicado",
+                    ),
                 ],
                 producto="tool-a",
                 configuracion="ca",
@@ -288,7 +296,7 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "y.py",
                         3,
                         "Nitpick",
-                        "Revisar el límite del bucle",
+                        "Revisar el límite del bucle que tool-a marcó",
                     )
                 ],
                 producto="tool-b",
@@ -308,7 +316,8 @@ class BlindJudgmentsV2(unittest.TestCase):
         for fila in hoja["hallazgos"]:
             self.assertEqual(set(fila), CLAVES_FILA_V2)
         self.assertEqual(
-            sorted(f["severidad"] for f in hoja["hallazgos"]), ["baja", "media"]
+            sorted(f["severidad"] for f in hoja["hallazgos"]),
+            ["baja", "baja", "media"],
         )
         texto = json.dumps(hoja["hallazgos"], ensure_ascii=False).lower()
         for token in TOKENS_FUGA_V2:
@@ -318,7 +327,7 @@ class BlindJudgmentsV2(unittest.TestCase):
             self.assertEqual(set(fila), CLAVES_CORRESPONDENCIA_V2)
         self.assertEqual(
             sorted(f["severidad_original"] for f in correspondencia["filas"]),
-            ["Major", "Nitpick"],
+            ["Low", "Major", "Nitpick"],
         )
         self.assertEqual(
             {f["producto"] for f in correspondencia["filas"]}, {"tool-a", "tool-b"}

@@ -45,8 +45,11 @@ SEVERIDAD_V2 = {
     "trivial": "baja",
     "nitpick": "baja",
     "minor": "baja",
+    "low": "baja",
     "major": "media",
+    "medium": "media",
     "critical": "alta",
+    "high": "alta",
 }
 GRUPOS_V2 = ("ajuste", "reservada")
 
@@ -228,16 +231,31 @@ def severidad_normalizada_v2(declarada):
     return SEVERIDAD_V2.get(str(declarada).strip().lower(), "no declarada")
 
 
-def fila_hoja_v2(o, h):
+def redactar_identificadores_v2(texto, o):
+    cadenas = []
+    if o["producto"]:
+        cadenas.append(o["producto"])
+    if len(o["configuracion"]) >= 8:
+        cadenas.append(o["configuracion"])
+    for cadena in sorted(cadenas, key=len, reverse=True):
+        texto = texto.replace(cadena, "[redactado]")
+    return texto
+
+
+def fila_hoja_v2(o, h, observaciones):
     linea = h.get("linea")
     detalle = h.get("detalle")
+    diagnostico = h["titulo"]
     evidencia = limpiar_evidencia_v2(detalle) if detalle is not None else ""
+    for fuente in observaciones:
+        diagnostico = redactar_identificadores_v2(diagnostico, fuente)
+        evidencia = redactar_identificadores_v2(evidencia, fuente)
     return {
         "caso": o["caso"],
         "head": o["head"],
-        "diagnostico": h["titulo"],
+        "diagnostico": diagnostico,
         "ubicacion": f"{h['ruta']}:{linea}" if linea is not None else h["ruta"],
-        "evidencia": evidencia or h["titulo"],
+        "evidencia": evidencia or diagnostico,
         "severidad": severidad_normalizada_v2(h.get("severidad")),
     }
 
@@ -348,7 +366,7 @@ def main_v2(raiz):
             pares.append(
                 (
                     clave_finding_v2(o, h),
-                    fila_hoja_v2(o, h),
+                    fila_hoja_v2(o, h, observaciones),
                     fila_correspondencia_v2(o, h, particion),
                 )
             )

@@ -37,9 +37,15 @@ ObservationKey completa; una fila histórica (sólo caso y hallazgo) sólo se
 admite cuando resuelve a una única observación del caso. El informe no tiene
 precisión global: cada grupo (producto, configuracion) informa hallazgos,
 precisión, defectos, intentos (los fallidos se conservan), solicitudes con
-reintentos y costos. Los pares se fijan antes de evaluar resultados; un par
-con contraparte ausente o con campos del caso que difieren de los declarados
-se rechaza y sus observaciones quedan en sin_pareja con la causa.
+reintentos y costos. Una observación con duracion_s, turnos y costo_usd todos
+ausentes no es una ejecución (por ejemplo, comentarios existentes): no cuenta
+en intentos, solicitudes ni costo, se informa en sin_ejecucion y sigue
+contando en observaciones, hallazgos y precisión. Un duplicate con
+duplicado_de igual al propio hallazgo se rechaza. Los pares se fijan antes
+de evaluar resultados; un par con contraparte ausente, con campos del caso
+que difieren de los declarados o con control y variante que resuelven a la
+misma observación se rechaza y sus observaciones quedan en sin_pareja con
+la causa.
 """
 
 import argparse
@@ -337,6 +343,12 @@ def lado_resuelto(corpus, vistas, par, rol):
     return vistas.get(clave)
 
 
+def es_ejecucion(datos):
+    return any(
+        datos[clave] is not None for clave in ("duracion_s", "turnos", "costo_usd")
+    )
+
+
 def informe_grupo(producto, configuracion, registros, conocidos_por_caso):
     registros = sorted(
         registros,
@@ -384,9 +396,10 @@ def informe_grupo(producto, configuracion, registros, conocidos_por_caso):
         }
     solicitudes = {}
     for registro in registros:
-        solicitudes.setdefault((registro["caso"], registro["repeticion"]), []).append(
-            registro
-        )
+        if es_ejecucion(registro["datos"]):
+            solicitudes.setdefault(
+                (registro["caso"], registro["repeticion"]), []
+            ).append(registro)
     por_solicitud = []
     for (caso, repeticion), grupo in sorted(solicitudes.items()):
         duraciones = [
@@ -414,23 +427,27 @@ def informe_grupo(producto, configuracion, registros, conocidos_por_caso):
                 ],
             }
         )
-    exitosos = sum(1 for r in registros if r["datos"]["resultado"] == "success")
-    fallidos = len(registros) - exitosos
+    ejecuciones = [r for r in registros if es_ejecucion(r["datos"])]
+    exitosos = sum(1 for r in ejecuciones if r["datos"]["resultado"] == "success")
+    fallidos = len(ejecuciones) - exitosos
     costos = [
         r["datos"]["costo_usd"]
-        for r in registros
+        for r in ejecuciones
         if r["datos"]["costo_usd"] is not None
     ]
     return {
         "producto": producto,
         "configuracion": configuracion,
         "observaciones": len(registros),
+        "sin_ejecucion": len(registros) - len(ejecuciones),
         "solicitudes_total": len(solicitudes),
         "intentos": {
-            "total": len(registros),
+            "total": len(ejecuciones),
             "exitosos": exitosos,
             "fallidos": fallidos,
-            "tasa_fallos": round(fallidos / len(registros), 4) if registros else None,
+            "tasa_fallos": round(fallidos / len(ejecuciones), 4)
+            if ejecuciones
+            else None,
         },
         "hallazgos": {
             "total": total_hallazgos,
@@ -450,7 +467,7 @@ def informe_grupo(producto, configuracion, registros, conocidos_por_caso):
         "solicitudes": {"total": len(solicitudes), "por_solicitud": por_solicitud},
         "costo": {
             "usd_conocido": round(sum(costos), 6) if costos else None,
-            "desconocidos": len(registros) - len(costos),
+            "desconocidos": len(ejecuciones) - len(costos),
         },
     }
 
@@ -566,7 +583,7 @@ def informe_v2(casos, observaciones, filas, defectos, pairing):
                 registro["detectados"].add((ident, defecto))
         if veredicto == "duplicate":
             original = fila.get("duplicado_de")
-            if original not in registro["hallazgos"]:
+            if original not in registro["hallazgos"] or original == hallazgo:
                 falla(
                     f"duplicate sin original válido: {ident}/{hallazgo} -> {original!r}"
                 )
@@ -630,11 +647,12 @@ def informe_v2(casos, observaciones, filas, defectos, pairing):
             else:
                 caso = corpus[par["caso"]]
                 difieren = [c for c in CLAVES_CASO[1:] if par[c] != caso[c]]
-                motivo = (
-                    f"campos que difieren del caso: {', '.join(difieren)}"
-                    if difieren
-                    else None
-                )
+                if difieren:
+                    motivo = f"campos que difieren del caso: {', '.join(difieren)}"
+                elif lados["control"]["clave"] == lados["variante"]["clave"]:
+                    motivo = "contrapartes idénticas"
+                else:
+                    motivo = None
             if motivo is not None:
                 rechazos.append(
                     {

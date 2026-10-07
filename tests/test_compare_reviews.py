@@ -547,6 +547,31 @@ class ComparisonV2(unittest.TestCase):
                 self.assertEqual(len(bloque["pares_rechazados"]), 1)
                 self.assertTrue(bloque["pares_rechazados"][0]["motivo"])
 
+        with self.subTest(lado="contrapartes idénticas"):
+            r, informe = correr(
+                corpus,
+                observaciones,
+                judg,
+                pairing_v2(par_v2(lado("alfa"), lado("alfa"))),
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            bloque = informe["pares"][0]
+            self.assertEqual(bloque["pares_evaluados"], 0)
+            self.assertEqual(len(bloque["pares_rechazados"]), 1)
+            self.assertIn(
+                "contrapartes idénticas",
+                bloque["pares_rechazados"][0]["motivo"],
+            )
+            rechazada = [
+                s
+                for s in informe["sin_pareja"]
+                if s["producto"] == "alfa"
+                and s["repeticion"] == 1
+                and s["intento"] == 1
+            ]
+            self.assertEqual(len(rechazada), 1)
+            self.assertIn("contrapartes idénticas", rechazada[0]["motivo"])
+
     def test_failed_attempt_then_success_reports_request_duration_and_unknown_cost(
         self,
     ):
@@ -612,6 +637,61 @@ class ComparisonV2(unittest.TestCase):
         self.assertEqual(grupos["alfa"]["defectos"]["recuperacion"], "desconocido")
         self.assertEqual(grupos["beta"]["precision"]["valor"], 1.0)
         self.assertEqual(grupos["beta"]["precision"]["denominador"], 1)
+        judg_autoduplicado = {
+            "adjudicaciones": [
+                fila_v2(alfa, "H2", "duplicate", duplicado_de="H2"),
+            ]
+        }
+        r, _ = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [alfa, beta]},
+            judg_autoduplicado,
+            pairing_v2(par_v2(lado("alfa"), lado("beta"))),
+        )
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("duplicate", r.stderr)
+
+    def test_sin_ejecucion_no_infla_tasa_de_fallos(self):
+        comentarios = obs_v2(
+            "gama",
+            ["Z1"],
+            resultado="comentarios existentes",
+            duracion_s=None,
+            turnos=None,
+            costo_usd=None,
+        )
+        fallido = obs_v2("alfa", [], resultado="error", duracion_s=10.0)
+        exitoso = obs_v2("alfa", ["X1"], intento=2, duracion_s=20.0)
+        judg = {
+            "adjudicaciones": [
+                fila_v2(comentarios, "Z1", "valid"),
+                fila_v2(exitoso, "X1", "valid"),
+            ]
+        }
+        r, informe = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [comentarios, fallido, exitoso]},
+            judg,
+            pairing_v2(par_v2(lado("alfa", intento=2), lado("gama"))),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        grupos = {g["producto"]: g for g in informe["productos"]}
+        gama = grupos["gama"]
+        self.assertEqual(
+            gama["intentos"],
+            {"total": 0, "exitosos": 0, "fallidos": 0, "tasa_fallos": None},
+        )
+        self.assertEqual(gama["solicitudes"], {"total": 0, "por_solicitud": []})
+        self.assertEqual(gama["sin_ejecucion"], 1)
+        self.assertEqual(gama["observaciones"], 1)
+        self.assertEqual(gama["precision"]["valor"], 1.0)
+        self.assertEqual(gama["precision"]["denominador"], 1)
+        alfa = grupos["alfa"]
+        self.assertEqual(
+            alfa["intentos"],
+            {"total": 2, "exitosos": 1, "fallidos": 1, "tasa_fallos": 0.5},
+        )
+        self.assertEqual(alfa["solicitudes"]["por_solicitud"][0]["duracion_s"], 30.0)
 
 
 if __name__ == "__main__":

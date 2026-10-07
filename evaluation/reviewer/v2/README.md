@@ -45,13 +45,27 @@ stderr: caso sin partición, partición con casos de más o de menos, pairing si
 sección `adjudicacion`, `normalizacion` distinta de `1`, o juez con tipo fuera
 de `humano` e `ia`.
 
-La hoja normaliza la severidad a una escala común (`trivial`, `nitpick` y
-`minor` a `baja`; `major` a `media`; `critical` a `alta`; ausente o desconocida
-a `no declarada`) y guarda la severidad original en la correspondencia. Quita de
-la evidencia los metadatos de herramienta: comentarios HTML, bloques
-`<details>`, líneas `✅ Addressed in commit` y badges. La `meta` de la hoja
-registra la versión de normalización, los jueces, los desempates y si la
-adjudicación usa IA.
+La hoja normaliza la severidad a una escala común y guarda la severidad
+original en la correspondencia. Los dos vocabularios de origen caen en la
+misma escala: el revisor declara `Critical`/`High`/`Medium`/`Low` y la captura
+de comentarios declara `Minor`/`Major`/`Critical`/`Trivial`/`Nitpick`.
+
+| severidad declarada | normalizada |
+|---|---|
+| `trivial`, `nitpick`, `minor`, `low` | `baja` |
+| `major`, `medium` | `media` |
+| `critical`, `high` | `alta` |
+| ausente o desconocida | `no declarada` |
+
+El diagnóstico y la evidencia se redactan contra el inventario completo de
+observaciones: cada mención del producto, y de la configuración cuando mide
+8 caracteres o más, se reemplaza por `[redactado]`, de la cadena más larga a
+la más corta, para que un nombre cruzado (el producto de otra observación)
+también desaparezca; la configuración corta (por ejemplo `v1` o `ca`) no se
+toca para no destrozar el texto. Además se quitan de la evidencia los
+metadatos de herramienta: comentarios HTML, bloques `<details>`, líneas `✅
+Addressed in commit` y badges. La `meta` de la hoja registra la versión de
+normalización, los jueces, los desempates y si la adjudicación usa IA.
 
 ## Comparar con pares versionados
 
@@ -66,11 +80,17 @@ modo histórico con su formato de siempre. Con `--pairing`, el informe no trae
 precisión global: cada grupo `(producto, configuracion)` informa hallazgos,
 precisión con denominador explícito, defectos con o sin conjunto de referencia,
 intentos (los fallidos se conservan con su duración y costo), y solicitudes que
-suman los reintentos. Los pares con contraparte ausente o con campos del caso
-que difieren de los declarados se rechazan con motivo, y sus observaciones
-quedan en `sin_pareja`. Una fila de adjudicación con la clave completa resuelve
-contra una única observación; una fila histórica (sólo caso y hallazgo) se
-acepta sólo si resuelve a una, y una ambigua se rechaza.
+suman los reintentos. Una observación con `duracion_s`, `turnos` y `costo_usd`
+todos ausentes (por ejemplo, comentarios existentes) no es una ejecución: los
+bloques de intentos, solicitudes y costo se calculan sólo sobre ejecuciones, el
+grupo informa cuántas no lo son en `sin_ejecucion`, y esas observaciones siguen
+contando en observaciones, hallazgos y precisión. Los pares con contraparte
+ausente, con campos del caso que difieren de los declarados o con control y
+variante que resuelven a la misma observación se rechazan con motivo, y sus
+observaciones quedan en `sin_pareja`. Una fila de adjudicación con la clave
+completa resuelve contra una única observación; una fila histórica (sólo caso y
+hallazgo) se acepta sólo si resuelve a una, y una ambigua se rechaza. Un
+`duplicate` cuyo `duplicado_de` es el propio hallazgo se rechaza.
 
 ## Estado
 
