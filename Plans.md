@@ -128,7 +128,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | R0.md:86 | Matiz de redaccion: dice que la vineta no UTF-8 fue reescrita, pero se borro; estado resuelto en seccion Ronda 2 | abierta |
 | R0.md:49-52 | build_conventions lee contenido con sh en modo texto; revisar decodificacion | abierta |
 | R0.md:49-52 | test_utf8_manifest_matches_file: asercion de seleccion por presupuesto no discrimina sola; cubre igualdad diff_bytes | abierta |
-| S0-r5 revisor | N1 review_domain.py:752 state valida str no vacio sin enum (pendiente/donee pasan); endurecer cuando T07 defina estados | abierta |
+| S0-r5 revisor | N1 review_domain.py:796 state valida str no vacio sin enum (T07 ya definio Pending/Running/Finished/FailedRetryable en transiciones); endurecer a enum | abierta |
 | S0-r5 revisor | N2 review_domain.py:750 rechazo basis_generation bool/neg sin subtest (mutante isinstance sobrevive; caso x cubierto) | abierta |
 | S0-r5 revisor | N3 review.py:1884 proxy.wait(timeout=10) en finally puede lanzar TimeoutExpired tras timeout del modelo y tapar ruta infra (preexistente en main) | abierta |
 | S0-r5 revisor | N4 S0.md:122 cifra verify-partition 370 desactualizada (sobre 73d7067 da 371: 186+185) | abierta |
@@ -159,7 +159,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | F1-r2 CodeRabbit | review.py:2178 rebase full-mode usa base vs prev_sha, sin repro, residual ya declarado rebase prev_sha no ancestro | abierta |
 | U0-r3 veredicto N1 | filtro _mismo_target en busqueda de viva sin prueba discriminante (carrera 3 targets re-despacha B en vez de crear C; push a C la crea despues, solo un despacho de mas; prueba propuesta vencido_con_viva_de_otro_target_crea_nueva) | abierta |
 | U0-r1/r2 LISTO | obligaciones de vigencia/cobertura solo hasta T14; banner rancio y sha congelado tras migrar (T10/T16) | abierta |
-| U0-r1/r2 LISTO | resultado superseded deja job en rojo benigno; legado con id no-FX; explain huerfano; carrera sin CAS entre coordinadores (T10) | abierta |
+| U0-r1/r2 LISTO | resultado superseded deja job en rojo benigno; legado con id no-FX; explain huerfano; carrera sin CAS entre coordinadores (T10; al habilitar cmd_reconcile serializar escrituras por PR o pedir decision del operador, publish ya serializa por PR) | abierta |
 | U0-r1 veredicto | N1, N2, N5-N10 y N12-N14 arrastrados de r1 (no bloqueantes) | abierta |
 | U0-r2 LISTO | GC de solicitudes huerfanas sin target era T04; metadata del worker por API si T10 cambia contrato; runbook de limpieza ante duplicados manuales | abierta |
 | U0-r3 LISTO | snapshot_a_v3 de sticky invalido parcial; admitir issue_comment con verificacion de permisos (T09); explain con digest del hallazgo (T09) | abierta |
