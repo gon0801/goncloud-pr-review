@@ -105,7 +105,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T06 | F1 | Identidad F0 conectada al recorrido completo | T01–T04 | cc:done (PR #48, squash b2b82e4; evidencia docs/evidence/reviewer/F1.md) |
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
-| T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:TODO |
+| T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md) |
 | T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:TODO |
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
@@ -163,3 +163,14 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U0-r1 veredicto | N1, N2, N5-N10 y N12-N14 arrastrados de r1 (no bloqueantes) | abierta |
 | U0-r2 LISTO | GC de solicitudes huerfanas sin target era T04; metadata del worker por API si T10 cambia contrato; runbook de limpieza ante duplicados manuales | abierta |
 | U0-r3 LISTO | snapshot_a_v3 de sticky invalido parcial; admitir issue_comment con verificacion de permisos (T09); explain con digest del hallazgo (T09) | abierta |
+| U1-r2 veredicto N1 | re-autorizacion de explicar sin prueba discriminante (mutante sin solicitante sobrevive; fail-open hoy inalcanzable) | abierta |
+| U1-r2 veredicto N2 | consulta caida en re-verificacion deja comando pending varado hasta T10 (sin despacho indebido ni corrupcion) | abierta |
+| U1-r2 veredicto N3 | solicitante para origin re-run es dato muerto (nadie construye Origin con login) | abierta |
+| U1-r2 veredicto N4 | log solicitud terminada antes de publish_checkpoint (Unconfirmed no persistido, se corrige en siguiente evento) | abierta |
+| U1-r2 veredicto N5 | reautorizar no cachea permiso por login (N llamadas con N solicitudes del mismo autor) | abierta |
+| U1-r2 veredicto N6 | U1.md:65 fragmento suelto y desglose por clase 6+3+3+6=18 (total cuadra) | abierta |
+| U1-r2 veredicto N7 | arrastre r1 N3/N4/N5/N6/N8 (carrera issue_comment T10, parser asimetrico, sin dedupe, explain vencido, sticky vacio) + fail-open sin solicitante | abierta |
+| U1-r2 LISTO | recibo de comando optimista aunque la solicitud termine revocada (motivo en tumba y log; render en T10) | abierta |
+| U1-r3 review F4 | reautorizar huerfana follow-up (walkthrough comandos correctos, check en pass) | abierta |
+| U1-r3 review F3+F5 | docs evidencia (desglose y redaccion, sin repro de codigo) | abierta |
+| U1-r3 CodeRabbit | review.py:3083-3094 cache de permisos por login (Trivial, misma familia N5) | abierta |
