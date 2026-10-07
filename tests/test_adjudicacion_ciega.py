@@ -188,6 +188,12 @@ TOKENS_FUGA_V2 = [
     "<details>",
     "addressed",
     "herramienta",
+    "🩺",
+    "⚡",
+    "🟡",
+    "quick win",
+    "minor",
+    "medium",
 ]
 PAIRING = {
     "meta": {"que_es": "pares fijados antes de observar resultados"},
@@ -280,7 +286,16 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "x.py",
                         9,
                         "Low",
-                        "El orden declarado no coincide con el aplicado",
+                        "El inventario de campos no coincide con el aplicado por "
+                        "Tool-B",
+                    ),
+                    hallazgo(
+                        "c1-a03",
+                        "Orden declarado divergente",
+                        "plan.md",
+                        8,
+                        "Medium",
+                        "- 🟡 Medium · `Plans.md:8` · el orden declarado no coincide",
                     ),
                 ],
                 producto="tool-a",
@@ -297,7 +312,15 @@ class BlindJudgmentsV2(unittest.TestCase):
                         3,
                         "Nitpick",
                         "Revisar el límite del bucle que tool-a marcó",
-                    )
+                    ),
+                    hallazgo(
+                        "c2-b02",
+                        "Estabilidad y disponibilidad",
+                        "z.py",
+                        5,
+                        "Minor",
+                        "_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_",
+                    ),
                 ],
                 producto="tool-b",
                 configuracion="cb",
@@ -317,17 +340,32 @@ class BlindJudgmentsV2(unittest.TestCase):
             self.assertEqual(set(fila), CLAVES_FILA_V2)
         self.assertEqual(
             sorted(f["severidad"] for f in hoja["hallazgos"]),
-            ["baja", "baja", "media"],
+            ["baja", "baja", "baja", "media", "media"],
         )
         texto = json.dumps(hoja["hallazgos"], ensure_ascii=False).lower()
         for token in TOKENS_FUGA_V2:
             self.assertNotIn(token, texto, token)
         self.assertIsNone(re.search(r"\bca\b", texto))
+        fila_plan = next(
+            f
+            for f in hoja["hallazgos"]
+            if f["diagnostico"] == "Orden declarado divergente"
+        )
+        self.assertEqual(
+            fila_plan["evidencia"],
+            "`Plans.md:8` · el orden declarado no coincide",
+        )
+        fila_badges = next(
+            f
+            for f in hoja["hallazgos"]
+            if f["diagnostico"] == "Estabilidad y disponibilidad"
+        )
+        self.assertEqual(fila_badges["evidencia"], fila_badges["diagnostico"])
         for fila in correspondencia["filas"]:
             self.assertEqual(set(fila), CLAVES_CORRESPONDENCIA_V2)
         self.assertEqual(
             sorted(f["severidad_original"] for f in correspondencia["filas"]),
-            ["Low", "Major", "Nitpick"],
+            ["Low", "Major", "Medium", "Minor", "Nitpick"],
         )
         self.assertEqual(
             {f["producto"] for f in correspondencia["filas"]}, {"tool-a", "tool-b"}
@@ -450,6 +488,52 @@ class BlindJudgmentsV2(unittest.TestCase):
         self.assertEqual(hoja_bytes_a, hoja_bytes_b)
         self.assertEqual(corr_bytes_a, corr_bytes_b)
         self.assertEqual(len(json.loads(hoja_bytes_a)["hallazgos"]), 21)
+
+    def test_redacta_identificadores_del_inventario_por_longitud(self):
+        obs = [
+            observacion(
+                "c1",
+                "a" * 40,
+                [
+                    hallazgo(
+                        "c1-a01",
+                        "Límite del bucle",
+                        "a.py",
+                        1,
+                        "Minor",
+                        "tool marca el límite del bucle",
+                    )
+                ],
+                producto="tool",
+                configuracion="v1",
+            ),
+            observacion(
+                "c2",
+                "b" * 40,
+                [
+                    hallazgo(
+                        "c2-a01",
+                        "Cobertura del arreglo",
+                        "b.py",
+                        2,
+                        "Major",
+                        "tool-plus resuelve lo que tool abre",
+                    )
+                ],
+                producto="tool-plus",
+                configuracion="v1",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz_v2 = raiz_v2_minima(
+                tmp, obs, {"c1": "ajuste", "c2": "reservada"}, PAIRING
+            )
+            r = correr_v2(raiz_v2)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            hoja = json.loads((raiz_v2 / "adjudicacion-ciega.json").read_text())
+        texto = json.dumps(hoja["hallazgos"], ensure_ascii=False).lower()
+        self.assertNotIn("[redactado]-plus", texto)
+        self.assertNotIn("tool", texto)
 
 
 if __name__ == "__main__":

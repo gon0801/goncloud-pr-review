@@ -58,13 +58,18 @@ de comentarios declara `Minor`/`Major`/`Critical`/`Trivial`/`Nitpick`.
 | ausente o desconocida | `no declarada` |
 
 El diagnóstico y la evidencia se redactan contra el inventario completo de
-observaciones: cada mención del producto, y de la configuración cuando mide
-8 caracteres o más, se reemplaza por `[redactado]`, de la cadena más larga a
-la más corta, para que un nombre cruzado (el producto de otra observación)
-también desaparezca; la configuración corta (por ejemplo `v1` o `ca`) no se
-toca para no destrozar el texto. Además se quitan de la evidencia los
-metadatos de herramienta: comentarios HTML, bloques `<details>`, líneas `✅
-Addressed in commit` y badges. La `meta` de la hoja registra la versión de
+observaciones: los identificadores de todo el inventario (el producto de cada
+observación, y su configuración cuando mide 8 caracteres o más) se deduplican
+y se aplican de la cadena más larga a la más corta, sin distinguir mayúsculas,
+para que un nombre cruzado (el producto de otra observación) tampoco deje
+restos (`tool` no corta a `tool-plus`); la configuración corta (por ejemplo
+`v1` o `ca`) no se toca para no destrozar el texto. Además se quitan de la
+evidencia los metadatos de herramienta: comentarios HTML, bloques
+`<details>`, líneas `✅ Addressed in commit`, líneas de badges (todos los
+segmentos separados por `|` empiezan por un emoji u otro carácter no
+alfanumérico, tras quitar espacios y énfasis) y prefijos de severidad propia
+al inicio de una línea (viñeta opcional, emoji, palabra de severidad y
+separador `·` o `|`). La `meta` de la hoja registra la versión de
 normalización, los jueces, los desempates y si la adjudicación usa IA.
 
 ## Comparar con pares versionados
@@ -89,8 +94,9 @@ ausente, con campos del caso que difieren de los declarados o con control y
 variante que resuelven a la misma observación se rechazan con motivo, y sus
 observaciones quedan en `sin_pareja`. Una fila de adjudicación con la clave
 completa resuelve contra una única observación; una fila histórica (sólo caso y
-hallazgo) se acepta sólo si resuelve a una, y una ambigua se rechaza. Un
-`duplicate` cuyo `duplicado_de` es el propio hallazgo se rechaza.
+hallazgo) se acepta sólo si resuelve a una, y una ambigua se rechaza. El
+`duplicado_de` de un `duplicate` resuelve contra los hallazgos del caso: la
+auto-referencia o la ambigüedad se rechazan.
 
 ## Estado
 

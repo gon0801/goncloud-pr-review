@@ -26,6 +26,13 @@ RE_DETAILS = re.compile(r"<details>.*?</details>", re.S)
 RE_ADDRESS = re.compile(r"✅ Addressed in commit [0-9a-f]+")
 RE_SEVERIDAD = re.compile(r"\b(Minor|Major|Critical|Trivial|Nitpick)\b")
 RE_BOLD = re.compile(r"^\*\*(.+?)\*\*\s*$", re.M)
+RE_PREFIJO_SEVERIDAD_V2 = re.compile(
+    r"^(?:[-•*]\s*)?[^\w\s]\s+"
+    r"(?:Minor|Major|Critical|Trivial|Nitpick|Low|Medium|High)"
+    r"(?:\s*[·|]\s*)?",
+    re.IGNORECASE,
+)
+ENFASIS_V2 = " *_`~"
 
 CLAVES_CASO_V2 = ("caso", "repo", "base", "head", "tarea", "sha_anterior")
 CLAVES_OBSERVACION_V2 = CLAVES_CASO_V2 + (
@@ -202,11 +209,24 @@ def observacion_coderabbit(caso, ccorpus, captura):
     }
 
 
+def es_linea_badges_v2(linea):
+    if "|" not in linea:
+        return False
+    segmentos = [s.strip(ENFASIS_V2) for s in linea.split("|")]
+    visibles = [s for s in segmentos if s]
+    return bool(visibles) and all(not s[0].isalnum() for s in visibles)
+
+
 def limpiar_evidencia_v2(texto):
     limpio = RE_PIE_HTML.sub("", texto)
     limpio = RE_DETAILS.sub("", limpio)
     limpio = RE_ADDRESS.sub("", limpio)
     limpio = limpio.replace("🤖", "")
+    limpio = "\n".join(
+        RE_PREFIJO_SEVERIDAD_V2.sub("", linea)
+        for linea in limpio.splitlines()
+        if not es_linea_badges_v2(linea)
+    )
     return re.sub(r"\n{3,}", "\n\n", limpio).strip()
 
 
@@ -231,25 +251,36 @@ def severidad_normalizada_v2(declarada):
     return SEVERIDAD_V2.get(str(declarada).strip().lower(), "no declarada")
 
 
-def redactar_identificadores_v2(texto, o):
-    cadenas = []
-    if o["producto"]:
-        cadenas.append(o["producto"])
-    if len(o["configuracion"]) >= 8:
-        cadenas.append(o["configuracion"])
-    for cadena in sorted(cadenas, key=len, reverse=True):
-        texto = texto.replace(cadena, "[redactado]")
+def inventario_identificadores_v2(observaciones):
+    identificadores = set()
+    for o in observaciones:
+        if o["producto"]:
+            identificadores.add(o["producto"])
+        if len(o["configuracion"]) >= 8:
+            identificadores.add(o["configuracion"])
+    return sorted(identificadores, key=lambda s: (-len(s), s))
+
+
+def redactar_identificadores_v2(texto, identificadores):
+    for identificador in identificadores:
+        texto = re.sub(
+            re.escape(identificador),
+            "[redactado]",
+            texto,
+            flags=re.IGNORECASE,
+        )
     return texto
 
 
-def fila_hoja_v2(o, h, observaciones):
+def fila_hoja_v2(o, h, identificadores):
     linea = h.get("linea")
     detalle = h.get("detalle")
-    diagnostico = h["titulo"]
-    evidencia = limpiar_evidencia_v2(detalle) if detalle is not None else ""
-    for fuente in observaciones:
-        diagnostico = redactar_identificadores_v2(diagnostico, fuente)
-        evidencia = redactar_identificadores_v2(evidencia, fuente)
+    diagnostico = redactar_identificadores_v2(h["titulo"], identificadores)
+    evidencia = (
+        redactar_identificadores_v2(limpiar_evidencia_v2(detalle), identificadores)
+        if detalle is not None
+        else ""
+    )
     return {
         "caso": o["caso"],
         "head": o["head"],
@@ -360,13 +391,14 @@ def main_v2(raiz):
     particion = validar_particion_v2(leer_json(ruta_particion), casos, ruta_particion)
     adj = validar_adjudicacion_v2(leer_json(ruta_pairing), ruta_pairing)
 
+    identificadores = inventario_identificadores_v2(observaciones)
     pares = []
     for o in observaciones:
         for h in o["hallazgos"]:
             pares.append(
                 (
                     clave_finding_v2(o, h),
-                    fila_hoja_v2(o, h, observaciones),
+                    fila_hoja_v2(o, h, identificadores),
                     fila_correspondencia_v2(o, h, particion),
                 )
             )

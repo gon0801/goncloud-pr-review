@@ -693,6 +693,68 @@ class ComparisonV2(unittest.TestCase):
         )
         self.assertEqual(alfa["solicitudes"]["por_solicitud"][0]["duracion_s"], 30.0)
 
+    def test_duplicate_entre_observaciones_del_mismo_caso(self):
+        configuracion_cr = (
+            "comentarios existentes en el SHA exacto; sin revisión disparada"
+        )
+        coderabbit = obs_v2(
+            "coderabbit",
+            ["C02"],
+            configuracion=configuracion_cr,
+            resultado="comentarios existentes",
+            cobertura="no declarada (comentarios existentes)",
+            duracion_s=None,
+            turnos=None,
+            costo_usd=None,
+        )
+        revisor = obs_v2("revisor", ["R02"])
+        judg = {
+            "adjudicaciones": [
+                fila_v2(revisor, "R02", "valid"),
+                {
+                    "caso": "c1",
+                    "hallazgo": "C02",
+                    "veredicto": "duplicate",
+                    "duplicado_de": "R02",
+                },
+            ]
+        }
+        pairing = pairing_v2(
+            par_v2(
+                lado("revisor"),
+                {
+                    "producto": "coderabbit",
+                    "configuracion": configuracion_cr,
+                    "intento": 1,
+                },
+            )
+        )
+        r, informe = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [coderabbit, revisor]},
+            judg,
+            pairing,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(informe["pares"][0]["pares_evaluados"], 1)
+        grupos = {g["producto"]: g for g in informe["productos"]}
+        self.assertEqual(grupos["coderabbit"]["hallazgos"]["duplicados"], 1)
+        self.assertEqual(grupos["coderabbit"]["precision"]["denominador"], 1)
+        self.assertEqual(grupos["coderabbit"]["precision"]["valor"], 0.0)
+        self.assertEqual(grupos["revisor"]["precision"]["valor"], 1.0)
+        self.assertEqual(grupos["revisor"]["precision"]["denominador"], 1)
+
+        with self.subTest(duplicado_de="resuelve a dos observaciones"):
+            reintento = obs_v2("revisor", ["R02"], intento=2)
+            r, _ = correr(
+                {"casos": [caso_v2()]},
+                {"observaciones": [coderabbit, revisor, reintento]},
+                judg,
+                pairing,
+            )
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("ambiguo", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

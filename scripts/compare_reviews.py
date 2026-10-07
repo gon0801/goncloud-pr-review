@@ -40,8 +40,9 @@ precisión, defectos, intentos (los fallidos se conservan), solicitudes con
 reintentos y costos. Una observación con duracion_s, turnos y costo_usd todos
 ausentes no es una ejecución (por ejemplo, comentarios existentes): no cuenta
 en intentos, solicitudes ni costo, se informa en sin_ejecucion y sigue
-contando en observaciones, hallazgos y precisión. Un duplicate con
-duplicado_de igual al propio hallazgo se rechaza. Los pares se fijan antes
+contando en observaciones, hallazgos y precisión. El duplicado_de de un
+duplicate resuelve contra los hallazgos del caso: la auto-referencia o la
+resolución ambigua se rechazan. Los pares se fijan antes
 de evaluar resultados; un par con contraparte ausente, con campos del caso
 que difieren de los declarados o con control y variante que resuelven a la
 misma observación se rechaza y sus observaciones quedan en sin_pareja con
@@ -583,7 +584,17 @@ def informe_v2(casos, observaciones, filas, defectos, pairing):
                 registro["detectados"].add((ident, defecto))
         if veredicto == "duplicate":
             original = fila.get("duplicado_de")
-            if original not in registro["hallazgos"] or original == hallazgo:
+            if original == hallazgo:
+                falla(
+                    f"duplicate sin original válido: {ident}/{hallazgo} -> {original!r}"
+                )
+            candidatos = legado.get((ident, original), [])
+            if len(candidatos) > 1:
+                falla(
+                    f"duplicate ambiguo: {ident}/{hallazgo} -> {original!r} aparece "
+                    f"en {len(candidatos)} observaciones del caso"
+                )
+            if not candidatos:
                 falla(
                     f"duplicate sin original válido: {ident}/{hallazgo} -> {original!r}"
                 )
