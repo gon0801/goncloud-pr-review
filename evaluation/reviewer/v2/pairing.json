@@ -1,0 +1,251 @@
+{
+  "meta": {
+    "que_es": "pares y repeticiones fijados antes de observar resultados nuevos",
+    "regla": "los pares comparten tarea y SHAs; la configuración experimental cambia sólo en la dimensión declarada; el estado de cada par declara si sus salidas ya fueron observadas antes de este congelamiento",
+    "fuentes": [
+      "evaluation/reviewer/corpus.json",
+      "evaluation/reviewer/observaciones.json"
+    ],
+    "congelado": "2026-10-07 (bloque E2 r1, SHA base del plan 51f1aaca)"
+  },
+  "experimentos": [
+    {
+      "experimento": "producto-en-sha-exacto",
+      "pares": [
+        {
+          "caso": "pr13",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+          "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+          "tarea": "entre_modulos",
+          "sha_anterior": null,
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "coderabbit",
+            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+            "intento": 1
+          },
+          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
+        },
+        {
+          "caso": "pr2",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+          "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+          "tarea": "entre_modulos",
+          "sha_anterior": null,
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "coderabbit",
+            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+            "intento": 1
+          },
+          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
+        },
+        {
+          "caso": "pr24",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+          "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+          "tarea": "entre_modulos",
+          "sha_anterior": null,
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "coderabbit",
+            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+            "intento": 1
+          },
+          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
+        },
+        {
+          "caso": "pr4",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+          "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+          "tarea": "entre_modulos",
+          "sha_anterior": null,
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "coderabbit",
+            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+            "intento": 1
+          },
+          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
+        },
+        {
+          "caso": "pr9",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+          "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+          "tarea": "entre_modulos",
+          "sha_anterior": null,
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "coderabbit",
+            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+            "intento": 1
+          },
+          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
+        }
+      ]
+    },
+    {
+      "experimento": "push-consecutivo",
+      "pares": [
+        {
+          "caso": "pr13",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+          "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
+          "tarea": "entre_modulos",
+          "sha_anterior": "bc01955781232c240227ba8ddbec8f19045d635a",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        },
+        {
+          "caso": "pr2",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+          "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+          "tarea": "entre_modulos",
+          "sha_anterior": "afb789720670aafcc09c48c4401dcabee18df556",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        },
+        {
+          "caso": "pr2",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+          "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+          "tarea": "entre_modulos",
+          "sha_anterior": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        },
+        {
+          "caso": "pr2",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+          "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
+          "tarea": "entre_modulos",
+          "sha_anterior": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        },
+        {
+          "caso": "pr4",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+          "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+          "tarea": "entre_modulos",
+          "sha_anterior": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        },
+        {
+          "caso": "pr9",
+          "repo": "gon0801/goncloud-pr-review",
+          "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+          "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",
+          "tarea": "entre_modulos",
+          "sha_anterior": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+          "repeticion": 1,
+          "control": {
+            "producto": "revisor",
+            "configuracion": "revision completa (protocolo D0)",
+            "intento": 1
+          },
+          "variante": {
+            "producto": "revisor",
+            "configuracion": "delta-d0 (protocolo D0)",
+            "intento": 1
+          },
+          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
+        }
+      ]
+    }
+  ],
+  "adjudicacion": {
+    "normalizacion": "1",
+    "jueces": [],
+    "desempates": {
+      "version": "1",
+      "regla": "donde los jueces difieren decide un tercer juez sin producto; si persiste, unresolved; la lista de jueces se congela en este archivo antes de la próxima hoja (pendiente: no hay recolección autorizada)"
+    }
+  }
+}

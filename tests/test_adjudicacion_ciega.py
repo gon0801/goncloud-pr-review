@@ -156,5 +156,292 @@ class InsumosCiegos(unittest.TestCase):
                 )
 
 
+CLAVES_FILA_V2 = {
+    "blind_id",
+    "caso",
+    "head",
+    "diagnostico",
+    "ubicacion",
+    "evidencia",
+    "severidad",
+}
+CLAVES_CORRESPONDENCIA_V2 = {
+    "blind_id",
+    "caso",
+    "repo",
+    "base",
+    "head",
+    "tarea",
+    "sha_anterior",
+    "producto",
+    "configuracion",
+    "repeticion",
+    "intento",
+    "hallazgo_id",
+    "severidad_original",
+    "particion",
+}
+TOKENS_FUGA_V2 = [
+    "tool-a",
+    "tool-b",
+    "🤖",
+    "<details>",
+    "addressed",
+    "herramienta",
+]
+PAIRING = {
+    "meta": {"que_es": "pares fijados antes de observar resultados"},
+    "experimentos": [],
+    "adjudicacion": {
+        "normalizacion": "1",
+        "jueces": [{"id": "j1", "tipo": "ia", "modelo": "modelo-de-prueba"}],
+        "desempates": {"version": "1", "regla": "unresolved si persiste"},
+    },
+}
+
+
+def hallazgo(identificador, titulo, ruta, linea, severidad, detalle, resuelto=False):
+    return {
+        "id": identificador,
+        "titulo": titulo,
+        "ruta": ruta,
+        "linea": linea,
+        "severidad": severidad,
+        "resuelto": resuelto,
+        "detalle": detalle,
+    }
+
+
+def observacion(
+    caso, head, hallazgos, producto="tool-a", configuracion="ca", sha_anterior=None
+):
+    return {
+        "caso": caso,
+        "repo": "gon0801/prueba",
+        "base": "0" * 40,
+        "head": head,
+        "tarea": "revisar el PR",
+        "sha_anterior": sha_anterior,
+        "producto": producto,
+        "configuracion": configuracion,
+        "repeticion": 1,
+        "intento": 1,
+        "resultado": "success",
+        "cobertura": "complete",
+        "duracion_s": 12.5,
+        "turnos": 3,
+        "costo_usd": 0.01,
+        "hallazgos": hallazgos,
+    }
+
+
+def raiz_v2_minima(tmp, observaciones, particion, pairing):
+    raiz_v2 = Path(tmp) / "v2"
+    raiz_v2.mkdir()
+    (raiz_v2 / "observaciones.json").write_text(
+        json.dumps({"observaciones": observaciones}, ensure_ascii=False)
+    )
+    (raiz_v2 / "partition.json").write_text(
+        json.dumps(
+            {"meta": {"que_es": "asignación de PRs completos"}, "particion": particion}
+        )
+    )
+    (raiz_v2 / "pairing.json").write_text(json.dumps(pairing, ensure_ascii=False))
+    return raiz_v2
+
+
+def correr_v2(raiz_v2):
+    return subprocess.run(
+        [sys.executable, str(BUILDER), "--versionado", "--raiz-v2", str(raiz_v2)],
+        capture_output=True,
+        text=True,
+    )
+
+
+class BlindJudgmentsV2(unittest.TestCase):
+    def test_removes_product_cues(self):
+        obs = [
+            observacion(
+                "c1",
+                "a" * 40,
+                [
+                    hallazgo(
+                        "c1-a01",
+                        "Alucina el índice",
+                        "x.py",
+                        7,
+                        "Major",
+                        "Cuidado con 🤖 y <details>marca de herramienta</details> en "
+                        "el texto ✅ Addressed in commit a1b2c3d",
+                    )
+                ],
+                producto="tool-a",
+                configuracion="ca",
+            ),
+            observacion(
+                "c2",
+                "b" * 40,
+                [
+                    hallazgo(
+                        "c2-b01",
+                        "Fuera de rango",
+                        "y.py",
+                        3,
+                        "Nitpick",
+                        "Revisar el límite del bucle",
+                    )
+                ],
+                producto="tool-b",
+                configuracion="cb",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz_v2 = raiz_v2_minima(
+                tmp, obs, {"c1": "ajuste", "c2": "reservada"}, PAIRING
+            )
+            r = correr_v2(raiz_v2)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            hoja = json.loads((raiz_v2 / "adjudicacion-ciega.json").read_text())
+            correspondencia = json.loads(
+                (raiz_v2 / "ciego-correspondencia.json").read_text()
+            )
+        for fila in hoja["hallazgos"]:
+            self.assertEqual(set(fila), CLAVES_FILA_V2)
+        self.assertEqual(
+            sorted(f["severidad"] for f in hoja["hallazgos"]), ["baja", "media"]
+        )
+        texto = json.dumps(hoja["hallazgos"], ensure_ascii=False).lower()
+        for token in TOKENS_FUGA_V2:
+            self.assertNotIn(token, texto, token)
+        self.assertIsNone(re.search(r"\bca\b", texto))
+        for fila in correspondencia["filas"]:
+            self.assertEqual(set(fila), CLAVES_CORRESPONDENCIA_V2)
+        self.assertEqual(
+            sorted(f["severidad_original"] for f in correspondencia["filas"]),
+            ["Major", "Nitpick"],
+        )
+        self.assertEqual(
+            {f["producto"] for f in correspondencia["filas"]}, {"tool-a", "tool-b"}
+        )
+        self.assertIs(hoja["meta"]["adjudicacion_ia"], True)
+        self.assertEqual(
+            hoja["meta"]["jueces"],
+            [{"id": "j1", "tipo": "ia", "modelo": "modelo-de-prueba"}],
+        )
+        self.assertEqual(hoja["meta"]["version"], 2)
+        self.assertEqual(hoja["meta"]["normalizacion"], "1")
+
+    def test_all_pushes_share_partition(self):
+        obs = [
+            observacion(
+                "c1",
+                "a" * 40,
+                [hallazgo("c1-a01", "Primera", "a.py", 1, "Major", "detalle 1")],
+            ),
+            observacion(
+                "c1",
+                "b" * 40,
+                [hallazgo("c1-a02", "Segunda", "a.py", 2, "Major", "detalle 2")],
+                sha_anterior="a" * 40,
+            ),
+            observacion(
+                "c1",
+                "c" * 40,
+                [hallazgo("c1-a03", "Tercera", "a.py", 3, "Major", "detalle 3")],
+                sha_anterior="b" * 40,
+            ),
+            observacion(
+                "c2",
+                "d" * 40,
+                [hallazgo("c2-a01", "Última", "b.py", 1, "Major", "detalle 4")],
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz_v2 = raiz_v2_minima(
+                tmp, obs, {"c1": "ajuste", "c2": "reservada"}, PAIRING
+            )
+            r = correr_v2(raiz_v2)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            correspondencia = json.loads(
+                (raiz_v2 / "ciego-correspondencia.json").read_text()
+            )
+            filas_c1 = [f for f in correspondencia["filas"] if f["caso"] == "c1"]
+            filas_c2 = [f for f in correspondencia["filas"] if f["caso"] == "c2"]
+            self.assertEqual(len(filas_c1), 3)
+            self.assertEqual(len(filas_c2), 1)
+            self.assertEqual({f["particion"] for f in filas_c1}, {"ajuste"})
+            self.assertEqual({f["particion"] for f in filas_c2}, {"reservada"})
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz_v2 = raiz_v2_minima(tmp, obs, {"c1": "ajuste"}, PAIRING)
+            r = correr_v2(raiz_v2)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertTrue(r.stderr.startswith("build_adjudicacion_ciega: "), r.stderr)
+
+    def test_historical_outputs_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_raiz = Path(tmp) / "reviewer"
+            tmp_raiz.mkdir()
+            shutil.copy2(RAIZ / "corpus.json", tmp_raiz / "corpus.json")
+            shutil.copytree(RAIZ / "salidas", tmp_raiz / "salidas")
+            r_historico = subprocess.run(
+                [sys.executable, str(BUILDER), "--raiz", str(tmp_raiz)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r_historico.returncode, 0, r_historico.stderr)
+            obs = [
+                observacion(
+                    "c1",
+                    "a" * 40,
+                    [hallazgo("c1-a01", "Nulo", "a.py", 1, "Minor", "detalle")],
+                )
+            ]
+            raiz_v2 = raiz_v2_minima(tmp_raiz, obs, {"c1": "ajuste"}, PAIRING)
+            r_v2 = correr_v2(raiz_v2)
+            self.assertEqual(r_v2.returncode, 0, r_v2.stderr)
+            for nombre in (
+                "adjudicacion-ciega.json",
+                "ciego-correspondencia.json",
+                "observaciones.json",
+            ):
+                self.assertEqual(
+                    (tmp_raiz / nombre).read_bytes(),
+                    (RAIZ / nombre).read_bytes(),
+                    nombre,
+                )
+            self.assertTrue((raiz_v2 / "adjudicacion-ciega.json").exists())
+            self.assertTrue((raiz_v2 / "ciego-correspondencia.json").exists())
+
+    def test_accepts_inventory_of_21_cases(self):
+        casos = [f"c{n:02d}" for n in range(1, 22)]
+        observaciones = [
+            observacion(
+                caso,
+                f"{n:040d}",
+                [hallazgo(f"{caso}-01", "Repetido", "a.py", 1, "Minor", "detalle")],
+            )
+            for n, caso in enumerate(casos, start=1)
+        ]
+        particion = {
+            caso: ("ajuste" if n % 2 else "reservada")
+            for n, caso in enumerate(casos, start=1)
+        }
+        with tempfile.TemporaryDirectory() as tmp_a:
+            raiz_a = raiz_v2_minima(tmp_a, observaciones, particion, PAIRING)
+            r_a = correr_v2(raiz_a)
+            self.assertEqual(r_a.returncode, 0, r_a.stderr)
+            hoja_bytes_a = (raiz_a / "adjudicacion-ciega.json").read_bytes()
+            corr_bytes_a = (raiz_a / "ciego-correspondencia.json").read_bytes()
+        with tempfile.TemporaryDirectory() as tmp_b:
+            raiz_b = raiz_v2_minima(tmp_b, observaciones, particion, PAIRING)
+            r_b = correr_v2(raiz_b)
+            self.assertEqual(r_b.returncode, 0, r_b.stderr)
+            hoja_bytes_b = (raiz_b / "adjudicacion-ciega.json").read_bytes()
+            corr_bytes_b = (raiz_b / "ciego-correspondencia.json").read_bytes()
+        self.assertEqual(hoja_bytes_a, hoja_bytes_b)
+        self.assertEqual(corr_bytes_a, corr_bytes_b)
+        self.assertEqual(len(json.loads(hoja_bytes_a)["hallazgos"]), 21)
+
+
 if __name__ == "__main__":
     unittest.main()

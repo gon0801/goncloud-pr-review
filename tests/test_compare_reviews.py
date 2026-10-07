@@ -74,26 +74,30 @@ JUDG_A = {
 }
 
 
-def correr(corpus, obs, judg):
+def correr(corpus, obs, judg, pairing=None):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         (tmp / "corpus.json").write_text(json.dumps(corpus))
         (tmp / "observaciones.json").write_text(json.dumps(obs))
         (tmp / "judgments.json").write_text(json.dumps(judg))
         salida = tmp / "informe.json"
+        comando = [
+            sys.executable,
+            str(SCRIPT),
+            "--corpus",
+            str(tmp / "corpus.json"),
+            "--observations",
+            str(tmp / "observaciones.json"),
+            "--judgments",
+            str(tmp / "judgments.json"),
+            "--output",
+            str(salida),
+        ]
+        if pairing is not None:
+            (tmp / "pairing.json").write_text(json.dumps(pairing))
+            comando += ["--pairing", str(tmp / "pairing.json")]
         r = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--corpus",
-                str(tmp / "corpus.json"),
-                "--observations",
-                str(tmp / "observaciones.json"),
-                "--judgments",
-                str(tmp / "judgments.json"),
-                "--output",
-                str(salida),
-            ],
+            comando,
             capture_output=True,
             text=True,
             timeout=60,
@@ -369,6 +373,245 @@ class ClaveMultiProducto(unittest.TestCase):
                 },
             ],
         )
+
+
+def caso_v2():
+    return {
+        "caso": "c1",
+        "repo": "o/r",
+        "base": BASE,
+        "head": HEAD,
+        "tarea": "entre-modulos",
+        "sha_anterior": None,
+    }
+
+
+def obs_v2(producto, ids, **cambios):
+    obs = {
+        **caso_v2(),
+        "producto": producto,
+        "configuracion": "v1",
+        "repeticion": 1,
+        "intento": 1,
+        "resultado": "success",
+        "cobertura": "complete",
+        "duracion_s": 10.0,
+        "turnos": 2,
+        "costo_usd": None,
+        "hallazgos": [
+            {"id": i, "titulo": "t", "ruta": "x.py", "resuelto": False} for i in ids
+        ],
+    }
+    obs.update(cambios)
+    return obs
+
+
+def fila_v2(obs, hallazgo, veredicto, **extra):
+    fila = {
+        "caso": obs["caso"],
+        "repo": obs["repo"],
+        "base": obs["base"],
+        "head": obs["head"],
+        "tarea": obs["tarea"],
+        "sha_anterior": obs["sha_anterior"],
+        "producto": obs["producto"],
+        "configuracion": obs["configuracion"],
+        "repeticion": obs["repeticion"],
+        "intento": obs["intento"],
+        "hallazgo": hallazgo,
+        "veredicto": veredicto,
+    }
+    fila.update(extra)
+    return fila
+
+
+def lado(producto, intento=1):
+    return {"producto": producto, "configuracion": "v1", "intento": intento}
+
+
+def par_v2(control, variante, **cambios):
+    par = {
+        **caso_v2(),
+        "repeticion": 1,
+        "control": control,
+        "variante": variante,
+    }
+    par.update(cambios)
+    return par
+
+
+def pairing_v2(*pares):
+    return {"experimentos": [{"experimento": "e1", "pares": list(pares)}]}
+
+
+class ComparisonV2(unittest.TestCase):
+    def test_products_keep_separate_precision(self):
+        alfa = obs_v2("alfa", ["F1", "F2"])
+        beta = obs_v2("beta", ["G1", "G2"])
+        judg = {
+            "adjudicaciones": [
+                fila_v2(alfa, "F1", "valid"),
+                fila_v2(alfa, "F2", "false_positive"),
+                fila_v2(beta, "G1", "valid"),
+                fila_v2(beta, "G2", "valid"),
+            ]
+        }
+        r, informe = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [alfa, beta]},
+            judg,
+            pairing_v2(par_v2(lado("alfa"), lado("beta"))),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            [g["producto"] for g in informe["productos"]], ["alfa", "beta"]
+        )
+        grupos = {g["producto"]: g for g in informe["productos"]}
+        self.assertEqual(grupos["alfa"]["precision"]["valor"], 0.5)
+        self.assertEqual(grupos["alfa"]["precision"]["denominador"], 2)
+        self.assertEqual(grupos["beta"]["precision"]["valor"], 1.0)
+        self.assertEqual(grupos["beta"]["precision"]["denominador"], 2)
+        self.assertNotIn("precision", informe)
+        self.assertNotIn("precision_global", informe)
+
+    def test_full_key_adjudication_and_rejects_ambiguous_legacy(self):
+        alfa = obs_v2("alfa", ["F1"])
+        beta = obs_v2("beta", ["F1"])
+        corpus = {"casos": [caso_v2()]}
+        observaciones = {"observaciones": [alfa, beta]}
+        pairing = pairing_v2(par_v2(lado("alfa"), lado("beta")))
+        judg = {
+            "adjudicaciones": [
+                fila_v2(alfa, "F1", "valid"),
+                fila_v2(beta, "F1", "false_positive"),
+            ]
+        }
+        r, informe = correr(corpus, observaciones, judg, pairing)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        grupos = {g["producto"]: g for g in informe["productos"]}
+        self.assertEqual(grupos["alfa"]["hallazgos"]["validos"], 1)
+        self.assertEqual(grupos["beta"]["hallazgos"]["falsos_positivos"], 1)
+        judg_legado = {
+            "adjudicaciones": [{"caso": "c1", "hallazgo": "F1", "veredicto": "valid"}]
+        }
+        r, _ = correr(corpus, observaciones, judg_legado, pairing)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ambigua", r.stderr)
+
+    def test_pair_with_differing_keys_rejected_and_observations_unmatched(self):
+        observaciones = {
+            "observaciones": [
+                obs_v2("alfa", []),
+                obs_v2("beta", []),
+                obs_v2("alfa", [], repeticion=2),
+                obs_v2("beta", [], repeticion=2),
+                obs_v2("gama", []),
+            ]
+        }
+        corpus = {"casos": [caso_v2()]}
+        judg = {"adjudicaciones": []}
+        pairing = pairing_v2(
+            par_v2(lado("alfa"), lado("beta"), repo="o/otro"),
+            par_v2(lado("alfa"), lado("beta"), head="9" * 40, repeticion=2),
+        )
+        r, informe = correr(corpus, observaciones, judg, pairing)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        bloque = informe["pares"][0]
+        self.assertEqual(bloque["pares_evaluados"], 0)
+        self.assertEqual(len(bloque["pares_rechazados"]), 2)
+        for rechazo in bloque["pares_rechazados"]:
+            self.assertTrue(rechazo["motivo"])
+        self.assertEqual(bloque["cohorte"]["comparables"], 0)
+        self.assertEqual(len(informe["sin_pareja"]), 5)
+        for sin in informe["sin_pareja"]:
+            self.assertTrue(sin["motivo"])
+        productos_sin_pareja = {s["producto"] for s in informe["sin_pareja"]}
+        self.assertEqual(productos_sin_pareja, {"alfa", "beta", "gama"})
+        for campo, cambio in (
+            ("repo", {"repo": "o/otro"}),
+            ("base", {"base": "8" * 40}),
+            ("head", {"head": "9" * 40}),
+            ("tarea", {"tarea": "otra"}),
+            ("sha_anterior", {"sha_anterior": "c" * 40}),
+        ):
+            with self.subTest(campo=campo):
+                r, informe = correr(
+                    corpus,
+                    observaciones,
+                    judg,
+                    pairing_v2(par_v2(lado("alfa"), lado("beta"), **cambio)),
+                )
+                self.assertEqual(r.returncode, 0, r.stderr)
+                bloque = informe["pares"][0]
+                self.assertEqual(bloque["pares_evaluados"], 0)
+                self.assertEqual(len(bloque["pares_rechazados"]), 1)
+                self.assertTrue(bloque["pares_rechazados"][0]["motivo"])
+
+    def test_failed_attempt_then_success_reports_request_duration_and_unknown_cost(
+        self,
+    ):
+        fallido = obs_v2("alfa", [], resultado="error", duracion_s=10.0)
+        exitoso = obs_v2("alfa", ["X1"], intento=2, duracion_s=20.0)
+        beta = obs_v2("beta", ["Y1"])
+        judg = {
+            "adjudicaciones": [
+                fila_v2(exitoso, "X1", "valid"),
+                fila_v2(beta, "Y1", "valid"),
+            ]
+        }
+        r, informe = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [fallido, exitoso, beta]},
+            judg,
+            pairing_v2(par_v2(lado("alfa", intento=2), lado("beta"))),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        alfa = {g["producto"]: g for g in informe["productos"]}["alfa"]
+        self.assertEqual(alfa["intentos"]["total"], 2)
+        self.assertEqual(alfa["intentos"]["exitosos"], 1)
+        self.assertEqual(alfa["intentos"]["fallidos"], 1)
+        self.assertEqual(alfa["intentos"]["tasa_fallos"], 0.5)
+        self.assertEqual(alfa["solicitudes"]["total"], 1)
+        solicitud = alfa["solicitudes"]["por_solicitud"][0]
+        self.assertEqual(solicitud["caso"], "c1")
+        self.assertEqual(solicitud["repeticion"], 1)
+        self.assertEqual(solicitud["intentos"], 2)
+        self.assertEqual(solicitud["fallidos"], 1)
+        self.assertEqual(solicitud["duracion_s"], 30.0)
+        self.assertEqual(
+            sorted(d["duracion_s"] for d in solicitud["intentos_detalle"]),
+            [10.0, 20.0],
+        )
+        self.assertEqual(alfa["costo"]["usd_conocido"], None)
+        self.assertEqual(alfa["costo"]["desconocidos"], 2)
+
+    def test_unadjudicated_duplicates_and_missing_defect_reference(self):
+        alfa = obs_v2("alfa", ["H1", "H2", "H3"])
+        beta = obs_v2("beta", ["K1"])
+        judg = {
+            "adjudicaciones": [
+                fila_v2(alfa, "H1", "valid"),
+                fila_v2(alfa, "H2", "duplicate", duplicado_de="H1"),
+                fila_v2(beta, "K1", "valid"),
+            ]
+        }
+        r, informe = correr(
+            {"casos": [caso_v2()]},
+            {"observaciones": [alfa, beta]},
+            judg,
+            pairing_v2(par_v2(lado("alfa"), lado("beta"))),
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        grupos = {g["producto"]: g for g in informe["productos"]}
+        self.assertEqual(grupos["alfa"]["precision"]["valor"], 0.5)
+        self.assertEqual(grupos["alfa"]["precision"]["validos"], 1)
+        self.assertEqual(grupos["alfa"]["precision"]["denominador"], 2)
+        self.assertEqual(grupos["alfa"]["hallazgos"]["sin_adjudicar"], 1)
+        self.assertEqual(grupos["alfa"]["hallazgos"]["duplicados"], 1)
+        self.assertEqual(grupos["alfa"]["defectos"]["conjunto_presente"], False)
+        self.assertEqual(grupos["alfa"]["defectos"]["recuperacion"], "desconocido")
+        self.assertEqual(grupos["beta"]["precision"]["valor"], 1.0)
+        self.assertEqual(grupos["beta"]["precision"]["denominador"], 1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "que_es": "asignación de PRs completos a ajuste o evaluación reservada",
+    "regla": "hereda la partición congelada del corpus E1: orden por número de PR, reservada en los índices i % 3 == 0; cada caso es un PR completo y todos sus pushes quedan en el mismo grupo",
+    "fuente": "evaluation/reviewer/corpus.json",
+    "congelado": "2026-10-07 (bloque E2 r1, SHA base del plan 51f1aaca)"
+  },
+  "particion": {
+    "pr10": "ajuste",
+    "pr13": "reservada",
+    "pr14": "ajuste",
+    "pr18": "ajuste",
+    "pr19": "reservada",
+    "pr2": "reservada",
+    "pr20": "ajuste",
+    "pr22": "ajuste",
+    "pr24": "reservada",
+    "pr25": "ajuste",
+    "pr26": "ajuste",
+    "pr27": "reservada",
+    "pr28": "ajuste",
+    "pr29": "ajuste",
+    "pr30": "reservada",
+    "pr31": "ajuste",
+    "pr4": "ajuste",
+    "pr6": "ajuste",
+    "pr8": "reservada",
+    "pr9": "ajuste"
+  }
+}
