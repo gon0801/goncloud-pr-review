@@ -2598,6 +2598,201 @@ class Workflows(unittest.TestCase):
         self.assertIn("-ne 1", paso)
         self.assertNotIn("-exec cp", paso)
 
+    def test_close_result_conserva_la_senal_de_error(self):
+        import review_domain as domain
+
+        estado = self._snapshot_con_solicitud()
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        with tempfile.TemporaryDirectory() as work:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "GITHUB_RUN_ATTEMPT": "2",
+                    "BOT_LOGIN": "bot",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=work, request_id="1")
+                    )
+            (Path(work) / "result.json").write_text(
+                json.dumps({review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
+            )
+            review.cmd_close_result(argparse.Namespace(work=work))
+            paquete = json.loads((Path(work) / "result.json").read_text())
+        self.assertEqual(
+            paquete[review.ERROR_KEY],
+            "falta el secret AI_REVIEW_API_KEY",
+            "la señal de error del paso modelo llega al coordinador",
+        )
+        self.assertEqual(paquete["observaciones"], [])
+        self.assertEqual(paquete["cobertura"], domain.UNKNOWN)
+
+    def _estado_pendiente(self):
+        import review_domain as domain
+
+        digest = review.digest_de_politica(review.politica_de_revision())
+        return domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest=digest
+            ),
+            next_id=2,
+            completion=domain.PARTIAL,
+            findings=[],
+            command_cursor=0,
+            pending_requests=[
+                domain.WorkRequest(
+                    id=1,
+                    kind="review",
+                    origin="push",
+                    basis_generation=1,
+                    state="pending",
+                    target=domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest=digest,
+                    ).json(),
+                    solicitante="",
+                )
+            ],
+            request_count=1,
+        )
+
+    def _reconciliar(self, estado, tmp, evento, **entorno):
+        import review_domain as domain
+
+        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso.patches = []
+        falso.parchar = lambda cid, body: falso.patches.append((cid, body))
+        falso.crear = lambda body: falso.patches.append((None, body))
+        despachados = []
+
+        def sh_falso(*args, **kw):
+            ruta = args[2] if len(args) > 2 else ""
+            if "/pulls/" in ruta:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                    ),
+                )
+            if "/commits/" in ruta:
+                return mock.Mock(returncode=0, stdout=json.dumps({"sha": "f" * 40}))
+            if "/collaborators/" in ruta:
+                return mock.Mock(
+                    returncode=0, stdout=json.dumps({"permission": "admin"})
+                )
+            raise AssertionError(f"sh inesperado: {args}")
+
+        base_env = {
+            "REPO": "o/r",
+            "PR_NUMBER": "1",
+            "HEAD_SHA": "c" * 40,
+            "BASE_SHA": "b" * 40,
+            "WORKER_REF": "main",
+            "BOT_LOGIN": "bot",
+            "GITHUB_EVENT_NAME": evento,
+            "GITHUB_RUN_ID": "55",
+        }
+        base_env.update(entorno)
+        with mock.patch.dict(os.environ, base_env, clear=False):
+            with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review, "sh", sh_falso):
+                    with mock.patch.object(
+                        review,
+                        "despachar_worker",
+                        side_effect=lambda s, **kw: despachados.append(s.id),
+                    ):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        return falso.patches, despachados
+
+    def test_el_error_del_worker_no_se_publica_como_revision(self):
+        """F10 r7: el fallo blando del worker es ReportFailed reintenable,
+        no una revisión vacía que consume la solicitud."""
+        import review_domain as domain
+
+        estado = self._estado_pendiente()
+        with tempfile.TemporaryDirectory() as tmp:
+            evento = Path(tmp) / "event.json"
+            evento.write_text(
+                json.dumps(
+                    {
+                        "workflow_run": {
+                            "id": 77,
+                            "name": "ai-review-worker",
+                            "head_branch": "main",
+                            "head_sha": "f" * 40,
+                            "run_attempt": 1,
+                            "event": "workflow_dispatch",
+                            "head_repository": {"full_name": "o/r"},
+                        }
+                    }
+                )
+            )
+            (Path(tmp) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": 1,
+                        "run_id": 77,
+                        "attempt": 1,
+                        "pr_head_sha": "c" * 40,
+                        "policy_digest": review.digest_de_politica(
+                            review.politica_de_revision()
+                        ),
+                        "target": domain.ReviewTarget(
+                            repository="o/r",
+                            pr_number=1,
+                            head_sha="c" * 40,
+                            base_sha="b" * 40,
+                            policy_digest=review.digest_de_politica(
+                                review.politica_de_revision()
+                            ),
+                        ).json(),
+                        "observaciones": [],
+                        "cobertura": "unknown",
+                        review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
+                    }
+                )
+            )
+            patches, _ = self._reconciliar(
+                estado, tmp, "workflow_run", GITHUB_EVENT_PATH=str(evento)
+            )
+        self.assertTrue(patches, "el checkpoint se publica")
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertIsInstance(publicado, domain.Valid)
+        solicitud = publicado.snapshot.pending_requests[0]
+        self.assertEqual(
+            solicitud.state, "failed_retryable", "el fallo deja la solicitud viva"
+        )
+        self.assertEqual(solicitud.motivo, "falta el secret AI_REVIEW_API_KEY")
+
+    def test_la_recuperacion_redescubre_lo_pendiente(self):
+        """F11 r7: workflow_dispatch vuelve a despachar el trabajo pendiente
+        del PR vigente en vez de morir en reconcile; sin cambio de estado no
+        reescribe el checkpoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            patches, despachados = self._reconciliar(
+                self._estado_pendiente(), tmp, "workflow_dispatch"
+            )
+        self.assertEqual(
+            despachados, [1], "la recuperación vuelve a despachar lo pendiente"
+        )
+        self.assertEqual(patches, [], "sin cambio de estado no reescribe")
+
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []
 

@@ -3009,6 +3009,21 @@ def _comandos_de_comentarios(comentarios, login, cursor):
     return tuple(comandos)
 
 
+def fallo_de_resultado(artifact, run_id, attempt):
+    """El ERROR_KEY del paso modelo como fallo reintenable del carril
+    workflow_run; None cuando el resultado no trae error."""
+    motivo = (artifact or {}).get(ERROR_KEY)
+    if not motivo:
+        return None
+    return review_domain.ReportFailed(
+        request_id=(artifact or {}).get("request_id"),
+        run_id=run_id,
+        attempt=attempt,
+        motivo=motivo,
+        retryable=True,
+    )
+
+
 def cmd_reconcile(args):
     repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
@@ -3094,18 +3109,39 @@ def cmd_reconcile(args):
                 file=sys.stderr,
             )
             sys.exit(1)
-        observaciones = [
-            review_domain.observation_de_entrada(e) for e in autenticado.observaciones
-        ]
+        fallo = fallo_de_resultado(artifact, wr.get("id"), wr.get("run_attempt"))
+        if fallo is not None:
+            decision = review_domain.reconcile(current, fallo, facts, policy)
+        else:
+            observaciones = [
+                review_domain.observation_de_entrada(e)
+                for e in autenticado.observaciones
+            ]
+            decision = review_domain.reconcile(
+                current,
+                review_domain.ReportReady(
+                    origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
+                    request_id=artifact.get("request_id"),
+                    run_id=autenticado.run_id,
+                    attempt=autenticado.attempt,
+                    observaciones=tuple(observaciones),
+                    cobertura=autenticado.cobertura,
+                ),
+                facts,
+                policy,
+            )
+    elif event_name == "workflow_dispatch":
         decision = review_domain.reconcile(
             current,
-            review_domain.ReportReady(
-                origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
-                request_id=artifact.get("request_id"),
-                run_id=autenticado.run_id,
-                attempt=autenticado.attempt,
-                observaciones=tuple(observaciones),
-                cobertura=autenticado.cobertura,
+            review_domain.RequestReview(
+                origin=review_domain.Origin(kind="push", run_id=_run_id()),
+                target=review_domain.ReviewTarget(
+                    repository=repo,
+                    pr_number=int(pr),
+                    head_sha=head,
+                    base_sha=base,
+                    policy_digest=digest,
+                ),
             ),
             facts,
             policy,
@@ -3142,7 +3178,8 @@ def cmd_reconcile(args):
     else:
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
-            "(pull_request, pull_request_target, issue_comment o workflow_run)"
+            "(pull_request, pull_request_target, issue_comment, "
+            "workflow_run o workflow_dispatch)"
         )
 
     if isinstance(decision, review_domain.Commit) and decision.work_after_commit:
@@ -3246,6 +3283,8 @@ def cmd_close_result(args):
             "cobertura": cobertura_declarada(texto, modelo),
         }
     )
+    if ERROR_KEY in resultado:
+        paquete[ERROR_KEY] = resultado[ERROR_KEY]
     (work / "result.json").write_text(json.dumps(paquete))
 
 
