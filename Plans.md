@@ -128,7 +128,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | R0.md:86 | Matiz de redaccion: dice que la vineta no UTF-8 fue reescrita, pero se borro; estado resuelto en seccion Ronda 2 | abierta |
 | R0.md:49-52 | build_conventions lee contenido con sh en modo texto; revisar decodificacion | abierta |
 | R0.md:49-52 | test_utf8_manifest_matches_file: asercion de seleccion por presupuesto no discrimina sola; cubre igualdad diff_bytes | abierta |
-| S0-r5 revisor | N1 review_domain.py:796 state valida str no vacio sin enum (T07 implementa pending/failed_retryable/finished en minusculas; Running llega con T10); endurecer a enum | abierta |
+| S0-r5 revisor | N1 review_domain.py:796 state valida str no vacio sin enum (el codigo no trae Running ni enum; el checklist de T07 exige Pending/Running/Finished/FailedRetryable y la arquitectura define RequestState con Running(run_key); T07 quedo done sin declararlo; endurecer a enum o declarar el pendiente) | abierta |
 | S0-r5 revisor | N2 review_domain.py:750 rechazo basis_generation bool/neg sin subtest (mutante isinstance sobrevive; caso x cubierto) | abierta |
 | S0-r5 revisor | N3 review.py:1884 proxy.wait(timeout=10) en finally puede lanzar TimeoutExpired tras timeout del modelo y tapar ruta infra (preexistente en main) | abierta |
 | S0-r5 revisor | N4 S0.md:122 cifra verify-partition 370 desactualizada (sobre 73d7067 da 371: 186+185) | abierta |
