@@ -106,7 +106,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T07 | U0 | Solicitudes y transiciones puras | T04 y T05 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done con desvío declarado (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md; desvío: T09 añade parse_comando_reconcile y collect_dismissals queda para el flujo run/publish sin tocar) |
-| T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:TODO |
+| T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:done (PR #54, squash 4f9b263; evidencia docs/evidence/reviewer/UW.md) |
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:TODO |
@@ -180,3 +180,11 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | U1 cierre | falta el render de los rechazos al usuario (T10 publicador; hoy visibles en log y recibos del checkpoint) | abierta |
 | U1 cierre | descartar F1 y F2 multi-id del legado se ignora silenciosamente en reconcile (soportar o rechazo visible) | abierta |
 | U1 cierre | escritor legado vivo puede avanzar el cursor por encima de un explicar pendiente + sticky sin previo crea checkpoint vacío (ruido) | abierta |
+| UW-r7 review F5 | UW.md:54 sigue citando prueba inexistente en lista de mutantes (parte fuerte corregida; queda nombre muerto documental) | abierta |
+| UW-r7 review F9 | guard del coordinador filtra draft/fork pero no la bandera AI_REVIEW_DISABLED (depende de variables del consumidor, T11) | abierta |
+| UW-r7 veredicto N1 | falta prueba punta a punta F10->F11 (fallo blando luego recuperacion re-despacha esa failed_retryable); sin prueba de orden autenticacion->fallo; motivo sin validacion/truncado; artifact de solicitud podada deja run en rojo sin dano; abreviaturas con ellipsis en UW.md:54 historico | abierta |
+| UW-r7 veredicto N2 | recuperacion por workflow_dispatch solo re-deriva solicitudes de origen push; las de comando varadas (U1-r2 N2) siguen sin derivarse | abierta |
+| UW-r6 veredicto N1 | descarga sin diagnostico con pipefail (grep -c falla antes del mensaje) y patron attempt-1 coincide con attempt-10; usar grep -c . \|\| true y patron anclado | abierta |
+| UW-r6 veredicto N2 | subtype del resultado viaja en paquete pero el carril workflow_run no lo usa para degradar cobertura ni reintentar (costura de fallos del worker, T11) | abierta |
+| UW-r6 veredicto N3 | FINDING_IDENTITY no viaja al worker; close-result parsea con current aunque el coordinador opere en anchors (T16) | abierta |
+| UW-r4 LISTO | flags de aislamiento del runtime sin prueba que los fije; working-directory de preparar contexto sin discriminante (benigno); instalacion y firma del proveedor en T11 | abierta |
