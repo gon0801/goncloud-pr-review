@@ -107,7 +107,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T08 | U0 | Publicación autenticada y recuperación | T06 y T07 | cc:done (PR #50, squash 51025e4; evidencia docs/evidence/reviewer/U0.md) |
 | T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done con desvío declarado (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md; desvío: T09 añade parse_comando_reconcile y collect_dismissals queda para el flujo run/publish sin tocar) |
 | T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:done (PR #54, squash 4f9b263; evidencia docs/evidence/reviewer/UW.md) |
-| T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:TODO |
+| T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:done (PR #56, squash a3b4891; evidencia docs/evidence/reviewer/IN.md) |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:TODO |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:TODO |
@@ -193,3 +193,10 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | UW cierre | git fetch sin credenciales en repos privados (UW.md:97, T11) | abierta |
 | UW cierre | filtros de issue vs PR en issue_comment (UW.md:97, T11) | abierta |
 | UW cierre | intent no numerico en execute-request deja traceback crudo (UW.md:97, T11) | abierta |
+| IN-r1 veredicto N1 (ai-review F4) | `gh pr list --head` sin dueño puede casar un PR de fork con la misma rama y editarle título/cuerpo (T11/T16) | abierta |
+| IN-r1 veredicto N2 (ai-review F5) | ACTION_SHA sin validar como 40 hex; entrada del operador, sin shell en modo coordinado (T11/T16) | abierta |
+| IN-r1 veredicto N3 (ai-review F2) | `|| true` en lectura de rama confunde fallo transitorio con ausencia; sin corrupción (POST falla y set -e corta) | abierta |
+| IN-r1 veredicto N4 | `rutas` se calcula una sola vez antes de reintentos; si la rama cambia y alguien borró ai-review.yml, sale sin publicar (seguro, sin reintento) | abierta |
+| IN-r1 veredicto N5 (LISTO, T16) | ejercer contra API real `sha: null` en path ausente y `truncated: true` en árboles grandes; rama `gh pr edit` del modo coordinado sin prueba propia; falta bandera AI_REVIEW_DISABLED en plantillas nuevas | abierta |
+| IN-r1 review F1 Medium | worker instalado sin fetch con credenciales en repos privados (rastreada desde UW; solo públicos por límite gasto $0) | abierta |
+| IN-r1 review F7 Low | IN.md:38 dice 6 pruebas, hay 8 (errata documental) | abierta |
