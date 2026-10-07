@@ -186,11 +186,13 @@ TOKENS_FUGA_V2 = [
     "tool-b",
     "🤖",
     "<details>",
+    "####",
     "addressed",
     "herramienta",
     "🩺",
     "⚡",
     "🟡",
+    "⚪",
     "quick win",
     "minor",
     "medium",
@@ -297,6 +299,15 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "Medium",
                         "- 🟡 Medium · `Plans.md:8` · el orden declarado no coincide",
                     ),
+                    hallazgo(
+                        "c1-a04",
+                        "Recorte silencioso de defectos conocidos",
+                        "compare_reviews.py",
+                        109,
+                        "Medium",
+                        "- 🟡 **Medium** · `scripts/compare_reviews.py:109` · el "
+                        "conjunto de defectos conocidos se rellena a mano",
+                    ),
                 ],
                 producto="tool-a",
                 configuracion="ca",
@@ -321,6 +332,16 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "Minor",
                         "_🩺 Stability & Availability_ | _🟡 Minor_ | _⚡ Quick win_",
                     ),
+                    hallazgo(
+                        "c2-b03",
+                        "Autoridad del ajuste",
+                        "autopilot.json",
+                        1,
+                        "Low",
+                        "dejarlo escrito con esa razón. #### ⚪ Low · "
+                        "`.saikit/autopilot.json:1` · La autoridad del ajuste no "
+                        "es la ficha",
+                    ),
                 ],
                 producto="tool-b",
                 configuracion="cb",
@@ -340,8 +361,30 @@ class BlindJudgmentsV2(unittest.TestCase):
             self.assertEqual(set(fila), CLAVES_FILA_V2)
         self.assertEqual(
             sorted(f["severidad"] for f in hoja["hallazgos"]),
-            ["baja", "baja", "baja", "media", "media"],
+            ["baja", "baja", "baja", "baja", "media", "media", "media"],
         )
+        with self.subTest(marca="severidad en negrita"):
+            fila_negrita = next(
+                f
+                for f in hoja["hallazgos"]
+                if f["diagnostico"] == "Recorte silencioso de defectos conocidos"
+            )
+            self.assertEqual(
+                fila_negrita["evidencia"],
+                "`scripts/compare_reviews.py:109` · el conjunto de defectos "
+                "conocidos se rellena a mano",
+            )
+        with self.subTest(marca="severidad tras marcador de encabezado"):
+            fila_encabezado = next(
+                f
+                for f in hoja["hallazgos"]
+                if f["diagnostico"] == "Autoridad del ajuste"
+            )
+            self.assertEqual(
+                fila_encabezado["evidencia"],
+                "dejarlo escrito con esa razón. `.saikit/autopilot.json:1` · La "
+                "autoridad del ajuste no es la ficha",
+            )
         texto = json.dumps(hoja["hallazgos"], ensure_ascii=False).lower()
         for token in TOKENS_FUGA_V2:
             self.assertNotIn(token, texto, token)
@@ -365,7 +408,7 @@ class BlindJudgmentsV2(unittest.TestCase):
             self.assertEqual(set(fila), CLAVES_CORRESPONDENCIA_V2)
         self.assertEqual(
             sorted(f["severidad_original"] for f in correspondencia["filas"]),
-            ["Low", "Major", "Medium", "Minor", "Nitpick"],
+            ["Low", "Low", "Major", "Medium", "Medium", "Minor", "Nitpick"],
         )
         self.assertEqual(
             {f["producto"] for f in correspondencia["filas"]}, {"tool-a", "tool-b"}

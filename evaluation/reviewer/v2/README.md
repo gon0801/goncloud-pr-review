@@ -67,10 +67,13 @@ restos (`tool` no corta a `tool-plus`); la configuración corta (por ejemplo
 evidencia los metadatos de herramienta: comentarios HTML, bloques
 `<details>`, líneas `✅ Addressed in commit`, líneas de badges (todos los
 segmentos separados por `|` empiezan por un emoji u otro carácter no
-alfanumérico, tras quitar espacios y énfasis) y prefijos de severidad propia
-al inicio de una línea (viñeta opcional, emoji, palabra de severidad y
-separador `·` o `|`). La `meta` de la hoja registra la versión de
-normalización, los jueces, los desempates y si la adjudicación usa IA.
+alfanumérico, tras quitar espacios y énfasis) y la marca de severidad propia
+(emoji más palabra de severidad, con viñeta, énfasis o marcadores de
+encabezado alrededor, y su separador `·` o `|`), que se quita donde aparezca,
+no sólo al inicio de la línea; el emoji es el requisito de marca, así que una
+palabra de severidad en prosa sin emoji no se toca. La `meta` de la hoja
+registra la versión de normalización, los jueces, los desempates y si la
+adjudicación usa IA.
 
 ## Comparar con pares versionados
 

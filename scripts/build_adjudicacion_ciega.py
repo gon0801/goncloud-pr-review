@@ -26,10 +26,12 @@ RE_DETAILS = re.compile(r"<details>.*?</details>", re.S)
 RE_ADDRESS = re.compile(r"✅ Addressed in commit [0-9a-f]+")
 RE_SEVERIDAD = re.compile(r"\b(Minor|Major|Critical|Trivial|Nitpick)\b")
 RE_BOLD = re.compile(r"^\*\*(.+?)\*\*\s*$", re.M)
-RE_PREFIJO_SEVERIDAD_V2 = re.compile(
-    r"^(?:[-•*]\s*)?[^\w\s]\s+"
-    r"(?:Minor|Major|Critical|Trivial|Nitpick|Low|Medium|High)"
-    r"(?:\s*[·|]\s*)?",
+RE_MARCA_SEVERIDAD_V2 = re.compile(
+    r"(?:^|(?<=\s))"
+    r"[-•*#*_~]*\s*"
+    r"[^\x00-\x7F]\s*[*_~]*"
+    r"(?:Minor|Major|Critical|Trivial|Nitpick|Low|Medium|High)\b"
+    r"[*_~]*(?:\s*[·|]\s*)?",
     re.IGNORECASE,
 )
 ENFASIS_V2 = " *_`~"
@@ -223,10 +225,9 @@ def limpiar_evidencia_v2(texto):
     limpio = RE_ADDRESS.sub("", limpio)
     limpio = limpio.replace("🤖", "")
     limpio = "\n".join(
-        RE_PREFIJO_SEVERIDAD_V2.sub("", linea)
-        for linea in limpio.splitlines()
-        if not es_linea_badges_v2(linea)
+        linea for linea in limpio.splitlines() if not es_linea_badges_v2(linea)
     )
+    limpio = RE_MARCA_SEVERIDAD_V2.sub("", limpio)
     return re.sub(r"\n{3,}", "\n\n", limpio).strip()
 
 
