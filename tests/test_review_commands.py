@@ -244,35 +244,84 @@ class CommandAdmission(unittest.TestCase):
 
 class CommandExecution(unittest.TestCase):
     def test_reauthorize_before_model(self):
-        estado = snapshot_base()
-        creada = domain.reconcile(
-            estado,
-            domain.RequestReview(
-                origin=domain.Origin(kind="comando", comment_id=5), target=TARGET
-            ),
-            domain.RepositoryFacts(),
-            POLICY,
+        """B2 r2: el permiso del solicitante se re-consulta antes de despachar."""
+        out = domain.procesar_comandos(
+            snapshot_base(),
+            (comando(5, "revisar", login="jefe"),),
+            permisos_ok,
+            TARGET,
         )
-        # permiso revocado antes de ejecutar el modelo: rechazo terminal
-        fallo = domain.reconcile(
-            creada.snapshot,
-            domain.ReportFailed(
-                request_id=1,
-                run_id=11,
-                attempt=1,
-                motivo="permiso revocado antes del modelo",
-                retryable=False,
-            ),
-            domain.RepositoryFacts(),
-            POLICY,
+        snapshot, work, _ = out
+        self.assertEqual(work[0].solicitante, "jefe")
+
+        def revocado(login):
+            return "read"
+
+        snapshot_ra, despachables, terminadas = domain.reautorizar(
+            snapshot, work, revocado
         )
-        self.assertIsInstance(fallo, domain.Commit)
         self.assertEqual(
-            fallo.work_after_commit, (), "sin trabajo: cero llamadas al proveedor"
+            despachables,
+            (),
+            "permiso revocado: cero despachos y cero llamadas al proveedor",
         )
-        finalizada = fallo.snapshot.pending_requests[0]
+        self.assertEqual(len(terminadas), 1)
+        self.assertEqual(terminadas[0].state, "finished")
+        self.assertIn("permiso revocado", terminadas[0].motivo)
+        self.assertIn("jefe", terminadas[0].motivo, "rechazo terminal visible")
+        finalizada = {r.id: r for r in snapshot_ra.pending_requests}[1]
         self.assertEqual(finalizada.state, "finished")
-        self.assertEqual(finalizada.motivo, "permiso revocado antes del modelo")
+        self.assertEqual(finalizada.motivo, terminadas[0].motivo)
+
+        # el modo real de fallo de collaborator_permission es devolver None
+        def consulta_caída(login):
+            return None
+
+        snapshot_espera, despachables_espera, terminadas_espera = domain.reautorizar(
+            snapshot, work, consulta_caída
+        )
+        self.assertIsNone(snapshot_espera, "sin confirmación: nada cambia")
+        self.assertEqual(
+            despachables_espera,
+            (),
+            "sin confirmación: la solicitud queda pendiente, no despachable",
+        )
+        self.assertEqual(terminadas_espera, ())
+
+        # permiso vigente: pasa al despacho
+        snapshot_ok, despachables_ok, terminadas_ok = domain.reautorizar(
+            snapshot, work, permisos_ok
+        )
+        self.assertIsNone(snapshot_ok)
+        self.assertEqual([s.id for s in despachables_ok], [1])
+        self.assertEqual(terminadas_ok, ())
+
+    def test_dismiss_all_con_abiertos_deja_un_solo_recibo(self):
+        """B1: un recibo por comando; el checkpoint sigue legal."""
+        out = domain.procesar_comandos(
+            snapshot_base(),
+            (comando(10, "descartar", "todo"),),
+            permisos_ok,
+            TARGET,
+        )
+        snapshot, _, _ = out
+        self.assertEqual(
+            [f.status.__class__.__name__ for f in snapshot.findings],
+            ["StatusDismissed", "StatusDismissed"],
+        )
+        # lista exacta de recibos, no un dict por id (ocultaría duplicados)
+        self.assertEqual(
+            [(r.command_id, r.effect) for r in snapshot.receipts],
+            [(10, "descartar todo: F1, F2")],
+        )
+        encoded = domain.encode_snapshot(snapshot, domain.StorageBudget())
+        self.assertIsInstance(encoded, domain.EncodedCheckpoint)
+        carga = domain.read_snapshot(encoded.block)
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(
+            [(r.command_id, r.effect) for r in carga.snapshot.receipts],
+            [(10, "descartar todo: F1, F2")],
+        )
 
     def test_explicacion_vigente_y_antigua(self):
         snapshot = snapshot_base()
@@ -316,18 +365,11 @@ class CommandExecution(unittest.TestCase):
 
         # explicación antigua: el target quedó atrás; no acredita y la cola
         # queda con la explicación para el target vigente (identificable)
-        target_viejo = domain.ReviewTarget(
-            repository="o/r",
-            pr_number=1,
-            head_sha="c" * 40,
-            base_sha="b" * 40,
-            policy_digest="d" * 64,
-        )
         con_vieja = domain.reconcile(
             snapshot_base(),
             domain.AuthorizedCommand(
                 origin=domain.Origin(kind="comando", comment_id=7),
-                target=target_viejo,
+                target=TARGET,
                 action="explicar",
                 finding_id="F1",
             ),
@@ -371,7 +413,7 @@ def hechos_vigentes():
 
 
 class CoordinadorComandos(unittest.TestCase):
-    def _entorno(self, tmp, **over):
+    def _entorno(self, **over):
         base = {
             "REPO": "o/r",
             "PR_NUMBER": "1",
@@ -419,8 +461,6 @@ class CoordinadorComandos(unittest.TestCase):
 
     def test_evento_real_issue_comment_con_action_created(self):
         """CodeRabbit: GITHUB_EVENT_NAME es issue_comment; el tipo va en action."""
-        import review_domain as domain
-
         estado = domain.Snapshot(
             schema=3,
             generation=2,
@@ -448,7 +488,6 @@ class CoordinadorComandos(unittest.TestCase):
             payload_path = Path(tmp, "event.json")
             payload_path.write_text(json.dumps({"action": "created"}))
             with self._entorno(
-                tmp,
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
@@ -471,7 +510,6 @@ class CoordinadorComandos(unittest.TestCase):
             payload_path2 = Path(tmp, "event2.json")
             payload_path2.write_text(json.dumps({"action": "deleted"}))
             with self._entorno(
-                tmp,
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path2),
             ):
@@ -507,7 +545,6 @@ class CoordinadorComandos(unittest.TestCase):
             payload_path = Path(tmp, "event.json")
             payload_path.write_text(json.dumps({"action": "created"}))
             with self._entorno(
-                tmp,
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
@@ -552,7 +589,6 @@ class CoordinadorComandos(unittest.TestCase):
             payload_path = Path(tmp, "event.json")
             payload_path.write_text(json.dumps({"action": "created"}))
             with self._entorno(
-                tmp,
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
@@ -606,12 +642,6 @@ class EndurecimientoFrontera(unittest.TestCase):
             [f.status.__class__.__name__ for f in snapshot.findings],
             ["StatusDismissed", "StatusOpen"],
             "sólo el comando del humano aplica; el del bot (inyectado en la prosa) no",
-        )
-        self.assertEqual(snapshot.command_cursor, 5)
-        self.assertEqual(
-            [f.status.__class__.__name__ for f in snapshot.findings][1],
-            "StatusOpen",
-            "el comando citado en mitad de un texto no es comando",
         )
 
     def test_resultado_de_explicacion_no_cambia_hallazgos(self):

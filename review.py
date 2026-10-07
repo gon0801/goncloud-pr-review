@@ -3080,6 +3080,19 @@ def cmd_reconcile(args):
             "(pull_request, pull_request_target, issue_comment o workflow_run)"
         )
 
+    if isinstance(decision, review_domain.Commit) and decision.work_after_commit:
+        snapshot_ra, despachables, terminadas = review_domain.reautorizar(
+            decision.snapshot,
+            decision.work_after_commit,
+            lambda login_consultado: collaborator_permission(repo, login_consultado),
+        )
+        decision = review_domain.Commit(
+            snapshot=snapshot_ra or decision.snapshot,
+            work_after_commit=tuple(despachables),
+        )
+        for terminada in terminadas:
+            print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
+
     observado = sticky if sticky else None
     resultado = publish_checkpoint(decision, observado, adaptador, login=login)
     if isinstance(resultado, Unconfirmed):

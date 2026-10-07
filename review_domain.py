@@ -165,6 +165,7 @@ class WorkRequest:
     target: dict = field(default_factory=dict)
     motivo: str = ""
     digest: str = ""
+    solicitante: str = ""
 
 
 @dataclass
@@ -791,6 +792,7 @@ def _v3_snapshot(data):
         target = req.get("target", {})
         motivo = req.get("motivo", "")
         digest = req.get("digest", "")
+        solicitante = req.get("solicitante", "")
         if not isinstance(origin, str):
             raise _SchemaError("origin de solicitud debe ser texto")
         if not isinstance(basis, int) or isinstance(basis, bool) or basis < 0:
@@ -805,6 +807,8 @@ def _v3_snapshot(data):
             raise _SchemaError("motivo de solicitud debe ser texto")
         if not isinstance(digest, str):
             raise _SchemaError("digest de solicitud debe ser texto")
+        if not isinstance(solicitante, str):
+            raise _SchemaError("solicitante de solicitud debe ser texto")
         solicitudes.append(
             WorkRequest(
                 id=rid,
@@ -817,6 +821,7 @@ def _v3_snapshot(data):
                 target=dict(target),
                 motivo=motivo,
                 digest=digest,
+                solicitante=solicitante,
             )
         )
     recibos, comandos = [], set()
@@ -1177,6 +1182,7 @@ def encode_snapshot(snapshot, budget=None):
                     **({"target": r.target} if r.target else {}),
                     **({"motivo": r.motivo} if r.motivo else {}),
                     **({"digest": r.digest} if r.digest else {}),
+                    **({"solicitante": r.solicitante} if r.solicitante else {}),
                 }
                 for r in snapshot.pending_requests
             ],
@@ -1833,6 +1839,7 @@ class Origin:
     kind: str
     comment_id: int | None = None
     run_id: int | None = None
+    login: str = ""
 
 
 @dataclass(frozen=True)
@@ -1914,6 +1921,9 @@ def _solicitud_nueva(evento, current):
         basis_generation=current.generation,
         state="pending",
         target=evento.target.json(),
+        solicitante=(
+            evento.origin.login if evento.origin.kind in ("comando", "re-run") else ""
+        ),
     )
 
 
@@ -2072,6 +2082,39 @@ def _reconcile_fallo(current, evento):
     return Commit(snapshot=replace(current, pending_requests=vivas))
 
 
+def reautorizar(current, work, permisos):
+    """Re-autoriza las solicitudes de origen comando antes de despachar (T09).
+
+    Revocado → `finished` con motivo visible (tumba persistida); consulta
+    fallida → la solicitud queda pendiente para otro evento; el resto pasa.
+    Devuelve (snapshot o None si nada cambió, despachables, terminadas).
+    """
+    despachables, terminadas, cambio = [], [], False
+    vivas = list(current.pending_requests)
+    for solicitud in work:
+        if solicitud.origin != "comando" or not solicitud.solicitante:
+            despachables.append(solicitud)
+            continue
+        try:
+            nivel = permisos(solicitud.solicitante)
+        except Exception:
+            continue  # sin confirmación: queda pendiente para otro evento
+        if nivel is None:
+            continue  # la consulta no confirmó nada: espera, como el legado
+        if nivel not in ("admin", "maintain", "write"):
+            motivo = (
+                f"permiso revocado de {solicitud.solicitante} "
+                f"({nivel or 'sin permiso'})"
+            )
+            terminadas.append(replace(solicitud, state="finished", motivo=motivo))
+            vivas = [terminadas[-1] if r.id == solicitud.id else r for r in vivas]
+            cambio = True
+            continue
+        despachables.append(solicitud)
+    snapshot = replace(current, pending_requests=vivas) if cambio else None
+    return snapshot, tuple(despachables), tuple(terminadas)
+
+
 def reconcile(current, event, facts, policy):
     """Decisión persistible para cualquier evento del coordinador (U0).
 
@@ -2092,9 +2135,12 @@ def reconcile(current, event, facts, policy):
     return Keep(reason="evento desconocido")
 
 
+# ---- U1: comandos procesados sin push ----
+
+
 def digest_de_hallazgo(finding):
-    """Digest del hallazgo para una explicación: título, ruta y línea (o
-    rango) de la ancla primaria."""
+    """Digest de identidad del hallazgo para una explicación (U1): estable
+    mientras título y ancla primaria no cambien."""
     ancla = finding.primary_anchor
     ubicacion = getattr(ancla, "line", None)
     if ubicacion is None:
@@ -2115,7 +2161,7 @@ def _consumido(current, cid, efecto=None, recibo=True):
 
 
 def procesar_comandos(current, comandos, permisos, target):
-    """Procesa el prefijo confirmado de comentarios-comando.
+    """Procesa el prefijo confirmado de comentarios-comando (T09).
 
     Ordena por ID y consume sólo lo que puede confirmar: un fallo de la
     consulta de permisos retiene ese comentario y los posteriores; una
@@ -2131,13 +2177,13 @@ def procesar_comandos(current, comandos, permisos, target):
     for comando in sorted(comandos, key=lambda c: c["cid"]):
         cid = comando["cid"]
         if cid <= snapshot.command_cursor:
-            continue
+            continue  # ya consumido: la decisión original se conserva
         try:
             nivel = permisos(comando["login"])
         except Exception:
-            break
+            break  # fallo de la consulta: este y los posteriores esperan
         if nivel is None:
-            break
+            break  # consulta sin respuesta confirmada: espera, como el legado
         if nivel not in ("admin", "maintain", "write"):
             rechazos.append(
                 (cid, f"permiso insuficiente de {comando['login']} ({nivel})")
@@ -2164,7 +2210,10 @@ def procesar_comandos(current, comandos, permisos, target):
                 arg == "todo",
                 comment_id=cid,
             )
-            if arg != "todo" and arg in abiertos_antes:
+            con_efecto = (
+                arg in abiertos_antes if arg != "todo" else bool(abiertos_antes)
+            )
+            if con_efecto:
                 snapshot = _consumido(snapshot, cid)
             else:
                 sin_efecto = (
@@ -2188,6 +2237,7 @@ def procesar_comandos(current, comandos, permisos, target):
                 state="pending",
                 target=target.json(),
                 digest=digest_de_hallazgo(hallazgo),
+                solicitante=comando["login"],
             )
             snapshot = replace(
                 snapshot,
@@ -2206,6 +2256,7 @@ def procesar_comandos(current, comandos, permisos, target):
                 basis_generation=snapshot.generation,
                 state="pending",
                 target=target.json(),
+                solicitante=comando["login"],
             )
             snapshot = replace(
                 snapshot,
