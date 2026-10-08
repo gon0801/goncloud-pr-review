@@ -306,3 +306,99 @@ class IncrementalContext(unittest.TestCase):
                         self.assertFalse(
                             any(om.causa == "presupuesto" for om in result.omisiones)
                         )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "g.py").write_text("".join(lineas(20, "v1_")))
+            base = commit(repo, "base")
+            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+            prev = commit(repo, "prev")
+            (repo / "g.py").write_text("".join(lineas(5000, "v2_")))
+            head = commit(repo, "head")
+            with self.subTest("primer archivo mayor que todo el presupuesto"):
+                policy = domain.ReviewPolicy(
+                    diff_mode="incremental",
+                    strict_budget=True,
+                    diff_max_bytes=200,
+                )
+                digest = digest_de_politica(policy)
+                result = prepare_review(
+                    GitRepository(repo),
+                    solicitud(head, base, digest),
+                    memoria(prev, base, digest),
+                    policy,
+                )
+                self.assertEqual(result.modo, "incremental")
+                al_presupuesto = [
+                    om for om in result.omisiones if om.causa == "presupuesto"
+                ]
+                self.assertEqual([om.ruta for om in al_presupuesto], ["g.py"])
+                entregados = [p.text for p in result.entregados]
+                self.assertNotIn("g.py", entregados)
+                self.assertTrue(
+                    any(ob.ruta == "g.py" for ob in result.plan.obligations)
+                )
+                self.assertEqual(result.cobertura, domain.PARTIAL)
+
+    def test_open_findings_outside_delta_become_obligations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "q.py").write_text("q = 1\n")
+            (repo / "r.py").write_text("r = 1\n")
+            (repo / "w.py").write_text("w = 1\n")
+            base = commit(repo, "base")
+            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+            prev = commit(repo, "prev")
+            (repo / "readme.md").write_text("# proyecto\n\ntercer push\n")
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            previo = domain.snapshot_a_v3(
+                domain.Snapshot(
+                    schema=2,
+                    generation=1,
+                    revision=domain.Revision(
+                        base_sha=base, head_sha=prev, policy_digest=digest
+                    ),
+                    next_id=4,
+                    completion=domain.COMPLETE_CLAIM,
+                    findings=[
+                        domain.Finding(
+                            id="F1",
+                            title="Abierto en q.py",
+                            severity="High",
+                            status=domain.StatusOpen(),
+                            primary_anchor=domain.AnchorLegacy(path="q.py", line=1),
+                        ),
+                        domain.Finding(
+                            id="F2",
+                            title="Resuelto en r.py",
+                            severity="Medium",
+                            status=domain.StatusResolved(at_sha="b" * 40),
+                            primary_anchor=domain.AnchorLegacy(path="r.py", line=1),
+                        ),
+                        domain.Finding(
+                            id="F3",
+                            title="Descartado en w.py",
+                            severity="Low",
+                            status=domain.StatusDismissed(command_id=7),
+                            primary_anchor=domain.AnchorLegacy(path="w.py", line=1),
+                        ),
+                    ],
+                    command_cursor=0,
+                )
+            )
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                previo,
+                policy,
+            )
+            self.assertEqual(result.modo, "incremental")
+            self.assertEqual(set(result.plan.changed_paths), {"readme.md"})
+            rutas = [ob.ruta for ob in result.plan.obligations]
+            self.assertIn("q.py", rutas)
+            self.assertNotIn("w.py", rutas)
+            self.assertEqual(set(rutas), {"readme.md", "q.py"})
