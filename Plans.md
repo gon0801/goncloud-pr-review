@@ -108,8 +108,8 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T09 | U1 | Comandos procesados sin push | T05, T06 y T08 | cc:done con desvío declarado (PR #52, squash 657c283; evidencia docs/evidence/reviewer/U1.md; desvío: T09 añade parse_comando_reconcile y collect_dismissals queda para el flujo run/publish sin tocar) |
 | T10 | U0/U1 | Coordinador y worker separados | T08 y T09 | cc:done (PR #54, squash 4f9b263; evidencia docs/evidence/reviewer/UW.md) |
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:done (PR #56, squash a3b4891; evidencia docs/evidence/reviewer/IN.md) |
-| T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:TODO |
-| T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:TODO |
+| T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
+| T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:TODO |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:TODO |
 | T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
@@ -201,3 +201,19 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | IN-r1 review F1 Medium | worker instalado sin fetch con credenciales en repos privados (rastreada desde UW; solo públicos por límite gasto $0) | abierta |
 | IN-r1 review F7 Low | IN.md:38 dice 6 pruebas, hay 8 (errata documental) | abierta |
 | IN-r1 cierre (IN.md) | el modo actual conserva el reset con fuerza de la rama propia solo en la actualizacion trivial de una rama ya existente (preexistente de la base, fuera del delta; el retorno usa via atomica sin fuerza) (T11/T16) | abierta |
+| E2-r1 veredicto N1 (ai-review F3) | README v2 sugiere --pairing sobre corpus v1 y sale rc=2 (falta clave tarea); declarar que el corpus v2 con claves CaseKey no existe aun y donde vivira | abierta |
+| E2-r1 veredicto N2 | redactar_identificadores_v2 solo redacta configs de 8+ caracteres y reemplazo de producto sin limites de palabra (fuga corta / rompe palabras) | abierta |
+| E2-r1 veredicto N3 | experimento sin pares aceptado en silencio; sin rechazo de nombre duplicado; sorts mixtos y defectos no-dict con traceback en vez de falla(); caso desconocido en sin_pareja con motivo enganoso | abierta |
+| E2-r1 veredicto N4 | test_removes_product_cues sin fuga cb ni hash Addressed; correr_v2 sin timeout; clases nuevas en ingles vs convencion en espanol | abierta |
+| E2-r1 veredicto N5 (LISTO, T16) | T13 sin campo propio desacuerdos (lo cubre desempates); ejecucion fallida todo-null cuenta sin_ejecucion; pendientes recoleccion v2, jueces por congelar, 3 repeticiones T16, D0/C0 sin autorizar | abierta |
+| E2-r1 review F4 | ObservationKey con texto exacto de configuracion en vez de configuration_digest (equivalente a efectos de identidad; boceto declarativo) | abierta |
+| E2-r1 review F5 | pairing.json con lista de jueces vacia (estado honesto, causa registrada) | abierta |
+| E2-r2 veredicto N1 | emoji de dos code points (U+26A0 U+FE0F) no se quita: [^\w\s] consume emoji y \s+ falla contra FE0F; sin datos reales con ese formato | abierta |
+| E2-r2 veredicto N2 | separador distinto de medio/pipa deja resto huerfano (cosmetico) | abierta |
+| E2-r2 veredicto N3 | severidad sin emoji o badges sin emoji sobreviven (heuristica anclada al emoji a proposito, README lo dice) | abierta |
+| E2-r2 veredicto N5 | titulos en negrita de CodeRabbit quedan como primera linea de evidencia; decidir en T13 si normalizacion v2 quita enfasis markdown | abierta |
+| E2-r3 veredicto N1 | [^\x00-\x7F] admite no-ASCII como emoji y come rayas/comillas tipograficas ante palabra de severidad (0 casos en corpus real); acotar a pictogramas excluyendo U+2000-U+206F | abierta |
+| E2-r3 veredicto N2 | marca pegada a puntuacion ASCII no se quita por lookbehind de espacio; sin ocurrencias en corpus real, cubrir con recoleccion v2 | abierta |
+| E2-r4 veredicto N1 | generador ciego v2 exige set(particion)==casos observaciones.json; con 26 casos, recoleccion sin los 6 push-casos sale exit 2; decirlo en README v2 junto a recoleccion D0 | abierta |
+| E2-r4 veredicto N2 | pairing.json recongelado en r4 es legitimo sin salidas v2 observadas; tras recoleccion, recongelar se declara desvio | abierta |
+| E2-r4 review F8 | conteo documental pendiente en E2 (Low, no bloqueante) | abierta |
