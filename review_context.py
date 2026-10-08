@@ -224,6 +224,9 @@ class PreparedReview:
     modo: str
     motivo: str
     cobertura: str
+    partes: dict = dataclasses.field(default_factory=dict)
+    sin_codificar: tuple = ()
+    over_budget_bytes: int = 0
 
 
 def matches(path, pattern):
@@ -556,13 +559,17 @@ def build_conventions(repo, base):
     )
 
 
+def is_ancestor(repo, prev_sha, head):
+    return repo.is_ancestor(prev_sha, head)
+
+
 def decide_mode(repo, prev_sha, head):
     """Full on first review, same-sha re-run, or rebase; incremental otherwise (B2/B7)."""
     if not prev_sha:
         return "full", "no-prev"
     if prev_sha == head:
         return "full", "same-sha"
-    if not repo.is_ancestor(prev_sha, head):
+    if not is_ancestor(repo, prev_sha, head):
         return "full", "rebase"
     return "incremental", ""
 
@@ -771,7 +778,7 @@ def prepare_review(repo, request, current, policy):
             a_revisar.append(ruta)
 
     presupuesto = policy.diff_max_bytes
-    entregados, usados = [], 0
+    entregados, usados, partes, over_budget = [], 0, {}, 0
     for ruta in sorted(a_revisar, key=lambda r: (priority(r), r)):
         crudo = repo.diff_bytes(merge_base, head, ruta)
         try:
@@ -794,7 +801,9 @@ def prepare_review(repo, request, current, policy):
             hechos_omisiones.append(
                 f"over_budget_bytes {max(0, chunk_bytes - presupuesto)}: {ruta}"
             )
+            over_budget = max(over_budget, chunk_bytes - presupuesto)
         entregados.append(GitPath(ruta.encode("utf-8")))
+        partes[ruta] = chunk
         usados += chunk_bytes
 
     obligaciones = tuple(
@@ -839,4 +848,7 @@ def prepare_review(repo, request, current, policy):
         modo=modo,
         motivo=motivo,
         cobertura=cobertura,
+        partes=partes,
+        sin_codificar=tuple(sin_codificar),
+        over_budget_bytes=over_budget,
     )
