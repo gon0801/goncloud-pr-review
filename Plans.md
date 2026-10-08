@@ -111,7 +111,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
-| T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:TODO |
+| T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
 | T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
 
 ### Residuales
@@ -229,3 +229,12 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | D0-r1 veredicto N10 | adaptador calcula modo dos veces (historico + prepare_review); colapsar cuando coordinador sea unico camino | abierta |
 | D0-r1 veredicto N10b | memoria legacy reconstruida con base/digest del target: guardas nuevos de base y politica vacuos en camino legacy, reales en coordinador; colapsar con N10 cuando coordinador sea unico camino | abierta |
 | D0-r2 proceso | /Users/dn/quality-kit/cross-review.ps1 sigue borrado sin commit; si es intencional, los briefs deben dejar de citarlo | abierta |
+| C0-r3 veredicto N1 (kimi) | Atrapar MemoryError alrededor de ast.parse puede ocultar falta de memoria real; acotado a parseo de contenido ajeno, contrato no-parsea→textual | abierta |
+| C0-r3 veredicto N2 (kimi) | Prueba depende de que CPython no pueda parsear 200k .b (limite de pila); si algun dia parseara falla ruidoso, no en vacio | abierta |
+| C0-r2 veredicto N2 | Aviso simbolos recortados sin prueba discriminante (mutante if False sigue OK; verificado a mano en C0.md) | abierta |
+| C0-r2 veredicto N3 | Archivos no .py quedan siempre textual aunque sean llamadas reales en JS/TS; coherente sin analisis para otros lenguajes, se pierde prioridad en repos poliglotas | abierta |
+| C0-r2 veredicto N4 | Costo: hasta 2 subprocesos + ast.parse por candidato unico con cache; acotado por CALLERS_MAX_MATCHES/SYMBOLS; C0 apagada | abierta |
+| C0-r1 veredicto N1 | Cierre T15 seleccionable por politica vs kwarg selectivo=False; digest no distingue C0; llevar a ReviewPolicy + tipado Literal/enum ContextRef en T16 | abierta |
+| C0-r1 veredicto N3 | Refs no se filtran contra exclusiones (DEFAULT_EXCLUDES) ni otros archivos ya entregados; solo descarta archivo origen; ruido acotado | abierta |
+| C0-r1 veredicto N4 | Guarda if result.plan.context_refs deja asercion truncada vacia en escenario real; compensa subTest mockeado | abierta |
+| C0-r3 review F4 | C0.md:107 corrida verde r3 repite tiempo literal de la roja (3.686s en ambas); pegar tiempo real o declarar misma salida | abierta |
