@@ -110,11 +110,11 @@ que describe el procedimiento de T11 de arriba.
   como adaptador con el manifiesto históricamente idéntico.
 - C0: `contexto_selectivo` sólo corre con `selectivo=True`; hoy ningún caller lo
   pasa.
-- `e1-measure.yml` presente pero con un defecto conocido que hay que corregir
-  antes de la primera corrida real: el paso "Revisor fijo fuera del árbol
-  medido" copia sólo `review.py prompt.md` y faltan `review_domain.py` y
-  `review_context.py` (el workflow ya estaba roto desde que existe
-  `review_domain.py`; está pineado por `tests/test_e1a_workflow.py`).
+- `e1-measure.yml` corregido en el candidato: el paso "Revisor fijo fuera del
+  árbol medido" copia `review.py review_domain.py review_context.py
+  prompt.md` (antes sólo copiaba `review.py prompt.md` y el job rompía en
+  prepare desde que existe `review_domain.py`; pineado por
+  `tests/test_e1a_workflow.py`).
 
 ## Orden del piloto
 
@@ -160,18 +160,22 @@ posterior y revisión cruzada previa.
 
 ## Diseño de la corrida de costo unitario (no ejecutada)
 
+El candidato de medición es el commit que ya incluye el arreglo del `cp` (con
+su prueba actualizada), publicado como tag `t16-candidato-<sha8>` en el remoto
+al empujar la rama: `--ref` de workflow_dispatch acepta rama o tag, no un SHA,
+y el SHA del candidato sólo existe en el remoto después de ese push. El rollout
+registra el SHA exacto que resuelva el tag.
+
 Un par, brazo control, proveedor directo (deepseek), sin publicar nada:
 
 ```
-gh workflow run e1-measure.yml --ref 882d00610fe8546b8ccc2404a9f5639c19632bbb \
+gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
   -f caso=pr2 -f pr=2 \
   -f head=3166ad5a7f6ca4a95b00432154fc19cfb689e3c5 \
   -f base=5844ff63ab7bcd10644824f70ccfb7dd7791c0ba \
   -f proveedor=deepseek
 ```
 
-- Prerrequisito: corregir el `cp` de `e1-measure.yml` (faltan
-  `review_domain.py` y `review_context.py`; hoy el job rompe en prepare).
 - Llaves: `DEEPSEEK_API_KEY` para la ruta deepseek (o `AI_REVIEW_API_KEY` para
   opencode-go), configuradas por el operador con `gh secret set` en el repo y
   leídas sólo como env del paso de la ruta elegida. Nunca se escriben en
@@ -186,27 +190,26 @@ Base real: las 20 corridas de E1 con costo conocido (DeepSeek V4.1 Flash).
 Ruta deepseek directo (la del piloto): mediana **$1.4484** por corrida, media
 $1.7365, rango $0.7051-$3.5961 (n=15). Ruta opencode-go: mediana $0.5135 (n=5).
 
-Pares pendientes de observación según el pairing congelado: 10 de producto
-(reps 2-3) y 18 de push (12 de T16 más 6 de la repeticion 1 sin capturar).
+Corridas pagadas según el pairing congelado (sólo lo congelado): 10 de
+producto pendientes × 1 corrida pagada cada uno (el lado CodeRabbit son
+comentarios existentes, sin gasto) + 18 de push pendientes × 2 corridas
+(control completo y variante delta-d0, las dos de proveedor) = **46 corridas**.
 
-Brazos según el plan: en pares de producto, control y C0 (2 corridas por par);
-en pares de push, control, D0 y C0 (3 corridas por par; C0 medida como variante
-separada frente al mismo control). El orden está alternado y congelado.
+Estimación con la ruta directa: mediana 46 × $1.4484 ≈ **$67**; media ≈ $80;
+rango $32-$165 con los unitarios extremos ($0.7051-$3.5961).
 
-| Grupo | Pares pendientes | Brazos | Corridas |
-|---|---:|---:|---:|
-| Producto (control + C0) | 10 | 2 | 20 |
-| Push (control + D0 + C0) | 18 | 3 | 54 |
-| **Total** | 28 | | **74** |
+C0 NO está en esta estimación y no se mide sin pares propios congelados: el
+pairing no declara ningún brazo C0, y el plan exige congelar en pairing.json
+los pares y repeticiones antes de medir. Medir C0 requiere, en un encargo
+aparte con revisión, congelar pares control-completo contra C0 (mismo target,
+modelo, proveedor y reglas) y recién entonces estimar su costo aparte.
 
-Estimación con la mediana de la ruta directa: 74 × $1.4484 ≈ **$107**. Con la
-media: ≈ $128. Rango por corrida extrema: $52-$266.
-
-Límites de la estimación, declarados: (1) asume costo de las corridas D0/C0
-igual al control, cuando el delta y el contexto selectivo deberían costar menos
-— ese ahorro es justo lo que T16 mide, así que la cifra es techo, no
-predicción; (2) no incluye corridas de calibración ni repeticiones por fallos
-del proveedor (E1 necesitó retanda por cuota); (3) los costos unitarios vienen
-de diffs de E1 (0.7-3.6 KB revisados), y casos más grandes cuestan más por la
-relación turnos-diff; (4) CodeRabbit y cualquier revisión de terceros no
-generan gasto de proveedor en este diseño.
+Límites de la estimación, declarados: (1) no incluye corridas de calibración
+ni repeticiones por fallos del proveedor (E1 necesitó retanda por cuota); (2)
+los costos unitarios vienen de diffs de E1 (0.7-3.6 KB revisados), y casos más
+grandes cuestan más por la relación turnos-diff; (3) el lado CodeRabbit de las
+reps 2-3 de producto son los mismos comentarios existentes en cada repetición:
+su dispersión es cero por construcción y el informe de T16 debe declararlo
+para no leerla como estabilidad; (4) el gasto de proveedor de la variante
+delta-d0 debería ser menor al control — ese ahorro es lo que se mide, así que
+la cifra por brazo es techo.

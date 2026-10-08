@@ -132,10 +132,14 @@ class WorkflowE1Measure(unittest.TestCase):
 
     def test_mide_el_arbol_del_head_con_revisor_fuera(self):
         self.assertIn('git checkout --detach "${{ inputs.head }}"', self.texto)
-        self.assertIn("cp review.py prompt.md", self.texto)
+        self.assertIn(
+            "cp review.py review_domain.py review_context.py prompt.md", self.texto
+        )
         self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
         self.assertLess(
-            self.texto.index("cp review.py prompt.md"),
+            self.texto.index(
+                "cp review.py review_domain.py review_context.py prompt.md"
+            ),
             self.texto.index("git checkout --detach"),
             "el revisor se copia del arbol de main antes de mover el arbol al head",
         )

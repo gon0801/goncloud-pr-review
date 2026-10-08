@@ -86,7 +86,7 @@ jobs:
       - name: Revisor fijo fuera del árbol medido
         run: |
           mkdir -p "$RUNNER_TEMP/reviewer"
-          cp review.py prompt.md "$RUNNER_TEMP/reviewer/"
+          cp review.py review_domain.py review_context.py prompt.md "$RUNNER_TEMP/reviewer/"
 
       - name: Mover el árbol al head del PR y verificar SHAs
         run: |
