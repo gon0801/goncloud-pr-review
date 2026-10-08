@@ -208,10 +208,10 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | E2-r1 veredicto N5 (LISTO, T16) | T13 sin campo propio desacuerdos (lo cubre desempates); ejecucion fallida todo-null cuenta sin_ejecucion; pendientes recoleccion v2, jueces por congelar, 3 repeticiones T16, D0/C0 sin autorizar | abierta |
 | E2-r1 review F4 | ObservationKey con texto exacto de configuracion en vez de configuration_digest (equivalente a efectos de identidad; boceto declarativo) | abierta |
 | E2-r1 review F5 | pairing.json con lista de jueces vacia (estado honesto, causa registrada) | abierta |
-| E2-r2 veredicto N1 | emoji de dos code points (U+26A0 U+FE0F) no se quita: [^\w\s] consume emoji y \s+ falla contra FE0F; sin datos reales con ese formato | abierta |
+| E2-r2 veredicto N1 | emoji de dos code points (U+26A0 U+FE0F): resuelto en r4, FE0F opcional en RE_MARCA_SEVERIDAD_V2 (scripts/build_adjudicacion_ciega.py:29-36) con prueba test_adjudicacion_ciega.py:341 (#### ⚪️ Low, base + FE0F) y 0 residuos en barrido de corpus real | resuelta en E2 r4 |
 | E2-r2 veredicto N2 | separador distinto de medio/pipa deja resto huerfano (cosmetico) | abierta |
 | E2-r2 veredicto N3 | severidad sin emoji o badges sin emoji sobreviven (heuristica anclada al emoji a proposito, README lo dice) | abierta |
-| E2-r2 veredicto N5 | titulos en negrita de CodeRabbit quedan como primera linea de evidencia; decidir en T13 si normalizacion v2 quita enfasis markdown | abierta |
+| E2-r2 veredicto N5 | titulos en negrita de CodeRabbit quedan como primera linea de evidencia; T13 decidio en r3 que normalizacion v2 quita marca de severidad con enfasis (RE_MARCA_SEVERIDAD_V2), no enfasis de titulo; pendiente decidir con recoleccion v2 / antes de T16 | abierta |
 | E2-r3 veredicto N1 | [^\x00-\x7F] admite no-ASCII como emoji y come rayas/comillas tipograficas ante palabra de severidad (0 casos en corpus real); acotar a pictogramas excluyendo U+2000-U+206F | abierta |
 | E2-r3 veredicto N2 | marca pegada a puntuacion ASCII no se quita por lookbehind de espacio; sin ocurrencias en corpus real, cubrir con recoleccion v2 | abierta |
 | E2-r4 veredicto N1 | generador ciego v2 exige set(particion)==casos observaciones.json; con 26 casos, recoleccion sin los 6 push-casos sale exit 2; decirlo en README v2 junto a recoleccion D0 | abierta |
