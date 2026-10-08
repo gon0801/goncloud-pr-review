@@ -402,3 +402,176 @@ class IncrementalContext(unittest.TestCase):
             self.assertIn("q.py", rutas)
             self.assertNotIn("w.py", rutas)
             self.assertEqual(set(rutas), {"readme.md", "q.py"})
+
+
+def hacer_repo_selectivo(tmp):
+    repo = hacer_repo(tmp)
+    (repo / "readme.md").write_text("# proyecto\n")
+    (repo / "app.py").write_text("total = calcular_total(x)\n")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "nota.txt").write_text("usar calcular_total para sumar\n")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_s.py").write_text(
+        "from s import calcular_total\n\n\ndef test_total():\n"
+        "    assert calcular_total(2) == 2\n"
+    )
+    base = commit(repo, "base")
+    (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+    prev = commit(repo, "prev")
+    (repo / "s.py").write_text(
+        "def calcular_total(a):\n    return calcular_total(a) + a\n"
+    )
+    head = commit(repo, "head")
+    return repo, base, prev, head
+
+
+class SelectiveContext(unittest.TestCase):
+    def test_prefers_direct_callers_and_tests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, prev, head = hacer_repo_selectivo(tmp)
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+            )
+            refs = list(result.plan.context_refs)
+            self.assertTrue(refs)
+            por_archivo = {ref.archivo: ref for ref in refs}
+            self.assertEqual(por_archivo["app.py"].relacion, "sintactica")
+            self.assertEqual(por_archivo["app.py"].papel, "consumidor")
+            self.assertEqual(por_archivo["tests/test_s.py"].relacion, "sintactica")
+            self.assertEqual(por_archivo["tests/test_s.py"].papel, "prueba")
+            self.assertEqual(
+                [(ref.archivo, ref.relacion, ref.papel) for ref in refs],
+                [
+                    ("tests/test_s.py", "sintactica", "prueba"),
+                    ("app.py", "sintactica", "consumidor"),
+                    ("docs/nota.txt", "textual", "consumidor"),
+                ],
+            )
+            self.assertEqual(result.avisos, ())
+            ultima_sintactica = max(
+                i for i, ref in enumerate(refs) if ref.relacion == "sintactica"
+            )
+            for i, ref in enumerate(refs):
+                if ref.archivo == "docs/nota.txt":
+                    self.assertEqual(ref.relacion, "textual")
+                    self.assertGreater(i, ultima_sintactica)
+            ajustado = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+                contexto_max_bytes=20,
+            )
+            self.assertEqual(ajustado.plan.context_refs, ())
+            self.assertLess(len(ajustado.plan.context_refs), len(refs))
+            self.assertIn("contexto truncado", ajustado.avisos)
+            apagado = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+            )
+            self.assertEqual(apagado.plan.context_refs, ())
+            self.assertEqual(apagado.avisos, ())
+
+    def test_relation_keeps_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, prev, head = hacer_repo_selectivo(tmp)
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+            )
+            refs = list(result.plan.context_refs)
+            self.assertTrue(refs)
+            notas = [ref for ref in refs if ref.archivo == "docs/nota.txt"]
+            self.assertTrue(notas)
+            for ref in notas:
+                self.assertEqual(ref.relacion, "textual")
+            self.assertTrue(any(ref.relacion == "sintactica" for ref in refs))
+            self.assertTrue(any(ref.relacion == "textual" for ref in refs))
+            for ref in refs:
+                self.assertIn(ref.relacion, ("sintactica", "textual"))
+                self.assertIn(ref.papel, ("consumidor", "prueba"))
+                self.assertEqual(ref.simbolo, "calcular_total")
+                self.assertEqual(ref.busqueda, "completa")
+
+    def test_truncated_lead_and_missing_obligation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "app.py").write_text("total = calcular_total(x)\n")
+            (repo / "grande.py").write_text(
+                "".join(f"calcular_total({i})\n" for i in range(4000))
+            )
+            base = commit(repo, "base")
+            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+            prev = commit(repo, "prev")
+            (repo / "s.py").write_text(
+                "def calcular_total(a):\n    return calcular_total(a) + a\n"
+            )
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+                busqueda_max_bytes=10,
+            )
+            pistas = [a for a in result.avisos if a.startswith("pista truncada:")]
+            self.assertTrue(pistas)
+            self.assertTrue(
+                any(a.startswith("pista truncada: calcular_total") for a in pistas)
+            )
+            self.assertTrue(any("techo de salida" in a for a in pistas))
+            self.assertTrue(
+                all(
+                    ref.busqueda.startswith("truncada:")
+                    for ref in result.plan.context_refs
+                )
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "f1.py").write_text("".join(lineas(3, "v1_")))
+            (repo / "f2.py").write_text("".join(lineas(200, "v1_")))
+            base = commit(repo, "base")
+            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+            prev = commit(repo, "prev")
+            (repo / "f1.py").write_text("".join(lineas(4, "v2_")))
+            (repo / "f2.py").write_text("".join(lineas(4000, "v2_")))
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(
+                diff_mode="incremental",
+                strict_budget=True,
+                diff_max_bytes=200,
+            )
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+            )
+            self.assertEqual(result.cobertura, domain.PARTIAL)
+            al_presupuesto = [
+                om for om in result.omisiones if om.causa == "presupuesto"
+            ]
+            self.assertEqual([om.ruta for om in al_presupuesto], ["f2.py"])
+            self.assertTrue(any(ob.ruta == "f2.py" for ob in result.plan.obligations))

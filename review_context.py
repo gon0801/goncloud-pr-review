@@ -73,6 +73,7 @@ TESTS_MAX_RESULTS = 40
 TESTS_MAX_BYTES = 20000
 CONVENTIONS_MAX_BYTES = 8000
 CONVENTION_FILES = ("CLAUDE.md", "AGENTS.md")
+CONTEXTO_SELECTIVO_MAX_BYTES = 6000
 
 GREP_MAX_EXAMINED_BYTES = 8_000_000
 GREP_MAX_SECONDS = 15
@@ -165,6 +166,24 @@ class Obligation:
 
 
 @dataclasses.dataclass(frozen=True)
+class ContextRef:
+    """Pista con procedencia hacia un archivo relacionado con el diff (C0).
+
+    `relacion` distingue "sintactica" (el archivo aparece en la búsqueda de
+    llamada `simbolo(`) de "textual" (sólo en la búsqueda simple). `papel`
+    distingue pruebas de consumidores. `busqueda` declara el estado de la
+    búsqueda que produjo la referencia: "completa", "truncada: <motivo>" o
+    "falló: <motivo>".
+    """
+
+    archivo: str
+    simbolo: str
+    relacion: str
+    papel: str
+    busqueda: str
+
+
+@dataclasses.dataclass(frozen=True)
 class GitRepository:
     """Ventana a Git: todo comando corre con cwd explícito en root."""
 
@@ -227,6 +246,7 @@ class PreparedReview:
     partes: dict = dataclasses.field(default_factory=dict)
     sin_codificar: tuple = ()
     over_budget_bytes: int = 0
+    avisos: tuple = ()
 
 
 def matches(path, pattern):
@@ -707,7 +727,90 @@ def rutas_abiertas(current):
     return rutas
 
 
-def prepare_review(repo, request, current, policy):
+def estado_de_busqueda(result):
+    if isinstance(result, SearchComplete):
+        return "completa"
+    if isinstance(result, SearchTruncated):
+        return f"truncada: {result.reason}"
+    return f"falló: {result.reason}"
+
+
+def contexto_selectivo(
+    repo, entregados, partes, contexto_max_bytes, busqueda_max_bytes
+):
+    fuentes = {}
+    for path in entregados:
+        for simbolo in changed_symbols(partes.get(path.text, "")):
+            fuentes.setdefault(simbolo, []).append(path.text)
+    refs, avisos = {}, []
+    for simbolo in list(fuentes)[:CALLERS_MAX_SYMBOLS]:
+        propias = set(fuentes[simbolo])
+        simple = grep_files(
+            repo,
+            [simbolo],
+            CALLERS_MAX_MATCHES + 1,
+            max_bytes=busqueda_max_bytes,
+        )
+        llamada = grep_files(
+            repo,
+            [f"{simbolo}("],
+            CALLERS_MAX_MATCHES + 1,
+            max_bytes=busqueda_max_bytes,
+        )
+        razones = [
+            resultado.reason
+            for resultado in (simple, llamada)
+            if isinstance(resultado, SearchTruncated)
+        ]
+        if razones:
+            avisos.append(f"pista truncada: {simbolo} ({razones[0]})")
+        por_archivo = {}
+        for resultado, relacion in ((llamada, "sintactica"), (simple, "textual")):
+            estado = estado_de_busqueda(resultado)
+            for archivo in getattr(resultado, "paths", ()):
+                por_archivo.setdefault(archivo, (relacion, estado))
+        for archivo, (relacion, estado) in por_archivo.items():
+            if archivo in propias:
+                continue
+            refs[(archivo, simbolo)] = ContextRef(
+                archivo=archivo,
+                simbolo=simbolo,
+                relacion=relacion,
+                papel="prueba" if looks_like_test(archivo) else "consumidor",
+                busqueda=estado,
+            )
+    ordenadas = sorted(
+        refs.values(),
+        key=lambda ref: (
+            ref.relacion != "sintactica",
+            ref.papel != "prueba",
+            ref.archivo,
+            ref.simbolo,
+        ),
+    )
+    seleccion, usados = [], 0
+    for ref in ordenadas:
+        linea = (
+            f"{ref.archivo} {ref.relacion} {ref.papel} {ref.simbolo} {ref.busqueda}\n"
+        )
+        costo = len(linea.encode("utf-8"))
+        if usados + costo > contexto_max_bytes:
+            avisos.append("contexto truncado")
+            break
+        seleccion.append(ref)
+        usados += costo
+    return tuple(seleccion), tuple(avisos)
+
+
+def prepare_review(
+    repo,
+    request,
+    current,
+    policy,
+    selectivo=False,
+    contexto_max_bytes=CONTEXTO_SELECTIVO_MAX_BYTES,
+    busqueda_max_bytes=None,
+):
     target = request.target or {}
     head = target.get("head_sha", "")
     base = target.get("base_sha", "")
@@ -806,6 +909,12 @@ def prepare_review(repo, request, current, policy):
         partes[ruta] = chunk
         usados += chunk_bytes
 
+    context_refs, avisos = (), ()
+    if selectivo:
+        context_refs, avisos = contexto_selectivo(
+            repo, entregados, partes, contexto_max_bytes, busqueda_max_bytes
+        )
+
     obligaciones = tuple(
         Obligation(ruta=ruta)
         for ruta in dict.fromkeys(list(rutas_plan) + rutas_abiertas(current))
@@ -825,7 +934,7 @@ def prepare_review(repo, request, current, policy):
         previous_sha=previous_head,
         changed_paths=tuple(rutas_plan),
         obligations=obligaciones,
-        context_refs=(),
+        context_refs=context_refs,
         exclusions=tuple(patrones),
         delivered=tuple(path.text for path in entregados),
         policy=policy,
@@ -851,4 +960,5 @@ def prepare_review(repo, request, current, policy):
         partes=partes,
         sin_codificar=tuple(sin_codificar),
         over_budget_bytes=over_budget,
+        avisos=avisos,
     )
