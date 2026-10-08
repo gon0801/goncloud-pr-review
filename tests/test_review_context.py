@@ -411,11 +411,17 @@ def hacer_repo_selectivo(tmp):
     (repo / "readme.md").write_text("# proyecto\n")
     (repo / "app.py").write_text("total = calcular_total(x)\n")
     (repo / "docs").mkdir()
-    (repo / "docs" / "nota.txt").write_text("usar calcular_total para sumar\n")
+    (repo / "docs" / "nota.txt").write_text("usar calcular_total(x) para sumar\n")
+    (repo / "mensajes.py").write_text(
+        'manual = "ver calcular_total(...) en el manual"\n'
+    )
     (repo / "tests").mkdir()
     (repo / "tests" / "test_s.py").write_text(
         "from s import calcular_total\n\n\ndef test_total():\n"
         "    assert calcular_total(2) == 2\n"
+    )
+    (repo / "viejo.py").write_text(
+        "# antes se llamaba a calcular_total(x) aquí\nvalor = 1\n"
     )
     base = commit(repo, "base")
     (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
@@ -453,6 +459,8 @@ class SelectiveContext(unittest.TestCase):
                     ("tests/test_s.py", "sintactica", "prueba"),
                     ("app.py", "sintactica", "consumidor"),
                     ("docs/nota.txt", "textual", "consumidor"),
+                    ("mensajes.py", "textual", "consumidor"),
+                    ("viejo.py", "textual", "consumidor"),
                 ],
             )
             self.assertEqual(result.avisos, ())
@@ -497,10 +505,12 @@ class SelectiveContext(unittest.TestCase):
             )
             refs = list(result.plan.context_refs)
             self.assertTrue(refs)
-            notas = [ref for ref in refs if ref.archivo == "docs/nota.txt"]
-            self.assertTrue(notas)
-            for ref in notas:
-                self.assertEqual(ref.relacion, "textual")
+            por_archivo = {ref.archivo: ref for ref in refs}
+            for prosa in ("docs/nota.txt", "viejo.py", "mensajes.py"):
+                self.assertIn(prosa, por_archivo, prosa)
+                self.assertEqual(por_archivo[prosa].relacion, "textual", prosa)
+            for codigo in ("app.py", "tests/test_s.py"):
+                self.assertEqual(por_archivo[codigo].relacion, "sintactica", codigo)
             self.assertTrue(any(ref.relacion == "sintactica" for ref in refs))
             self.assertTrue(any(ref.relacion == "textual" for ref in refs))
             for ref in refs:

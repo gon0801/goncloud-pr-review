@@ -5,6 +5,7 @@ y omisiones) que el revisor incremental consume, y reúne los ayudantes de
 contexto que la fase 2 de T14 eliminará de review.py.
 """
 
+import ast
 import dataclasses
 import fnmatch
 import hashlib
@@ -169,11 +170,12 @@ class Obligation:
 class ContextRef:
     """Pista con procedencia hacia un archivo relacionado con el diff (C0).
 
-    `relacion` distingue "sintactica" (el archivo aparece en la búsqueda de
-    llamada `simbolo(`) de "textual" (sólo en la búsqueda simple). `papel`
-    distingue pruebas de consumidores. `busqueda` declara el estado de la
-    búsqueda que produjo la referencia: "completa", "truncada: <motivo>" o
-    "falló: <motivo>".
+    `relacion` distingue "sintactica" (un ast.Call al símbolo, verificado
+    con ast.parse del archivo .py tal como está en HEAD) de "textual"
+    (comentarios, strings, prosa, otros lenguajes o .py que no parsean).
+    `papel` distingue pruebas de consumidores. `busqueda` declara el estado
+    de la búsqueda que produjo la referencia: "completa", "truncada: <motivo>"
+    o "falló: <motivo>".
     """
 
     archivo: str
@@ -735,14 +737,41 @@ def estado_de_busqueda(result):
     return f"falló: {result.reason}"
 
 
+def nombres_invocados(repo, head, archivo, cache):
+    if archivo in cache:
+        return cache[archivo]
+    nombres = None
+    if archivo.endswith(".py"):
+        sha = repo.blob_at(head, archivo)
+        if sha:
+            try:
+                arbol = ast.parse(repo.cat_file_text(sha))
+            except (SyntaxError, ValueError):
+                arbol = None
+            if arbol is not None:
+                llamadas = set()
+                for nodo in ast.walk(arbol):
+                    if isinstance(nodo, ast.Call):
+                        if isinstance(nodo.func, ast.Name):
+                            llamadas.add(nodo.func.id)
+                        elif isinstance(nodo.func, ast.Attribute):
+                            llamadas.add(nodo.func.attr)
+                nombres = frozenset(llamadas)
+    cache[archivo] = nombres
+    return nombres
+
+
 def contexto_selectivo(
-    repo, entregados, partes, contexto_max_bytes, busqueda_max_bytes
+    repo, head, entregados, partes, contexto_max_bytes, busqueda_max_bytes
 ):
     fuentes = {}
     for path in entregados:
         for simbolo in changed_symbols(partes.get(path.text, "")):
             fuentes.setdefault(simbolo, []).append(path.text)
     refs, avisos = {}, []
+    if len(fuentes) > CALLERS_MAX_SYMBOLS:
+        avisos.append(f"símbolos recortados: {CALLERS_MAX_SYMBOLS} de {len(fuentes)}")
+    cache = {}
     for simbolo in list(fuentes)[:CALLERS_MAX_SYMBOLS]:
         propias = set(fuentes[simbolo])
         simple = grep_files(
@@ -772,17 +801,22 @@ def contexto_selectivo(
         if fallas:
             avisos.append(f"pista falló: {simbolo} ({fallas[0]})")
         por_archivo = {}
-        for resultado, relacion in ((llamada, "sintactica"), (simple, "textual")):
+        for resultado in (llamada, simple):
             estado = estado_de_busqueda(resultado)
             for archivo in getattr(resultado, "paths", ()):
-                por_archivo.setdefault(archivo, (relacion, estado))
-        for archivo, (relacion, estado) in por_archivo.items():
+                por_archivo.setdefault(archivo, estado)
+        for archivo, estado in por_archivo.items():
             if archivo in propias:
                 continue
+            invocados = nombres_invocados(repo, head, archivo, cache)
             refs[(archivo, simbolo)] = ContextRef(
                 archivo=archivo,
                 simbolo=simbolo,
-                relacion=relacion,
+                relacion=(
+                    "sintactica"
+                    if invocados is not None and simbolo in invocados
+                    else "textual"
+                ),
                 papel="prueba" if looks_like_test(archivo) else "consumidor",
                 busqueda=estado,
             )
@@ -919,7 +953,7 @@ def prepare_review(
     context_refs, avisos = (), ()
     if selectivo:
         context_refs, avisos = contexto_selectivo(
-            repo, entregados, partes, contexto_max_bytes, busqueda_max_bytes
+            repo, head, entregados, partes, contexto_max_bytes, busqueda_max_bytes
         )
 
     obligaciones = tuple(
