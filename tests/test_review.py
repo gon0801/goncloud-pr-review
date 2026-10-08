@@ -18,6 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context  # noqa: E402
 
 MANIFEST = {
     "base": "b" * 40,
@@ -1215,16 +1216,17 @@ class PrepareContext(unittest.TestCase):
     def test_build_tests_finds_coverage_buried_under_common_stem_noise(self):
         pool = [f"src/noise{i}.py" for i in range(review.TESTS_MAX_RESULTS + 1)]
         pool.append("tests/test_app.py")
+        repo = review.GitRepository(Path.cwd())
         with mock.patch.object(
-            review,
+            review_context,
             "grep_files",
-            side_effect=lambda patterns, limit, predicate=None, **kw: (
+            side_effect=lambda repo, patterns, limit, predicate=None, **kw: (
                 review.SearchComplete(
                     tuple(p for p in pool if predicate is None or predicate(p))[:limit]
                 )
             ),
         ):
-            text = review.build_tests(["src/app.py"])
+            text = review.build_tests(repo, ["src/app.py"])
         self.assertIn("- tests/test_app.py", text)
         self.assertNotIn("Ninguna prueba menciona", text)
 
@@ -2282,7 +2284,12 @@ class Workflows(unittest.TestCase):
             git(origen, "config", "user.email", "prueba@example.com")
             git(origen, "config", "user.name", "Prueba")
             git(origen, "config", "uploadpack.allowAnySHA1InWant", "true")
-            for nombre in ("review.py", "review_domain.py", "prompt.md"):
+            for nombre in (
+                "review.py",
+                "review_domain.py",
+                "review_context.py",
+                "prompt.md",
+            ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
             (Path(origen) / "app.py").write_text("def total(a, b):\n    return a + b\n")
             (Path(origen) / "README.md").write_text("base\n")
@@ -2891,6 +2898,45 @@ class Workflows(unittest.TestCase):
                         review.cmd_execute_request(
                             argparse.Namespace(work=tmp, request_id="99")
                         )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "readme.md").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "other.py").write_text("otro = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "head")
+            head = git(repo, "rev-parse", "HEAD")
+            trabajo = Path(tmp, "work")
+            trabajo.mkdir()
+            with contextlib.chdir(repo):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "REPO": "o/r",
+                        "PR_NUMBER": "1",
+                        "HEAD_SHA": head,
+                        "BASE_SHA": base,
+                        "GITHUB_RUN_ID": "55",
+                        "GITHUB_RUN_ATTEMPT": "2",
+                        "BOT_LOGIN": "bot",
+                    },
+                    clear=False,
+                ):
+                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=str(trabajo), request_id="1")
+                        )
+            paquete = json.loads((trabajo / "request-package.json").read_text())
+            self.assertIn(paquete["plan"]["mode"], ("full", "incremental"))
+            self.assertEqual(paquete["plan"]["changed_paths"], ["other.py"])
+            self.assertNotIn("plan_fallback", paquete)
 
     def test_actionlint_firma_las_plantillas(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
@@ -3533,13 +3579,18 @@ class VerdictSections(unittest.TestCase):
 
 class Rebase(unittest.TestCase):
     def test_decide_mode_matrix(self):
-        self.assertEqual(review.decide_mode(None, "h" * 40), ("full", "no-prev"))
-        self.assertEqual(review.decide_mode("h" * 40, "h" * 40), ("full", "same-sha"))
-        with mock.patch.object(review, "is_ancestor", return_value=False):
-            self.assertEqual(review.decide_mode("p" * 40, "h" * 40), ("full", "rebase"))
-        with mock.patch.object(review, "is_ancestor", return_value=True):
+        repo = review.GitRepository(Path.cwd())
+        self.assertEqual(review.decide_mode(repo, None, "h" * 40), ("full", "no-prev"))
+        self.assertEqual(
+            review.decide_mode(repo, "h" * 40, "h" * 40), ("full", "same-sha")
+        )
+        with mock.patch.object(review_context, "is_ancestor", return_value=False):
             self.assertEqual(
-                review.decide_mode("p" * 40, "h" * 40), ("incremental", "")
+                review.decide_mode(repo, "p" * 40, "h" * 40), ("full", "rebase")
+            )
+        with mock.patch.object(review_context, "is_ancestor", return_value=True):
+            self.assertEqual(
+                review.decide_mode(repo, "p" * 40, "h" * 40), ("incremental", "")
             )
 
     def test_rebase_preserves_dismisses(self):
@@ -3579,12 +3630,15 @@ class Rebase(unittest.TestCase):
             old = os.getcwd()
             os.chdir(repo)
             try:
-                self.assertTrue(review.is_ancestor(prev, head))
-                self.assertTrue(review.is_ancestor(base, head))
-                self.assertFalse(review.is_ancestor(head, prev))
-                self.assertFalse(review.is_ancestor(orphan, head))
+                repo_obj = review.GitRepository(Path.cwd())
+                self.assertTrue(review.is_ancestor(repo_obj, prev, head))
+                self.assertTrue(review.is_ancestor(repo_obj, base, head))
+                self.assertFalse(review.is_ancestor(repo_obj, head, prev))
+                self.assertFalse(review.is_ancestor(repo_obj, orphan, head))
                 self.assertEqual(
-                    review.files_matching_base(["app.py", "other.py"], base, head),
+                    review.files_matching_base(
+                        repo_obj, ["app.py", "other.py"], base, head
+                    ),
                     {"app.py"},
                 )
             finally:
@@ -4609,7 +4663,11 @@ class BlockingFixes(unittest.TestCase):
         self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):
-        prev_block = block_of(make_finding("F1", file="b.py"), next=2)
+        prev_block = block_of(
+            make_finding("F1", file="b.py"),
+            make_finding("F2", file="a.py"),
+            next=3,
+        )
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
@@ -4626,16 +4684,25 @@ class BlockingFixes(unittest.TestCase):
             base="b" * 40,
             head="a" * 40,
         )
+        llamadas = []
         with mock.patch.object(
             review,
             "files_matching_base",
-            side_effect=lambda paths, base, head: set(paths),
+            side_effect=lambda repo, paths, base, head: (
+                llamadas.append((tuple(paths), base, head)) or set(paths)
+            ),
         ):
             findings = review.build_findings(
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", []
             )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")]
+            llamadas,
+            [(("a.py",), "b" * 40, "a" * 40)],
+            "el chequeo de reversión sólo mira los archivos cambiados en este push",
+        )
+        self.assertEqual(
+            [(f["id"], f["state"]) for f in findings["merged"]],
+            [("F1", "open"), ("F2", "resolved")],
         )
 
     def test_empty_detail_with_a_valid_block_says_nothing_new(self):
@@ -6159,8 +6226,10 @@ class CableadoIdentidad(unittest.TestCase):
             returncode = 0
             stdout = b"caf\xe9.py\x00ok.py\x00"
 
-        with mock.patch.object(review, "shb", return_value=Proc()):
-            rutas, omisiones, calculado = review.delta_real("a" * 40, "b" * 40)
+        with mock.patch.object(review.GitRepository, "run", return_value=Proc()):
+            rutas, omisiones, calculado = review.delta_real(
+                review.GitRepository(Path.cwd()), "a" * 40, "b" * 40
+            )
         self.assertEqual(rutas, ("ok.py",))
         self.assertEqual(omisiones, ("ruta no representable en el delta: 1",))
         self.assertTrue(calculado)
@@ -6642,7 +6711,9 @@ class ContextSearch(unittest.TestCase):
             repo = self.repo_with(tmp, files)
             os.chdir(repo)
             try:
-                text = review.build_tests(["src/app.py"])
+                text = review.build_tests(
+                    review.GitRepository(Path.cwd()), ["src/app.py"]
+                )
             finally:
                 os.chdir(ROOT)
         self.assertIn("- tests/test_app.py", text)
@@ -6655,8 +6726,9 @@ class ContextSearch(unittest.TestCase):
             )
             os.chdir(repo)
             try:
-                result = review.grep_files(["zzz-no-esta"], 5)
-                text = review.build_tests(["src/app.py"])
+                repo_obj = review.GitRepository(Path.cwd())
+                result = review.grep_files(repo_obj, ["zzz-no-esta"], 5)
+                text = review.build_tests(repo_obj, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchComplete)
@@ -6667,8 +6739,9 @@ class ContextSearch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
             try:
-                result = review.grep_files(["app"], 5)
-                text = review.build_tests(["src/app.py"])
+                repo = review.GitRepository(Path.cwd())
+                result = review.grep_files(repo, ["app"], 5)
+                text = review.build_tests(repo, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchFailed)
@@ -6684,21 +6757,22 @@ class ContextSearch(unittest.TestCase):
             self.repo_with(tmp, files)
             os.chdir(Path(tmp, "repo"))
             try:
+                repo = review.GitRepository(Path.cwd())
                 result = review.grep_files(
-                    ["app"], 5, predicate=lambda path: False, max_bytes=16
+                    repo, ["app"], 5, predicate=lambda path: False, max_bytes=16
                 )
-                text = review.build_tests(["src/app.py"])
+                text = review.build_tests(repo, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchTruncated)
         self.assertEqual(result.paths, ())
         self.assertIn("techo", result.reason)
         with mock.patch.object(
-            review,
+            review_context,
             "grep_files",
             return_value=review.SearchTruncated((), "techo de salida"),
         ):
-            text = review.build_tests(["src/app.py"])
+            text = review.build_tests(repo, ["src/app.py"])
         self.assertIn("truncada", text)
         self.assertNotIn("Ninguna prueba menciona", text)
 
@@ -6717,7 +6791,9 @@ class ContextSearch(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(["app"], 5, timeout=0.1)
+                    result = review.grep_files(
+                        review.GitRepository(Path.cwd()), ["app"], 5, timeout=0.1
+                    )
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchTruncated)
@@ -6726,10 +6802,13 @@ class ContextSearch(unittest.TestCase):
     def test_callers_exact_limit_does_not_claim_more(self):
         exactly = [f"pkg/modulo_{i}.py" for i in range(review.CALLERS_MAX_MATCHES)]
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
+        repo = review.GitRepository(Path.cwd())
         with mock.patch.object(
-            review, "grep_files", return_value=review.SearchComplete(tuple(exactly))
+            review_context,
+            "grep_files",
+            return_value=review.SearchComplete(tuple(exactly)),
         ):
-            text = review.build_callers(["src/app.py"], chunks)
+            text = review.build_callers(repo, ["src/app.py"], chunks)
         self.assertNotIn("y más", text)
         self.assertIn("pkg/modulo_0.py", text)
 
@@ -6738,8 +6817,10 @@ class ContextSearch(unittest.TestCase):
         result = review.SearchTruncated(
             ("pkg/a.py", "pkg/b.py"), "techo de salida (16 bytes examinados)"
         )
-        with mock.patch.object(review, "grep_files", return_value=result):
-            text = review.build_callers(["src/app.py"], chunks)
+        with mock.patch.object(review_context, "grep_files", return_value=result):
+            text = review.build_callers(
+                review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+            )
         self.assertIn("- pkg/a.py", text)
         self.assertIn("- pkg/b.py", text)
         self.assertIn("búsqueda truncada", text)
@@ -6758,7 +6839,9 @@ class ContextSearch(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(["app"], 5, timeout=0.2)
+                    result = review.grep_files(
+                        review.GitRepository(Path.cwd()), ["app"], 5, timeout=0.2
+                    )
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchTruncated)
@@ -6767,9 +6850,9 @@ class ContextSearch(unittest.TestCase):
     def test_failed_reason_respects_byte_budget(self):
         reason = "fatal: " + "ñ" * 10500
         with mock.patch.object(
-            review, "grep_files", return_value=review.SearchFailed(reason)
+            review_context, "grep_files", return_value=review.SearchFailed(reason)
         ):
-            text = review.build_tests(["src/app.py"])
+            text = review.build_tests(review.GitRepository(Path.cwd()), ["src/app.py"])
         self.assertLessEqual(len(text.encode("utf-8")), review.TESTS_MAX_BYTES)
         self.assertIn("recortado", text)
         self.assertNotIn("\ufffd", text)
@@ -6778,14 +6861,16 @@ class ContextSearch(unittest.TestCase):
         first = [f"tests/test_a_{i}.py" for i in range(39)]
         second = [f"tests/test_b_{i}.py" for i in range(40)]
         with mock.patch.object(
-            review,
+            review_context,
             "grep_files",
             side_effect=[
                 review.SearchComplete(tuple(first)),
                 review.SearchComplete(tuple(second)),
             ],
         ):
-            text = review.build_tests(["src/a.py", "src/b.py"])
+            text = review.build_tests(
+                review.GitRepository(Path.cwd()), ["src/a.py", "src/b.py"]
+            )
         route_lines = [ln for ln in text.splitlines() if ln.startswith("- tests/")]
         self.assertEqual(len(route_lines), review.TESTS_MAX_RESULTS)
 
@@ -6807,13 +6892,14 @@ class ContextSearch(unittest.TestCase):
             self.repo_with(tmp, {"src/app.py": "app\n"})
             os.chdir(Path(tmp, "repo"))
             try:
+                repo = review.GitRepository(Path.cwd())
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(["app"], 5)
-                    text = review.build_tests(["src/app.py"])
+                    result = review.grep_files(repo, ["app"], 5)
+                    text = review.build_tests(repo, ["src/app.py"])
                     chunks = {"src/app.py": "+def total():\n+    return 1\n"}
-                    callers = review.build_callers(["src/app.py"], chunks)
+                    callers = review.build_callers(repo, ["src/app.py"], chunks)
             finally:
                 os.chdir(ROOT)
         self.assertIsInstance(result, review.SearchTruncated)
@@ -6827,8 +6913,10 @@ class ContextSearch(unittest.TestCase):
         overflow = [f"pkg/extra_{i}.py" for i in range(11)]
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
         result = review.SearchTruncated(tuple(overflow), "techo de salida")
-        with mock.patch.object(review, "grep_files", return_value=result):
-            text = review.build_callers(["src/app.py"], chunks)
+        with mock.patch.object(review_context, "grep_files", return_value=result):
+            text = review.build_callers(
+                review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+            )
         route_lines = [ln for ln in text.splitlines() if ln.startswith("- pkg/")]
         self.assertEqual(len(route_lines), review.CALLERS_MAX_MATCHES)
         self.assertIn("y más", text)
@@ -6842,8 +6930,12 @@ class ContextSearch(unittest.TestCase):
         ]
         for result, expected in cases:
             with self.subTest(state=type(result).__name__):
-                with mock.patch.object(review, "grep_files", return_value=result):
-                    text = review.build_callers(["src/app.py"], chunks)
+                with mock.patch.object(
+                    review_context, "grep_files", return_value=result
+                ):
+                    text = review.build_callers(
+                        review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+                    )
                 self.assertIn(expected, text)
                 self.assertNotIn("no encontró el texto", text)
 
@@ -6907,13 +6999,14 @@ class ContextBudgets(unittest.TestCase):
             for i in range(8)
         }
 
-        def grep_side(patterns, limit, **kw):
+        def grep_side(repo, patterns, limit, **kw):
             pool = tests_pool if kw.get("predicate") is not None else callers_pool
             return review.SearchComplete(tuple(pool[: limit + 1]))
 
-        with mock.patch.object(review, "grep_files", side_effect=grep_side):
-            callers = review.build_callers(sorted(chunks), chunks)
-            tests = review.build_tests(["src/app.py"])
+        repo = review.GitRepository(Path.cwd())
+        with mock.patch.object(review_context, "grep_files", side_effect=grep_side):
+            callers = review.build_callers(repo, sorted(chunks), chunks)
+            tests = review.build_tests(repo, ["src/app.py"])
         self.assertLessEqual(len(callers.encode("utf-8")), review.CALLERS_MAX_BYTES)
         self.assertLessEqual(len(tests.encode("utf-8")), review.TESTS_MAX_BYTES)
         callers.encode("utf-8")
@@ -6925,19 +7018,33 @@ class ContextBudgets(unittest.TestCase):
 
     def test_conventions_final_serialization_respects_budget(self):
         big = "原文の規約テキストです €\n" * 900
-        first = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
-        second = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
-        with mock.patch.object(review, "sh", side_effect=[first, second]):
-            text = review.build_conventions("deadbeef")
+        first = subprocess.CompletedProcess(
+            ["git"], 0, stdout=big.encode("utf-8"), stderr=""
+        )
+        second = subprocess.CompletedProcess(
+            ["git"], 0, stdout=big.encode("utf-8"), stderr=""
+        )
+        with mock.patch.object(
+            review.GitRepository, "run", side_effect=[first, second]
+        ):
+            text = review.build_conventions(
+                review.GitRepository(Path.cwd()), "deadbeef"
+            )
         self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
         text.encode("utf-8")
 
     def test_conventions_respect_byte_budget(self):
         big = "原文の規約テキストです €\n" * 900
-        with_content = subprocess.CompletedProcess(["git"], 0, stdout=big, stderr="")
-        empty = subprocess.CompletedProcess(["git"], 1, stdout="", stderr="")
-        with mock.patch.object(review, "sh", side_effect=[with_content, empty]):
-            text = review.build_conventions("deadbeef")
+        with_content = subprocess.CompletedProcess(
+            ["git"], 0, stdout=big.encode("utf-8"), stderr=""
+        )
+        empty = subprocess.CompletedProcess(["git"], 1, stdout=b"", stderr=b"")
+        with mock.patch.object(
+            review.GitRepository, "run", side_effect=[with_content, empty]
+        ):
+            text = review.build_conventions(
+                review.GitRepository(Path.cwd()), "deadbeef"
+            )
         self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
         text.encode("utf-8")
         self.assertIn("recortado", text)
@@ -6967,7 +7074,9 @@ class GitPaths(unittest.TestCase):
 
             os.chdir(repo)
             try:
-                changed = review.changed_since(base, head)
+                changed = review.changed_since(
+                    review.GitRepository(Path.cwd()), base, head
+                )
             finally:
                 os.chdir(ROOT)
             self.assertEqual(

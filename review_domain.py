@@ -1015,6 +1015,12 @@ def normalize_policy(boot):
     patterns = boot.get("exclude_patterns") or ()
     if isinstance(patterns, str) or not all(isinstance(x, str) for x in patterns):
         raise ValueError("exclude_patterns debe ser una lista de patrones")
+    strict = boot.get("strict_budget", False)
+    if not isinstance(strict, bool):
+        raise ValueError(f"strict_budget inválido: {strict!r}")
+    max_diff = boot.get("diff_max_bytes", 1_500_000)
+    if not isinstance(max_diff, int) or isinstance(max_diff, bool) or max_diff < 1:
+        raise ValueError(f"diff_max_bytes inválido: {max_diff!r}")
     return ReviewPolicy(
         finding_identity=identity,
         findings_max_count=max_count,
@@ -1024,6 +1030,8 @@ def normalize_policy(boot):
         allow_inline_comments=bool(boot.get("allow_inline_comments", False)),
         schema_version=version,
         diff_mode=mode,
+        strict_budget=strict,
+        diff_max_bytes=max_diff,
     )
 
 
@@ -1269,6 +1277,7 @@ class RepositoryFacts:
     renames: tuple = ()
     blobs: dict = field(default_factory=dict)
     omissions: tuple = ()
+    historical_paths: tuple = ()
 
 
 @dataclass
@@ -1287,6 +1296,8 @@ class ReviewPolicy:
     allow_inline_comments: bool = False
     schema_version: int = 2
     diff_mode: str = "full"
+    strict_budget: bool = False
+    diff_max_bytes: int = 1_500_000
 
 
 @dataclass
