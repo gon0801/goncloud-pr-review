@@ -724,7 +724,7 @@ def prepare_review(repo, request, current, policy):
         revertidas = tuple(
             ruta
             for ruta in delta_rutas
-            if repo.blob_at(head, ruta) == repo.blob_at(base, ruta)
+            if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
         )
         for nueva, vieja in renombres:
             for revision, ruta in ((previous_head, vieja), (head, nueva)):

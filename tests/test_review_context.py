@@ -152,6 +152,32 @@ class IncrementalContext(unittest.TestCase):
             self.assertEqual(set(result.hechos.changed_paths), {"x.py", "z.py"})
             self.assertIn("x.py", result.hechos.reverted_paths)
 
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "x.py").write_text("x = 0\n")
+            base = commit(repo, "base")
+            git(repo, "checkout", "-q", "-b", "pr")
+            (repo / "x.py").write_text("x = 1\n")
+            prev = commit(repo, "prev")
+            (repo / "x.py").write_text("x = 0\n")
+            head = commit(repo, "head")
+            git(repo, "checkout", "-q", "main")
+            (repo / "x.py").write_text("x = avanzada\n")
+            base_avanzada = commit(repo, "avanza base")
+            self.assertEqual(git(repo, "merge-base", base_avanzada, head), base)
+            with self.subTest("base avanzada"):
+                policy = domain.ReviewPolicy(diff_mode="incremental")
+                digest = digest_de_politica(policy)
+                result = prepare_review(
+                    GitRepository(repo),
+                    solicitud(head, base_avanzada, digest),
+                    memoria(prev, base_avanzada, digest),
+                    policy,
+                )
+                self.assertEqual(result.modo, "incremental")
+                self.assertIn("x.py", result.hechos.reverted_paths)
+
     def test_rename_keeps_old_and_new_blobs_verified(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)

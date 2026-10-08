@@ -2899,6 +2899,45 @@ class Workflows(unittest.TestCase):
                             argparse.Namespace(work=tmp, request_id="99")
                         )
 
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "readme.md").write_text("base\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            base = git(repo, "rev-parse", "HEAD")
+            (repo / "other.py").write_text("otro = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "head")
+            head = git(repo, "rev-parse", "HEAD")
+            trabajo = Path(tmp, "work")
+            trabajo.mkdir()
+            with contextlib.chdir(repo):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "REPO": "o/r",
+                        "PR_NUMBER": "1",
+                        "HEAD_SHA": head,
+                        "BASE_SHA": base,
+                        "GITHUB_RUN_ID": "55",
+                        "GITHUB_RUN_ATTEMPT": "2",
+                        "BOT_LOGIN": "bot",
+                    },
+                    clear=False,
+                ):
+                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                        review.cmd_execute_request(
+                            argparse.Namespace(work=str(trabajo), request_id="1")
+                        )
+            paquete = json.loads((trabajo / "request-package.json").read_text())
+            self.assertIn(paquete["plan"]["mode"], ("full", "incremental"))
+            self.assertEqual(paquete["plan"]["changed_paths"], ["other.py"])
+            self.assertNotIn("plan_fallback", paquete)
+
     def test_actionlint_firma_las_plantillas(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         for plantilla in (
@@ -4624,7 +4663,11 @@ class BlockingFixes(unittest.TestCase):
         self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):
-        prev_block = block_of(make_finding("F1", file="b.py"), next=2)
+        prev_block = block_of(
+            make_finding("F1", file="b.py"),
+            make_finding("F2", file="a.py"),
+            next=3,
+        )
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
@@ -4641,16 +4684,25 @@ class BlockingFixes(unittest.TestCase):
             base="b" * 40,
             head="a" * 40,
         )
+        llamadas = []
         with mock.patch.object(
             review,
             "files_matching_base",
-            side_effect=lambda paths, base, head: set(paths),
+            side_effect=lambda repo, paths, base, head: (
+                llamadas.append((tuple(paths), base, head)) or set(paths)
+            ),
         ):
             findings = review.build_findings(
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", []
             )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")]
+            llamadas,
+            [(("a.py",), "b" * 40, "a" * 40)],
+            "el chequeo de reversión sólo mira los archivos cambiados en este push",
+        )
+        self.assertEqual(
+            [(f["id"], f["state"]) for f in findings["merged"]],
+            [("F1", "open"), ("F2", "resolved")],
         )
 
     def test_empty_detail_with_a_valid_block_says_nothing_new(self):
