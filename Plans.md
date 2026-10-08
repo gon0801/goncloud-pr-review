@@ -110,7 +110,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T11 | Instalación | Instalador atómico y ensayo de retorno | T10 | cc:done (PR #56, squash a3b4891; evidencia docs/evidence/reviewer/IN.md) |
 | T12 | E2 | Comparación por producto y pares válidos | Base verificada | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
-| T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:TODO |
+| T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:TODO |
 | T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
 
@@ -217,3 +217,14 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | E2-r4 veredicto N1 | generador ciego v2 exige set(particion)==casos observaciones.json; con 26 casos, recoleccion sin los 6 push-casos sale exit 2; decirlo en README v2 junto a recoleccion D0 | abierta |
 | E2-r4 veredicto N2 | pairing.json recongelado en r4 es legitimo sin salidas v2 observadas; tras recoleccion, recongelar se declara desvio | abierta |
 | E2-r4 review F8 | conteo documental pendiente en E2 (Low, no bloqueante) | abierta |
+| D0-r1 veredicto N1 (ai-review F2) | reordenar templates/ai-review-worker.yml: fetch + worktree antes de execute-request, con working-directory pr; si no, D0 siempre fallback en worker real; resolver antes de T16 | abierta |
+| D0-r1 veredicto N2 | ReviewPolicy nueva cambia digest_de_politica de toda politica existente; fuerza una revision completa por PR y rechaza artifacts en vuelo; anotar en runbook de activacion | abierta |
+| D0-r1 veredicto N3 | digest con diff_max_bytes de entorno vs politica_de_revision del coordinador; si difieren, rechaza todos los resultados; derivar de una sola fuente | abierta |
+| D0-r1 veredicto N4 | cobertura COMPLETE_CLAIM con omisiones budget del modo historico; T16 no debe tomarla tal cual | abierta |
+| D0-r1 veredicto N5 (ai-review F1) | Obligation solo ruta, sin estado de entrega; T16 decide si amplia el tipo | abierta |
+| D0-r1 veredicto N6 (ai-review F4) | chunks merge_base..head en incremental: reversion entrega chunk vacio; comportamiento previo, lo mide T16 | abierta |
+| D0-r1 veredicto N7 | test fragil sin .git (falla en git archive); usar repo temporal propio o mock de GitRepository | abierta |
+| D0-r1 veredicto N8 | D0.md:10 decia base en vez de merge_base | resuelta en D0 r2 |
+| D0-r1 veredicto N9 | e1-measure.yml:89 no copia review_context.py (ya faltaba review_domain.py) | abierta |
+| D0-r1 veredicto N10 | adaptador calcula modo dos veces (historico + prepare_review); colapsar cuando coordinador sea unico camino | abierta |
+| D0-r2 proceso | /Users/dn/quality-kit/cross-review.ps1 sigue borrado sin commit; si es intencional, los briefs deben dejar de citarlo | abierta |
