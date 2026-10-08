@@ -5,6 +5,11 @@ exacto) y escribe observaciones.json, adjudicacion-ciega.json y
 ciego-correspondencia.json. Es constructor, no adjudicador: no clasifica.
 Nunca imprime el contenido de la correspondencia: sólo conteos y el hash y
 tamaño del archivo.
+
+Modo versionado (--versionado --raiz-v2 RUTA): lee observaciones.json,
+partition.json y pairing.json (formato v2) de esa raíz y escribe ahí
+adjudicacion-ciega.json y ciego-correspondencia.json; sin el flag corre el
+modo histórico sin cambios.
 """
 
 import argparse
@@ -21,6 +26,41 @@ RE_DETAILS = re.compile(r"<details>.*?</details>", re.S)
 RE_ADDRESS = re.compile(r"✅ Addressed in commit [0-9a-f]+")
 RE_SEVERIDAD = re.compile(r"\b(Minor|Major|Critical|Trivial|Nitpick)\b")
 RE_BOLD = re.compile(r"^\*\*(.+?)\*\*\s*$", re.M)
+RE_MARCA_SEVERIDAD_V2 = re.compile(
+    r"(?:^|(?<=\s))"
+    r"[-•*#*_~]*\s*"
+    r"[^\x00-\x7F]\ufe0f?\s*[*_~]*"
+    r"(?:Minor|Major|Critical|Trivial|Nitpick|Low|Medium|High)\b"
+    r"[*_~]*(?:\s*[·|]\s*)?",
+    re.IGNORECASE,
+)
+ENFASIS_V2 = " *_`~"
+
+CLAVES_CASO_V2 = ("caso", "repo", "base", "head", "tarea", "sha_anterior")
+CLAVES_OBSERVACION_V2 = CLAVES_CASO_V2 + (
+    "producto",
+    "configuracion",
+    "repeticion",
+    "intento",
+    "resultado",
+    "cobertura",
+    "duracion_s",
+    "turnos",
+    "costo_usd",
+    "hallazgos",
+)
+CLAVES_HALLAZGO_V2 = ("id", "titulo", "ruta", "resuelto")
+SEVERIDAD_V2 = {
+    "trivial": "baja",
+    "nitpick": "baja",
+    "minor": "baja",
+    "low": "baja",
+    "major": "media",
+    "medium": "media",
+    "critical": "alta",
+    "high": "alta",
+}
+GRUPOS_V2 = ("ajuste", "reservada")
 
 
 def falla(mensaje):
@@ -171,6 +211,273 @@ def observacion_coderabbit(caso, ccorpus, captura):
     }
 
 
+def es_linea_badges_v2(linea):
+    if "|" not in linea:
+        return False
+    segmentos = [s.strip(ENFASIS_V2) for s in linea.split("|")]
+    visibles = [s for s in segmentos if s]
+    return bool(visibles) and all(not s[0].isalnum() for s in visibles)
+
+
+def limpiar_evidencia_v2(texto):
+    limpio = RE_PIE_HTML.sub("", texto)
+    limpio = RE_DETAILS.sub("", limpio)
+    limpio = RE_ADDRESS.sub("", limpio)
+    limpio = limpio.replace("🤖", "")
+    limpio = "\n".join(
+        linea for linea in limpio.splitlines() if not es_linea_badges_v2(linea)
+    )
+    limpio = RE_MARCA_SEVERIDAD_V2.sub("", limpio)
+    return re.sub(r"\n{3,}", "\n\n", limpio).strip()
+
+
+def clave_finding_v2(o, h):
+    valores = (
+        o["caso"],
+        o["repo"],
+        o["base"],
+        o["head"],
+        o["tarea"],
+        o["sha_anterior"],
+        o["producto"],
+        o["configuracion"],
+        o["repeticion"],
+        o["intento"],
+        h["id"],
+    )
+    return tuple((v is None, "" if v is None else v) for v in valores)
+
+
+def severidad_normalizada_v2(declarada):
+    return SEVERIDAD_V2.get(str(declarada).strip().lower(), "no declarada")
+
+
+def inventario_identificadores_v2(observaciones):
+    identificadores = set()
+    for o in observaciones:
+        if o["producto"]:
+            identificadores.add(o["producto"])
+        if len(o["configuracion"]) >= 8:
+            identificadores.add(o["configuracion"])
+    return sorted(identificadores, key=lambda s: (-len(s), s))
+
+
+def redactar_identificadores_v2(texto, identificadores):
+    for identificador in identificadores:
+        texto = re.sub(
+            re.escape(identificador),
+            "[redactado]",
+            texto,
+            flags=re.IGNORECASE,
+        )
+    return texto
+
+
+def fila_hoja_v2(o, h, identificadores):
+    linea = h.get("linea")
+    detalle = h.get("detalle")
+    diagnostico = redactar_identificadores_v2(h["titulo"], identificadores)
+    evidencia = (
+        redactar_identificadores_v2(limpiar_evidencia_v2(detalle), identificadores)
+        if detalle is not None
+        else ""
+    )
+    return {
+        "caso": o["caso"],
+        "head": o["head"],
+        "diagnostico": diagnostico,
+        "ubicacion": f"{h['ruta']}:{linea}" if linea is not None else h["ruta"],
+        "evidencia": evidencia or diagnostico,
+        "severidad": severidad_normalizada_v2(h.get("severidad")),
+    }
+
+
+def fila_correspondencia_v2(o, h, particion):
+    declarada = h.get("severidad")
+    return {
+        "caso": o["caso"],
+        "repo": o["repo"],
+        "base": o["base"],
+        "head": o["head"],
+        "tarea": o["tarea"],
+        "sha_anterior": o["sha_anterior"],
+        "producto": o["producto"],
+        "configuracion": o["configuracion"],
+        "repeticion": o["repeticion"],
+        "intento": o["intento"],
+        "hallazgo_id": h["id"],
+        "severidad_original": declarada if declarada is not None else "no declarada",
+        "particion": particion[o["caso"]],
+    }
+
+
+def validar_observaciones_v2(datos, ruta):
+    if not isinstance(datos, dict) or not isinstance(datos.get("observaciones"), list):
+        falla(f"{ruta} no trae la lista 'observaciones'")
+    for i, o in enumerate(datos["observaciones"], start=1):
+        if not isinstance(o, dict):
+            falla(f"observación {i}: no es un objeto")
+        faltan = [c for c in CLAVES_OBSERVACION_V2 if c not in o]
+        if faltan:
+            falla(
+                f"observación {i} ({o.get('caso', 'sin caso')}): "
+                f"faltan las claves {faltan}"
+            )
+        if not isinstance(o["hallazgos"], list):
+            falla(f"observación {i} ({o['caso']}): hallazgos no es una lista")
+        for j, h in enumerate(o["hallazgos"], start=1):
+            if not isinstance(h, dict):
+                falla(f"observación {i} ({o['caso']}), hallazgo {j}: no es un objeto")
+            faltan_h = [c for c in CLAVES_HALLAZGO_V2 if c not in h]
+            if faltan_h:
+                falla(
+                    f"observación {i} ({o['caso']}), hallazgo {j}: "
+                    f"faltan las claves {faltan_h}"
+                )
+    return datos["observaciones"]
+
+
+def validar_particion_v2(datos, casos, ruta):
+    if not isinstance(datos, dict) or not isinstance(datos.get("particion"), dict):
+        falla(f"{ruta} no trae el objeto 'particion'")
+    particion = datos["particion"]
+    if set(particion) != casos:
+        falla(
+            f"la partición no coincide con los casos de las observaciones; "
+            f"faltan: {sorted(casos - set(particion))}, "
+            f"sobran: {sorted(set(particion) - casos)}"
+        )
+    for caso, grupo in particion.items():
+        if grupo not in GRUPOS_V2:
+            falla(f"{caso}: grupo de partición inválido: {grupo!r}")
+    return particion
+
+
+def validar_adjudicacion_v2(datos, ruta):
+    if not isinstance(datos, dict) or not isinstance(datos.get("adjudicacion"), dict):
+        falla(f"{ruta} no trae el objeto 'adjudicacion'")
+    adj = datos["adjudicacion"]
+    if adj.get("normalizacion") != "1":
+        falla(
+            f"normalización de adjudicación {adj.get('normalizacion')!r} no soportada; "
+            "este builder sólo aplica la 1"
+        )
+    if not isinstance(adj.get("jueces"), list):
+        falla("adjudicacion.jueces debe ser una lista")
+    for juez in adj["jueces"]:
+        if (
+            not isinstance(juez, dict)
+            or "id" not in juez
+            or juez.get("tipo") not in {"humano", "ia"}
+        ):
+            falla(f"adjudicacion.jueces: {juez!r} sin id o con tipo inválido")
+    desempates = adj.get("desempates")
+    if (
+        not isinstance(desempates, dict)
+        or "version" not in desempates
+        or "regla" not in desempates
+    ):
+        falla("adjudicacion.desempates debe ser un objeto con version y regla")
+    return adj
+
+
+def main_v2(raiz):
+    ruta_observaciones = raiz / "observaciones.json"
+    ruta_particion = raiz / "partition.json"
+    ruta_pairing = raiz / "pairing.json"
+    observaciones = validar_observaciones_v2(
+        leer_json(ruta_observaciones), ruta_observaciones
+    )
+    casos = {o["caso"] for o in observaciones}
+    particion = validar_particion_v2(leer_json(ruta_particion), casos, ruta_particion)
+    adj = validar_adjudicacion_v2(leer_json(ruta_pairing), ruta_pairing)
+
+    identificadores = inventario_identificadores_v2(observaciones)
+    pares = []
+    for o in observaciones:
+        for h in o["hallazgos"]:
+            pares.append(
+                (
+                    clave_finding_v2(o, h),
+                    fila_hoja_v2(o, h, identificadores),
+                    fila_correspondencia_v2(o, h, particion),
+                )
+            )
+    pares.sort(key=lambda par: par[0])
+    random.Random(SEMILLA).shuffle(pares)
+    hoja, filas_correspondencia = [], []
+    for n, (_, fila, fuente) in enumerate(pares, start=1):
+        blind_id = f"H-{n:03d}"
+        hoja.append({"blind_id": blind_id, **fila})
+        filas_correspondencia.append({"blind_id": blind_id, **fuente})
+
+    texto_hoja = (
+        json.dumps(
+            {
+                "meta": {
+                    "version": 2,
+                    "que_es": "hoja de adjudicación ciega v2: una fila por hallazgo "
+                    "normalizado, sin campos que identifiquen el origen de cada fila",
+                    "instruccion": "clasifica cada hallazgo como valid, false_positive, "
+                    "duplicate o unresolved (duplicate nombra duplicado_de); no intentes "
+                    "identificar el origen de ninguna fila",
+                    "normalizacion": adj["normalizacion"],
+                    "jueces": adj["jueces"],
+                    "desempates": adj["desempates"],
+                    "adjudicacion_ia": any(
+                        j.get("tipo") == "ia" for j in adj["jueces"]
+                    ),
+                    "semilla": SEMILLA,
+                    "orden": "aleatorio reproducible con random.Random(semilla) sobre la "
+                    "FindingKey ordenada; regenerable con "
+                    "scripts/build_adjudicacion_ciega.py --versionado",
+                },
+                "hallazgos": hoja,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    (raiz / "adjudicacion-ciega.json").write_text(texto_hoja)
+
+    texto_correspondencia = (
+        json.dumps(
+            {
+                "meta": {
+                    "que_es": "correspondencia hoja↔fuente de la adjudicación ciega v2",
+                    "advertencia": "ningún participante de la adjudicación debe abrir este "
+                    "archivo; sólo lo audita el operador al cierre",
+                    "semilla": SEMILLA,
+                },
+                "filas": filas_correspondencia,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    (raiz / "ciego-correspondencia.json").write_text(texto_correspondencia)
+
+    por_grupo = {}
+    for grupo in particion.values():
+        por_grupo[grupo] = por_grupo.get(grupo, 0) + 1
+    distribucion = ", ".join(f"{g}={por_grupo[g]}" for g in sorted(por_grupo))
+    print(f"casos: {len(casos)}")
+    print(f"observaciones: {len(observaciones)}")
+    print(f"partición: {distribucion}")
+    print(
+        f"hoja: {len(hoja)} filas con semilla {SEMILLA} -> "
+        f"{raiz / 'adjudicacion-ciega.json'}"
+    )
+    print(
+        f"correspondencia: filas={len(filas_correspondencia)} "
+        f"bytes={len(texto_correspondencia.encode())} "
+        f"sha256={hashlib.sha256(texto_correspondencia.encode()).hexdigest()} "
+        "(contenido no impreso)"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Construye hoja ciega, observaciones y correspondencia (offline)."
@@ -180,7 +487,24 @@ def main():
         type=Path,
         default=Path(__file__).resolve().parent.parent / "evaluation" / "reviewer",
     )
+    parser.add_argument(
+        "--versionado",
+        action="store_true",
+        help="corre el modo versionado v2 sobre --raiz-v2",
+    )
+    parser.add_argument(
+        "--raiz-v2",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent
+        / "evaluation"
+        / "reviewer"
+        / "v2",
+        help="raíz de las entradas y salidas del modo versionado",
+    )
     args = parser.parse_args()
+    if args.versionado:
+        main_v2(args.raiz_v2)
+        return
     raiz = args.raiz
 
     corpus = {c["caso"]: c for c in leer_json(raiz / "corpus.json")["casos"]}
