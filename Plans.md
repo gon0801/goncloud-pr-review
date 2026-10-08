@@ -227,4 +227,5 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | D0-r1 veredicto N8 | D0.md:10 decia base en vez de merge_base | resuelta en D0 r2 |
 | D0-r1 veredicto N9 | e1-measure.yml:89 no copia review_context.py (ya faltaba review_domain.py) | abierta |
 | D0-r1 veredicto N10 | adaptador calcula modo dos veces (historico + prepare_review); colapsar cuando coordinador sea unico camino | abierta |
+| D0-r1 veredicto N10b | memoria legacy reconstruida con base/digest del target: guardas nuevos de base y politica vacuos en camino legacy, reales en coordinador; colapsar con N10 cuando coordinador sea unico camino | abierta |
 | D0-r2 proceso | /Users/dn/quality-kit/cross-review.ps1 sigue borrado sin commit; si es intencional, los briefs deben dejar de citarlo | abierta |
