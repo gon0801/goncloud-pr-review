@@ -746,7 +746,7 @@ def nombres_invocados(repo, head, archivo, cache):
         if sha:
             try:
                 arbol = ast.parse(repo.cat_file_text(sha))
-            except (SyntaxError, ValueError):
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
                 arbol = None
             if arbol is not None:
                 llamadas = set()

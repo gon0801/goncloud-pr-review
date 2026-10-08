@@ -409,7 +409,7 @@ class IncrementalContext(unittest.TestCase):
 def hacer_repo_selectivo(tmp):
     repo = hacer_repo(tmp)
     (repo / "readme.md").write_text("# proyecto\n")
-    (repo / "app.py").write_text("total = calcular_total(x)\n")
+    (repo / "app.py").write_text("resultado = obj.calcular_total(x)\n")
     (repo / "docs").mkdir()
     (repo / "docs" / "nota.txt").write_text("usar calcular_total(x) para sumar\n")
     (repo / "mensajes.py").write_text(
@@ -518,6 +518,36 @@ class SelectiveContext(unittest.TestCase):
                 self.assertIn(ref.papel, ("consumidor", "prueba"))
                 self.assertEqual(ref.simbolo, "calcular_total")
                 self.assertEqual(ref.busqueda, "completa")
+
+    def test_deep_py_file_degrades_to_textual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "deep.py").write_text(
+                "y = calcular_total(1)\nz = a" + ".b" * 200000
+            )
+            base = commit(repo, "base")
+            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
+            prev = commit(repo, "prev")
+            (repo / "readme.md").write_text("# proyecto\n\ntercer push\n")
+            (repo / "s.py").write_text(
+                "def calcular_total(a):\n    return calcular_total(a) + a\n"
+            )
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+                selectivo=True,
+            )
+            refs = {ref.archivo: ref for ref in result.plan.context_refs}
+            self.assertIn("deep.py", refs)
+            self.assertEqual(refs["deep.py"].relacion, "textual")
+            self.assertEqual(refs["deep.py"].simbolo, "calcular_total")
+            self.assertEqual(refs["deep.py"].busqueda, "completa")
 
     def test_truncated_lead_and_missing_obligation(self):
         with tempfile.TemporaryDirectory() as tmp:
