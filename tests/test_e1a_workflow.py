@@ -1,11 +1,22 @@
 import ast
+import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "e1-measure.yml"
 REVIEW_PY = ROOT / "review.py"
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, text=True, capture_output=True
+    ).stdout.strip()
 
 
 def claves_providers():
@@ -169,6 +180,123 @@ class WorkflowE1Measure(unittest.TestCase):
         self.assertIn("e1-salida-", self.texto)
         self.assertIn("result.json", self.texto)
         self.assertIn("manifest.json", self.texto)
+
+    def test_brazo_delta_declara_entradas_opcionales(self):
+        cola = self.texto[self.texto.index("      prev_sha:") :]
+        for entrada in ("      prev_sha:", "      prev_findings:"):
+            self.assertIn(entrada, cola)
+        self.assertEqual(cola.count("required: false"), 2)
+        self.assertEqual(cola.count('default: ""'), 2)
+
+    def test_validacion_delta_es_temprana_y_pareja(self):
+        paso = self.bloque_paso("Validar entradas del brazo delta")
+        self.assertIn("if: inputs.prev_sha != '' || inputs.prev_findings != ''", paso)
+        self.assertIn("prev_sha y prev_findings juntos", paso)
+        self.assertIn("^[0-9a-f]{40}$", paso)
+        self.assertLess(
+            self.texto.index("Validar entradas del brazo delta"),
+            self.texto.index("actions/checkout@"),
+            "la validación delta falla antes de tocar el árbol",
+        )
+
+    def test_prev_json_se_construye_antes_de_prepare_como_cmd_observe(self):
+        paso = self.bloque_paso("Construir prev.json del brazo delta")
+        self.assertIn("if: inputs.prev_sha != ''", paso)
+        self.assertIn("parse_findings_block", paso)
+        self.assertIn('"sha": os.environ["PREV_SHA"]', paso)
+        self.assertIn('"state": state', paso)
+        self.assertIn('"completion": "complete"', paso)
+        self.assertLess(
+            self.texto.index("Construir prev.json del brazo delta"),
+            self.texto.index('review.py" prepare'),
+            "prev.json existe antes de que prepare decida el modo",
+        )
+
+    def test_salidas_delta_no_colisionan_con_las_del_control(self):
+        self.assertIn("'-delta' || ''", self.texto)
+
+
+class PrepararBrazoDelta(unittest.TestCase):
+    """prepare corre de verdad en un repo lineal base -> previo -> cabeza.
+
+    Sin prev.json el manifest sale full (no-prev); con prev.json (el que
+    construiría el paso del workflow) sale incremental contra el push anterior.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        repo = Path(cls.tmp.name, "repo")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@t")
+        git(repo, "config", "user.name", "t")
+        (repo / "app.py").write_text("def a():\n    return 1\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        cls.base = git(repo, "rev-parse", "HEAD")
+        (repo / "previo.py").write_text("def b():\n    return 2\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "push anterior")
+        cls.previo = git(repo, "rev-parse", "HEAD")
+        (repo / "cabeza.py").write_text("def c():\n    return 3\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "push medido")
+        cls.cabeza = git(repo, "rev-parse", "HEAD")
+        cls.repo = repo
+        cls.event = Path(cls.tmp.name, "event.json")
+        cls.event.write_text(json.dumps({"pull_request": {"title": "t", "body": "b"}}))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def preparar(self, prev=None):
+        work = Path(self.tmp.name, "work-con-prev" if prev else "work-sin-prev")
+        work.mkdir(exist_ok=True)
+        if prev is not None:
+            (work / "prev.json").write_text(json.dumps(prev))
+        env = dict(
+            os.environ,
+            HEAD_SHA=self.cabeza,
+            BASE_SHA=self.base,
+            GITHUB_EVENT_PATH=str(self.event),
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(REVIEW_PY),
+                "prepare",
+                "--work",
+                str(work),
+                "--prompt",
+                str(ROOT / "prompt.md"),
+            ],
+            cwd=self.repo,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads((work / "manifest.json").read_text())
+
+    def test_sin_prev_json_el_manifest_sale_full(self):
+        manifest = self.preparar()
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(manifest["reason"], "no-prev")
+        self.assertIsNone(manifest["prev_sha"])
+
+    def test_con_prev_json_el_manifest_sale_incremental(self):
+        prev = {
+            "sha": self.previo,
+            "state": {"seen": 1, "findings": []},
+            "completion": "complete",
+        }
+        manifest = self.preparar(prev)
+        self.assertEqual(manifest["mode"], "incremental")
+        self.assertEqual(manifest["prev_sha"], self.previo)
+        self.assertEqual(manifest["reason"], "")
+        self.assertEqual(manifest["changed_files"], ["cabeza.py"])
 
 
 if __name__ == "__main__":

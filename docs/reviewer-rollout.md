@@ -184,6 +184,32 @@ gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
   y `total_cost_usd` por intento, con `ATTEMPTS=2` y presupuesto de turnos
   histórico. El costo del par es el del intento exitoso más los fallidos.
 
+### Brazos del par de push: control y delta-d0
+
+Los pares de push miden dos brazos del mismo push. El control es la invocación
+de arriba (revisión completa del par `head`/`base`). El brazo delta-d0 añade
+dos entradas opcionales: `prev_sha` (SHA del push anterior) y `prev_findings`
+(bloque de hallazgos `<!-- ai-review:findings=... -->` que produjo el control
+del push anterior). Con esas entradas el workflow construye `prev.json` (sha,
+state, completion complete) antes de `prepare`, exactamente lo que escribiría
+`cmd_observe`, y la corrida sale incremental (manifest `mode=incremental`,
+`prev_sha` del push anterior); sin ellas la corrida es control (`mode=full`).
+
+```
+gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
+  -f caso=pr2-push-2-delta -f pr=2 \
+  -f head=<push2-head> -f base=<merge-base> -f proveedor=deepseek \
+  -f prev_sha=<push1-head> -f prev_findings="$(cat bloque-push1.md)"
+```
+
+Límite en cadena, declarado: el brazo delta-d0 de un push depende del estado
+de hallazgos del control del push anterior. El control de push i debe correr
+primero, su bloque extraerse del `result.json` y pasarse como `prev_findings`
+al delta de push i; sin ese eslabón la corrida delta no puede ejecutarse con
+fidelidad al protocolo D0 (pasar `base=sha_anterior` no lo sustituye: sería
+una revisión completa del delta sin memoria). El artefacto del brazo delta
+lleva sufijo `-delta` en el nombre para no colisionar con el de su control.
+
 ## Estimación de costo de la medición completa
 
 Base real: las 20 corridas de E1 con costo conocido (DeepSeek V4.1 Flash).
