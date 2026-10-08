@@ -764,6 +764,13 @@ def contexto_selectivo(
         ]
         if razones:
             avisos.append(f"pista truncada: {simbolo} ({razones[0]})")
+        fallas = [
+            resultado.reason
+            for resultado in (simple, llamada)
+            if isinstance(resultado, SearchFailed)
+        ]
+        if fallas:
+            avisos.append(f"pista falló: {simbolo} ({fallas[0]})")
         por_archivo = {}
         for resultado, relacion in ((llamada, "sintactica"), (simple, "textual")):
             estado = estado_de_busqueda(resultado)

@@ -3,10 +3,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import review_context  # noqa: E402
 import review_domain as domain  # noqa: E402
 from review_context import (  # noqa: E402
     GitRepository,
@@ -538,12 +540,46 @@ class SelectiveContext(unittest.TestCase):
                 any(a.startswith("pista truncada: calcular_total") for a in pistas)
             )
             self.assertTrue(any("techo de salida" in a for a in pistas))
-            self.assertTrue(
-                all(
-                    ref.busqueda.startswith("truncada:")
-                    for ref in result.plan.context_refs
+            if result.plan.context_refs:
+                self.assertTrue(
+                    all(
+                        ref.busqueda.startswith("truncada:")
+                        for ref in result.plan.context_refs
+                    )
                 )
-            )
+            with self.subTest("refs truncadas deterministas con búsqueda mockeada"):
+                truncada = review_context.SearchTruncated(
+                    ("app.py", "tests/test_s.py"),
+                    "techo de salida (99 bytes examinados)",
+                )
+
+                def grep_truncada(*args, **kwargs):
+                    return truncada
+
+                with mock.patch.object(
+                    review_context, "grep_files", side_effect=grep_truncada
+                ):
+                    determinista = prepare_review(
+                        GitRepository(repo),
+                        solicitud(head, base, digest),
+                        memoria(prev, base, digest),
+                        policy,
+                        selectivo=True,
+                    )
+                for ref in determinista.plan.context_refs:
+                    self.assertEqual(
+                        ref.busqueda,
+                        "truncada: techo de salida (99 bytes examinados)",
+                    )
+                self.assertEqual(
+                    sorted(ref.archivo for ref in determinista.plan.context_refs),
+                    ["app.py", "tests/test_s.py"],
+                )
+                self.assertIn(
+                    "pista truncada: calcular_total "
+                    "(techo de salida (99 bytes examinados))",
+                    determinista.avisos,
+                )
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
@@ -575,3 +611,25 @@ class SelectiveContext(unittest.TestCase):
             ]
             self.assertEqual([om.ruta for om in al_presupuesto], ["f2.py"])
             self.assertTrue(any(ob.ruta == "f2.py" for ob in result.plan.obligations))
+
+    def test_failed_search_leaves_aviso(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, prev, head = hacer_repo_selectivo(tmp)
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            with mock.patch.object(
+                review_context,
+                "grep_files",
+                side_effect=[
+                    review_context.SearchFailed("git grep murió"),
+                    review_context.SearchFailed("git grep murió"),
+                ],
+            ):
+                result = prepare_review(
+                    GitRepository(repo),
+                    solicitud(head, base, digest),
+                    memoria(prev, base, digest),
+                    policy,
+                    selectivo=True,
+                )
+            self.assertIn("pista falló: calcular_total (git grep murió)", result.avisos)
