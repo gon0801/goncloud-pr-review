@@ -7,13 +7,14 @@ El formato histórico de `evaluation/reviewer/` sigue vigente y no cambia.
 
 ## Contenido de este directorio
 
-- `partition.json`. Asigna PRs completos a `ajuste` o `reservada`. Todos los
-  pushes de un PR quedan en el mismo grupo.
+- `partition.json`. Asigna PRs completos y sus push-casos a `ajuste` o
+  `reservada`. Todos los pushes de un PR quedan en el mismo grupo.
 - `pairing.json`. Fija pares y repeticiones antes de observar resultados nuevos.
   Cada par declara su CaseKey completo, los lados control y variante, y un
   `estado` que dice si sus salidas ya fueron observadas antes del congelamiento.
-  La sección `adjudicacion` congela la versión de normalización, la lista de
-  jueces y la regla de desempates.
+  Los pares de `push-consecutivo` declaran su caso `<caso>-push-<i>` con la
+  CaseKey de la proyección de abajo. La sección `adjudicacion` congela la
+  versión de normalización, la lista de jueces y la regla de desempates.
 - `observaciones.json` (cuando exista recolección). Formato v2 con las claves
   completas que describen los dos scripts de abajo.
 - `adjudicacion-ciega.json` y `ciego-correspondencia.json`. Salidas del generador
@@ -30,6 +31,23 @@ PairKey         = (CaseKey, experimento, repeticion)
 
 `sha_anterior` es `null` cuando el caso no es un experimento incremental. Una
 observación debe repetir el CaseKey declarado en el corpus, sin diferencias.
+
+## Proyección de push-casos
+
+Para cada caso del corpus con `pushes = [p0, p1, …, pn]` y `n >= 1`, además del
+caso base (head del PR, `sha_anterior` null) existen los casos `<caso>-push-<i>`
+para `i = 1..n`, con `head = pushes[i]` y `sha_anterior = pushes[i-1]`; heredan
+`repo`, `base` y `tarea` (la categoría del PR). Los casos con 0 o 1 push no
+generan push-casos. Con el corpus congelado: 20 casos base y 6 push-casos
+(`pr2-push-1/2/3`, `pr4-push-1`, `pr9-push-1`, `pr13-push-1`), 26 en total.
+
+`partition.json` lleva los 26 casos: cada push-caso hereda el grupo de
+partición de su PR. `pairing.json` declara cada par de `push-consecutivo` con
+su caso `<caso>-push-<i>` y esa CaseKey de proyección. Las observaciones de un
+push se capturan con caso `<caso>-push-<i>` y su head/sha_anterior de
+proyección, nunca bajo el caso base: el comparador exige que cada observación
+repita la CaseKey del caso declarado y el caso base declara el head del PR, así
+que una observación de push bajo el caso base se rechaza con salida 2.
 
 ## Generar la hoja ciega v2
 
@@ -106,5 +124,9 @@ auto-referencia o la ambigüedad se rechazan.
 Los dos generadores están entregados y probados offline. La recolección de
 observaciones v2 está pendiente de autorización; `pairing.json` registra la
 muestra disponible (20 de 30 PRs, seis de diez pares de pushes y cinco pares de
-productos en el SHA exacto) con la causa de cada ausencia. Detalles en
+productos en el SHA exacto) con la causa de cada ausencia. Desde r4 cada push es
+su propio caso (`<caso>-push-<i>`): mientras la recolección D0 no capture las
+observaciones de esos casos, los seis pares de `push-consecutivo` quedan
+rechazados con `contraparte ausente` (sus observaciones todavía no existen) y
+esa es la salida esperada del comparador, no un defecto. Detalles en
 `docs/evidence/reviewer/E2.md`.

@@ -338,7 +338,7 @@ class BlindJudgmentsV2(unittest.TestCase):
                         "autopilot.json",
                         1,
                         "Low",
-                        "dejarlo escrito con esa razón. #### ⚪ Low · "
+                        "dejarlo escrito con esa razón. #### ⚪️ Low · "
                         "`.saikit/autopilot.json:1` · La autoridad del ajuste no "
                         "es la ficha",
                     ),

@@ -29,7 +29,7 @@ RE_BOLD = re.compile(r"^\*\*(.+?)\*\*\s*$", re.M)
 RE_MARCA_SEVERIDAD_V2 = re.compile(
     r"(?:^|(?<=\s))"
     r"[-•*#*_~]*\s*"
-    r"[^\x00-\x7F]\s*[*_~]*"
+    r"[^\x00-\x7F]\ufe0f?\s*[*_~]*"
     r"(?:Minor|Major|Critical|Trivial|Nitpick|Low|Medium|High)\b"
     r"[*_~]*(?:\s*[·|]\s*)?",
     re.IGNORECASE,

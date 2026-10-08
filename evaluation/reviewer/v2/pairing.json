@@ -1,12 +1,12 @@
 {
   "meta": {
     "que_es": "pares y repeticiones fijados antes de observar resultados nuevos",
-    "regla": "los pares comparten tarea y SHAs; la configuración experimental cambia sólo en la dimensión declarada; el estado de cada par declara si sus salidas ya fueron observadas antes de este congelamiento",
+    "regla": "los pares comparten tarea y SHAs; la configuración experimental cambia sólo en la dimensión declarada; el estado de cada par declara si sus salidas ya fueron observadas antes de este congelamiento; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], heredando repo, base y tarea (categoría) del PR; los pares de push-consecutivo declaran su caso <caso>-push-<i> con esa CaseKey de proyección; los casos con 0 o 1 push no generan push-casos",
     "fuentes": [
       "evaluation/reviewer/corpus.json",
       "evaluation/reviewer/observaciones.json"
     ],
-    "congelado": "2026-10-07 (bloque E2 r1, SHA base del plan 51f1aaca)"
+    "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)"
   },
   "experimentos": [
     {
@@ -118,7 +118,7 @@
       "experimento": "push-consecutivo",
       "pares": [
         {
-          "caso": "pr13",
+          "caso": "pr13-push-1",
           "repo": "gon0801/goncloud-pr-review",
           "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
           "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
@@ -138,7 +138,7 @@
           "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
         },
         {
-          "caso": "pr2",
+          "caso": "pr2-push-1",
           "repo": "gon0801/goncloud-pr-review",
           "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
           "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
@@ -158,7 +158,7 @@
           "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
         },
         {
-          "caso": "pr2",
+          "caso": "pr2-push-2",
           "repo": "gon0801/goncloud-pr-review",
           "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
           "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
@@ -178,7 +178,7 @@
           "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
         },
         {
-          "caso": "pr2",
+          "caso": "pr2-push-3",
           "repo": "gon0801/goncloud-pr-review",
           "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
           "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
@@ -198,7 +198,7 @@
           "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
         },
         {
-          "caso": "pr4",
+          "caso": "pr4-push-1",
           "repo": "gon0801/goncloud-pr-review",
           "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
           "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
@@ -218,7 +218,7 @@
           "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
         },
         {
-          "caso": "pr9",
+          "caso": "pr9-push-1",
           "repo": "gon0801/goncloud-pr-review",
           "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
           "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",

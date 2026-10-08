@@ -444,6 +444,30 @@ def pairing_v2(*pares):
     return {"experimentos": [{"experimento": "e1", "pares": list(pares)}]}
 
 
+def inventario_proyectado_v2():
+    ruta = ROOT / "evaluation" / "reviewer" / "corpus.json"
+    casos = json.loads(ruta.read_text())["casos"]
+    inventario = {}
+    for caso in casos:
+        inventario[caso["caso"]] = {
+            "repo": caso["repo"],
+            "base": caso["base"],
+            "head": caso["head"],
+            "tarea": caso["categoria"],
+            "sha_anterior": None,
+        }
+        pushes = caso.get("pushes") or []
+        for i in range(1, len(pushes)):
+            inventario[f"{caso['caso']}-push-{i}"] = {
+                "repo": caso["repo"],
+                "base": caso["base"],
+                "head": pushes[i],
+                "tarea": caso["categoria"],
+                "sha_anterior": pushes[i - 1],
+            }
+    return inventario
+
+
 class ComparisonV2(unittest.TestCase):
     def test_products_keep_separate_precision(self):
         alfa = obs_v2("alfa", ["F1", "F2"])
@@ -754,6 +778,156 @@ class ComparisonV2(unittest.TestCase):
             )
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("ambiguo", r.stderr)
+
+    def test_pairing_congelado_cubre_pushes_con_casos_propios(self):
+        inventario = inventario_proyectado_v2()
+        self.assertEqual(len(inventario), 26)
+        particion = json.loads(
+            (ROOT / "evaluation" / "reviewer" / "v2" / "partition.json").read_text()
+        )["particion"]
+        pairing = json.loads(
+            (ROOT / "evaluation" / "reviewer" / "v2" / "pairing.json").read_text()
+        )
+        for experimento in pairing["experimentos"]:
+            for par in experimento["pares"]:
+                clave = f"{experimento['experimento']}/{par['caso']}"
+                with self.subTest(par=clave):
+                    self.assertIn(par["caso"], inventario)
+                    esperado = inventario[par["caso"]]
+                    for campo in ("repo", "base", "head", "tarea", "sha_anterior"):
+                        self.assertEqual(
+                            par[campo],
+                            esperado[campo],
+                            f"{clave}: {campo} declarado no coincide con la proyección",
+                        )
+                    self.assertIn(par["caso"], particion)
+        apariciones = {}
+        for experimento in pairing["experimentos"]:
+            for par in experimento["pares"]:
+                apariciones.setdefault(par["caso"], []).append(
+                    experimento["experimento"]
+                )
+        for caso, experimentos in sorted(apariciones.items()):
+            with self.subTest(caso=caso, experimentos=experimentos):
+                self.assertEqual(len(experimentos), 1)
+        with self.subTest(particion="cobertura y herencia de grupo"):
+            self.assertEqual(set(particion), set(inventario))
+            for caso in particion:
+                self.assertEqual(
+                    particion[caso], particion[caso.split("-push-")[0]], caso
+                )
+        conteos = {e["experimento"]: len(e["pares"]) for e in pairing["experimentos"]}
+        self.assertEqual(conteos, {"producto-en-sha-exacto": 5, "push-consecutivo": 6})
+
+    def test_push_con_caso_propio_se_evalua(self):
+        caso_pr2 = {**caso_v2(), "caso": "pr2"}
+        caso_push = {
+            **caso_v2(),
+            "caso": "pr2-push-1",
+            "head": "d" * 40,
+            "sha_anterior": "c" * 40,
+        }
+        config_retanda = (
+            "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; "
+            "ATTEMPTS=2, presupuesto 1320 s)"
+        )
+        config_existente = (
+            "comentarios existentes en el SHA exacto; sin revisión disparada"
+        )
+        revisor = obs_v2(
+            "revisor", ["pr2-R01"], caso="pr2", configuracion=config_retanda
+        )
+        coderabbit = obs_v2(
+            "coderabbit",
+            ["pr2-C01"],
+            caso="pr2",
+            configuracion=config_existente,
+            resultado="comentarios existentes",
+            cobertura="no declarada (comentarios existentes)",
+            duracion_s=None,
+            turnos=None,
+            costo_usd=None,
+        )
+        completa = obs_v2(
+            "revisor",
+            ["pr2-push-R01"],
+            caso="pr2-push-1",
+            head="d" * 40,
+            sha_anterior="c" * 40,
+            configuracion="revision completa (protocolo D0)",
+        )
+        delta = obs_v2(
+            "revisor",
+            ["pr2-push-D01"],
+            caso="pr2-push-1",
+            head="d" * 40,
+            sha_anterior="c" * 40,
+            configuracion="delta-d0 (protocolo D0)",
+        )
+        judg = {
+            "adjudicaciones": [
+                fila_v2(revisor, "pr2-R01", "valid"),
+                fila_v2(coderabbit, "pr2-C01", "valid"),
+                fila_v2(completa, "pr2-push-R01", "valid"),
+                fila_v2(delta, "pr2-push-D01", "false_positive"),
+            ]
+        }
+        pairing = {
+            "experimentos": [
+                {
+                    "experimento": "producto-en-sha-exacto",
+                    "pares": [
+                        par_v2(
+                            {
+                                "producto": "revisor",
+                                "configuracion": config_retanda,
+                                "intento": 1,
+                            },
+                            {
+                                "producto": "coderabbit",
+                                "configuracion": config_existente,
+                                "intento": 1,
+                            },
+                            caso="pr2",
+                        )
+                    ],
+                },
+                {
+                    "experimento": "push-consecutivo",
+                    "pares": [
+                        par_v2(
+                            {
+                                "producto": "revisor",
+                                "configuracion": "revision completa (protocolo D0)",
+                                "intento": 1,
+                            },
+                            {
+                                "producto": "revisor",
+                                "configuracion": "delta-d0 (protocolo D0)",
+                                "intento": 1,
+                            },
+                            caso="pr2-push-1",
+                            head="d" * 40,
+                            sha_anterior="c" * 40,
+                        )
+                    ],
+                },
+            ]
+        }
+        r, informe = correr(
+            {"casos": [caso_pr2, caso_push]},
+            {"observaciones": [revisor, coderabbit, completa, delta]},
+            judg,
+            pairing,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(informe["pares"]), 2)
+        bloques = {b["experimento"]: b for b in informe["pares"]}
+        self.assertEqual(bloques["producto-en-sha-exacto"]["pares_evaluados"], 1)
+        self.assertEqual(bloques["push-consecutivo"]["pares_evaluados"], 1)
+        for bloque in informe["pares"]:
+            for rechazo in bloque["pares_rechazados"]:
+                self.assertNotIn("campos que difieren del caso", rechazo["motivo"])
 
 
 if __name__ == "__main__":

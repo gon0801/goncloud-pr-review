@@ -1,17 +1,21 @@
 {
   "meta": {
     "que_es": "asignación de PRs completos a ajuste o evaluación reservada",
-    "regla": "hereda la partición congelada del corpus E1: orden por número de PR, reservada en los índices i % 3 == 0; cada caso es un PR completo y todos sus pushes quedan en el mismo grupo",
+    "regla": "hereda la partición congelada del corpus E1: orden por número de PR, reservada en los índices i % 3 == 0; cada caso es un PR completo y todos sus pushes quedan en el mismo grupo; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], que heredan repo, base y tarea (categoría) del PR y el grupo de partición de su PR; los casos con 0 o 1 push no generan push-casos",
     "fuente": "evaluation/reviewer/corpus.json",
-    "congelado": "2026-10-07 (bloque E2 r1, SHA base del plan 51f1aaca)"
+    "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)"
   },
   "particion": {
     "pr10": "ajuste",
     "pr13": "reservada",
+    "pr13-push-1": "reservada",
     "pr14": "ajuste",
     "pr18": "ajuste",
     "pr19": "reservada",
     "pr2": "reservada",
+    "pr2-push-1": "reservada",
+    "pr2-push-2": "reservada",
+    "pr2-push-3": "reservada",
     "pr20": "ajuste",
     "pr22": "ajuste",
     "pr24": "reservada",
@@ -23,8 +27,10 @@
     "pr30": "reservada",
     "pr31": "ajuste",
     "pr4": "ajuste",
+    "pr4-push-1": "ajuste",
     "pr6": "ajuste",
     "pr8": "reservada",
-    "pr9": "ajuste"
+    "pr9": "ajuste",
+    "pr9-push-1": "ajuste"
   }
 }
