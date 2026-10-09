@@ -112,13 +112,19 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done (PR #65, squash d9a60cf; evidencia docs/evidence/reviewer/D0-C0.md) |
 
 ### Residuales
 
 | Origen | Nota | Estado |
 |---|---|---|
 | T16-f15 análisis | full no forzada por rebase resuelve contra todo lo revisado (rutas_de_cambio, rama por defecto): comportamiento previo a T16, su efecto en falsos resueltos no esta medido; informativo, no bloquea (D0-C0.md) | abierta |
+| T16 #65 ai-review F1 | preparar_lineal ignora su parametro y su docstring no coincide (tests/test_review.py:266); higiene de pruebas, no bloquea | abierta |
+| T16 #65 ai-review F2 | preparar_lineal hereda el entorno sin fijar EXTRA_EXCLUDES/MAX_DIFF_BYTES (tests/test_review.py:314); posible flake, CI verde | abierta |
+| T16 #65 ai-review F3 | action.yml max_turns documenta tope incremental inalcanzable tras forzar full; actualizar descripcion y prueba o aclarar camino execute-request | abierta |
+| T16 #65 ai-review F4 | con diff mayor que MAX_DIFF_BYTES el forzado a full puede dejar archivos del push actual fuera del diff con causa budget (visible en manifest.excluded); priorizar delta o registrar perdida en medicion D0-C0 | abierta |
+| T16 #65 ai-review F5 | cuerpo del PR decia no tocar Plans.md pero el diff agrega fila T16-f15; corregir cuerpo o mover fila | abierta |
+| T16 cierre | conciliacion pendiente con rc/t16-piloto: su prueba PrepararBrazoDelta espera modo incremental y falla con el forzado; ambas ramas tocan Plans.md; evidencia cruda en evaluation/reviewer/v2/medicion-t16/ de esa rama | abierta |
 | R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
 | R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
 | R0-r3 CodeRabbit | R0.md:26 recuento historico ronda 1 dice 11, deberian ser 10 (9 ContextSearch + 1); corregir numero o quitar parentesis | abierta |
