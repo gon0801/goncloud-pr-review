@@ -13,3 +13,8 @@ def leer_config(ruta):
     archivo = open(ruta)
     datos = archivo.read()
     return eval(datos)
+
+
+def mediana(valores):
+    ordenados = sorted(valores)
+    return ordenados[len(ordenados) // 2]
