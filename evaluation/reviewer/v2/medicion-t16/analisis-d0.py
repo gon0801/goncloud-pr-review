@@ -236,6 +236,7 @@ for rep in (1, 2, 3):
         f"delta ${statistics.median([f['delta_usd'] for f in sub]):.4f} "
         f"mediana ratios {statistics.median([f['ratio'] for f in sub]):.3f}"
     )
-with open("/tmp/t16-f11-pares.json", "w") as fh:
-    json.dump(filas, fh, indent=1, ensure_ascii=False)
-print("detalle en /tmp/t16-f11-pares.json")
+salida = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+if salida:
+    salida.write_text(json.dumps(filas, indent=1, ensure_ascii=False))
+    print(f"detalle en {salida}")

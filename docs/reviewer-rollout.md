@@ -82,11 +82,12 @@ completo desde el paso 1.
 
 ---
 
-# Piloto de T16: orden, avance y medición (fase 1, sin gasto)
+# Piloto de T16: orden, avance y medición
 
-Estado: fase 1 de T16 — documentos y preparación. Cero gasto, cero activación,
-nada instalado. La medición viva y cualquier activación requieren encargo
-posterior con revisión cruzada previa. El corte y el retorno mecánicos son los
+Estado: la medición terminó (63 corridas, $110.6439) y la decisión de D0 se
+ejecutó en el PR #65; el piloto en el repo central y en los consumidores sigue
+pendiente. Nada está activado. Cualquier activación requiere encargo con
+revisión cruzada previa. El corte y el retorno mecánicos son los
 que describe el procedimiento de T11 de arriba.
 
 ## Qué hay congelado hoy
