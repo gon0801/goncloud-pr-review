@@ -96,10 +96,11 @@ que describe el procedimiento de T11 de arriba.
   producto en el SHA exacto (5 ya observados en E1, 10 pendientes) y 18 pares de
   pushes consecutivos (12 pendientes de T16 y 6 de la repeticion 1 sin capturar).
 - SHA candidato del código: tag `t16-candidato-e0898ff` =
-  `e0898ffbb305547bc8175ec64ca1573b7e3c337b`, punta de `rc/t16-piloto` y
-  ref de la medición completa. El piloto queda clavado a ese `ACTION_SHA`; un
-  merge de `main` del repo central no cambia lo que ejecutan los consumidores
-  instalados. (`882d006` queda como el commit que congeló el pairing.)
+  `e0898ffbb305547bc8175ec64ca1573b7e3c337b`, ref de la medición completa
+  (la punta de `rc/t16-piloto` avanza con datos y documentos, no con código).
+  El piloto queda clavado a ese `ACTION_SHA`; un merge de `main` del repo
+  central no cambia lo que ejecutan los consumidores instalados. (`882d006`
+  queda como el commit que congeló el pairing.)
 - D0 y C0 desactivadas por defecto y sin caller que las active:
   `ReviewPolicy.strict_budget=False` en los dos únicos callers de producción
   (`review.py` prepare y execute-request) y `selectivo` sin pasar en ninguno.
@@ -245,10 +246,17 @@ pairing); sumando las 4 dependencias, mediana 50 × $1.4484 ≈ **$72**; media
 ## Resultado real de la medición (fases 9 y 10, 2026-10-09)
 
 Ejecutada sobre el tag `t16-candidato-e0898ff` con proveedor deepseek, 3
-corridas concurrentes como máximo y cadena de memoria por PR. Total:
-**$109.029** — $89.3827 en las 50 corridas de la medición completa (f9) y
-$19.6463 en las 12 de la repetición de los pares de rep 2 (f10). Dentro del
-rango declarado.
+corridas concurrentes como máximo y cadena de memoria por PR. Costo de la
+medición (f9 + f10): **$109.029** — $89.3827 en las 50 corridas de la
+medición completa (f9) y $19.6463 en las 12 de la repetición de los pares de
+rep 2 (f10). Total T16 incluyendo la corrida unitaria de f3 ($1.6149):
+**$110.6439**. Dentro del rango declarado.
+
+**Decisión registrada (docs/evidence/reviewer/D0-C0.md)**: D0 vuelve a
+`current` (no se activa el protocolo delta-d0: el criterio de 20% de ahorro no
+cumple — el delta salió 11-25% más caro en todas las lecturas —, con 0
+High/Critical perdidos y 0 falsos resueltos); C0 queda sin decisión hasta
+congelar y medir pares propios.
 
 Desvío registrado y reemplazado (B1 de VEREDICTO-T16-f9): en f9 los 6 pares de
 la repetición 2 corrieron control antes que delta, al revés del orden congelado

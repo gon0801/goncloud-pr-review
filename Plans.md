@@ -112,7 +112,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | espera go de David |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | medición terminada con go de David (63 corridas, $110.6439, tag `t16-candidato-e0898ff` = e0898ff; fases f1-f11 locales en rc/t16-piloto, sin push: e318211 evidencia y análisis); decisión: D0 volver a current (criterio de 20% de ahorro no cumple: delta 11-25% más caro; 0 perdidos, 0 falsos resueltos, precisión sin jueces) y C0 sin decidir hasta congelar y medir pares propios; evidencia docs/evidence/reviewer/D0-C0.md y evaluation/reviewer/v2/medicion-t16/ |
 
 ### Residuales
 

@@ -30,7 +30,10 @@ VEREDICTO-T16-f9: los artefactos de GitHub vencen, esta copia no).
 
 - Fase 9 (50 corridas): **$89.3827**.
 - Fase 10 (12 corridas, repetición de los pares de rep 2): **$19.6463**.
-- Acumulado T16: **$109.029**.
+- Medición f9+f10: **$109.029**. Total T16 incluyendo la corrida unitaria de
+  costo de f3 ($1.6149, run 37840785742): **$110.6439**.
+- Decisión del análisis: `docs/evidence/reviewer/D0-C0.md` (D0 vuelve a
+  current; C0 sin decidir).
 
 ## Desvío registrado (B1 de VEREDICTO-T16-f9)
 
