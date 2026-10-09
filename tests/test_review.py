@@ -1950,6 +1950,20 @@ class Workflows(unittest.TestCase):
         self.assertIn("${DISABLED,,}", template)
         self.assertIn("if: steps.check.outputs.skip != 'true'", template)
 
+    def test_worker_instala_el_proveedor_antes_del_modelo(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn("actions/cache", worker)
+        self.assertIn(review.CLAUDE_CODE_VERSION, worker)
+        self.assertIn(review.LITELLM_VERSION, worker)
+        self.assertIn("-py${{ steps.py.outputs.version }}-", worker)
+        self.assertLess(
+            worker.index('review.py" install'),
+            worker.index('review.py" run'),
+            "el worker instala Claude Code y LiteLLM antes del paso modelo",
+        )
+        self.assertEqual(worker.count("PROVIDER: opencode-go"), 2)
+        self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
+
     def test_action_caches_install_with_pinned_versions(self):
         action = (ROOT / "action.yml").read_text()
         self.assertIn("actions/cache", action)
@@ -2013,8 +2027,10 @@ class Workflows(unittest.TestCase):
 
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        self.assertIn("API_KEY: ${{ secrets.API_KEY }}", worker)
-        self.assertIn("FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}", worker)
+        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", worker)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
+        self.assertNotIn("secrets.API_KEY", worker)
+        self.assertNotIn("secrets.FALLBACK_API_KEY", worker)
         self.assertIn("retention-days: 7", worker)
         for campo in ("request_id", "run_id", "attempt"):
             self.assertIn(campo, worker)
@@ -2140,7 +2156,8 @@ class Workflows(unittest.TestCase):
             "PR_NUMBER",
             "GITHUB_TOKEN",
         },
-        "run": {"API_KEY", "FALLBACK_API_KEY", "REPO", "PR_NUMBER"},
+        "install": {"PROVIDER", "FALLBACK_ENABLED"},
+        "run": {"API_KEY", "FALLBACK_API_KEY", "PROVIDER", "REPO", "PR_NUMBER"},
         "close-result": set(),
     }
 
@@ -2208,7 +2225,7 @@ class Workflows(unittest.TestCase):
                         for credencial in ("GITHUB_TOKEN", "GH_TOKEN"):
                             self.assertNotIn(credencial, paso["env"])
                     revisados += 1
-        self.assertEqual(revisados, 4)
+        self.assertEqual(revisados, 5)
 
     @contextlib.contextmanager
     def _repo_minimo(self):
