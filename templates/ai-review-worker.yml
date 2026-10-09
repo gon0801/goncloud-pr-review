@@ -70,11 +70,25 @@ jobs:
           BASE_SHA: ${{ inputs.base_sha }}
           MAX_DIFF_BYTES: "1500000"
         run: python "$GITHUB_WORKSPACE/review.py" prepare --work "${RUNNER_TEMP}/ai-review"
+      - name: versión de Python para la caché de instalación
+        id: py
+        run: echo "version=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
+      - name: caché de instalación (Claude Code y LiteLLM)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ai-review
+          key: ai-review-install-${{ runner.os }}-py${{ steps.py.outputs.version }}-claude-2.1.282-litellm-1.102.1
+      - name: instalar Claude Code (y LiteLLM para opencode-go)
+        env:
+          PROVIDER: opencode-go
+          FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: python "$GITHUB_WORKSPACE/review.py" install --work "${RUNNER_TEMP}/ai-review"
       - name: modelo
         working-directory: pr
         env:
-          API_KEY: ${{ secrets.API_KEY }}
-          FALLBACK_API_KEY: ${{ secrets.FALLBACK_API_KEY }}
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: opencode-go
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python "$GITHUB_WORKSPACE/review.py" run --work "${RUNNER_TEMP}/ai-review"
