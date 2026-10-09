@@ -2048,6 +2048,32 @@ class Workflows(unittest.TestCase):
             with self.subTest(campo=campo):
                 self.assertNotEqual(correr(**{campo: valor}), 0)
 
+    def test_el_worker_avisa_al_publicador_por_dispatch(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        publicador = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        avisar = worker[worker.index("\n  avisar:") :]
+        execute = "\n".join(
+            linea
+            for linea in worker[
+                worker.index("\n  execute:") : worker.index("\n  avisar:")
+            ].splitlines()
+            if not linea.strip().startswith("#")
+        )
+        self.assertIn("needs: execute", avisar)
+        self.assertIn("if: always()", avisar)
+        self.assertIn("actions: write", avisar)
+        self.assertNotIn("actions: write", execute)
+        self.assertIn("gh workflow run ai-review-publish.yml", avisar)
+        for campo in ("pr_number", "worker_run_id", "worker_attempt"):
+            self.assertIn(f"-f {campo}=", avisar)
+        for entrada in ("worker_run_id:", "worker_attempt:"):
+            self.assertIn(entrada, publicador)
+        self.assertIn(
+            "(github.event_name == 'workflow_dispatch' && inputs.worker_run_id != '')",
+            publicador,
+        )
+        self.assertIn("WORKER_RUN_ID: ${{ inputs.worker_run_id }}", publicador)
+
     def test_dogfood_workflow_matches_template(self):
         flujos = ROOT / ".github" / "workflows"
         coordinado = [flujos / "ai-review-publish.yml", flujos / "ai-review-worker.yml"]
@@ -2069,9 +2095,9 @@ class Workflows(unittest.TestCase):
                 self.assertIn("repository: gon0801/goncloud-pr-review", texto)
                 fijados.update(re.findall(r"ref: ([0-9a-f]{40})\b", texto))
                 plantilla = (ROOT / "templates" / instalado.name).read_text()
-                for linea in plantilla.splitlines():
+                for linea in texto.splitlines():
                     if "secrets." in linea:
-                        self.assertIn(linea.strip(), texto)
+                        self.assertIn(linea.strip(), plantilla)
         self.assertEqual(len(fijados), 1, "el conjunto coordinado fija un solo SHA")
 
     def test_template_passes_disabled_and_skips_checkout_when_disabled(self):
@@ -2941,6 +2967,54 @@ class Workflows(unittest.TestCase):
                 return mock.Mock(
                     returncode=0, stdout=json.dumps({"permission": "admin"})
                 )
+            for corrida, sha_run in ((79, "e" * 40), (80, "d" * 40)):
+                if f"/actions/runs/{corrida}/attempts/1" in ruta:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=json.dumps(
+                            {
+                                "id": corrida,
+                                "name": "1",
+                                "path": ".github/workflows/ai-review-worker.yml",
+                                "head_branch": "main",
+                                "head_sha": sha_run,
+                                "run_attempt": 1,
+                            }
+                        ),
+                    )
+            if "/compare/" in ruta:
+                estado = "ahead" if f"{'e' * 40}..." in ruta else "diverged"
+                return mock.Mock(returncode=0, stdout=json.dumps({"status": estado}))
+            if "/actions/runs/78/attempts/1" in ruta:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "id": 78,
+                            "name": "ai-review-worker",
+                            "display_title": "ai-review-worker",
+                            "path": ".github/workflows/otro.yml",
+                            "head_branch": "main",
+                            "head_sha": "f" * 40,
+                            "run_attempt": 1,
+                        }
+                    ),
+                )
+            if "/actions/runs/77/attempts/1" in ruta:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "id": 77,
+                            "name": "1",
+                            "display_title": "1",
+                            "path": ".github/workflows/ai-review-worker.yml",
+                            "head_branch": "main",
+                            "head_sha": "f" * 40,
+                            "run_attempt": 1,
+                        }
+                    ),
+                )
             raise AssertionError(f"sh inesperado: {args}")
 
         base_env = {
@@ -3022,6 +3096,133 @@ class Workflows(unittest.TestCase):
             solicitud.state, "failed_retryable", "el fallo deja la solicitud viva"
         )
         self.assertEqual(solicitud.motivo, "falta el secret AI_REVIEW_API_KEY")
+
+    def test_el_resultado_despachado_por_el_worker_se_consume(self):
+        import review_domain as domain
+
+        estado = self._estado_pendiente()
+        digest = review.digest_de_politica(review.politica_de_revision())
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": 1,
+                        "run_id": 77,
+                        "attempt": 1,
+                        "pr_head_sha": "c" * 40,
+                        "policy_digest": digest,
+                        "target": domain.ReviewTarget(
+                            repository="o/r",
+                            pr_number=1,
+                            head_sha="c" * 40,
+                            base_sha="b" * 40,
+                            policy_digest=digest,
+                        ).json(),
+                        "observaciones": [],
+                        "cobertura": domain.COMPLETE_CLAIM,
+                    }
+                )
+            )
+            patches, despachados = self._reconciliar(
+                estado,
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="77",
+                WORKER_ATTEMPT="1",
+            )
+        self.assertEqual(despachados, [], "un resultado no se re-despacha")
+        self.assertTrue(patches, "el resultado se publica")
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertIsInstance(publicado, domain.Valid)
+        self.assertEqual(publicado.snapshot.pending_requests, [])
+        self.assertEqual(publicado.snapshot.completion, domain.COMPLETE_CLAIM)
+
+    def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
+        import review_domain as domain
+
+        digest = review.digest_de_politica(review.politica_de_revision())
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": 1,
+                        "run_id": 78,
+                        "attempt": 1,
+                        "pr_head_sha": "c" * 40,
+                        "policy_digest": digest,
+                        "target": domain.ReviewTarget(
+                            repository="o/r",
+                            pr_number=1,
+                            head_sha="c" * 40,
+                            base_sha="b" * 40,
+                            policy_digest=digest,
+                        ).json(),
+                        "observaciones": [{"title": "falso"}],
+                        "cobertura": domain.COMPLETE_CLAIM,
+                    }
+                )
+            )
+            with self.assertRaises(SystemExit):
+                self._reconciliar(
+                    self._estado_pendiente(),
+                    tmp,
+                    "workflow_dispatch",
+                    WORKER_RUN_ID="78",
+                    WORKER_ATTEMPT="1",
+                )
+
+    def _resultado_de_corrida(self, tmp, corrida):
+        import review_domain as domain
+
+        digest = review.digest_de_politica(review.politica_de_revision())
+        (Path(tmp) / "result.json").write_text(
+            json.dumps(
+                {
+                    "request_id": 1,
+                    "run_id": corrida,
+                    "attempt": 1,
+                    "pr_head_sha": "c" * 40,
+                    "policy_digest": digest,
+                    "target": domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest=digest,
+                    ).json(),
+                    "observaciones": [],
+                    "cobertura": domain.COMPLETE_CLAIM,
+                }
+            )
+        )
+
+    def test_un_worker_de_un_main_anterior_se_acepta(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 79)
+            patches, despachados = self._reconciliar(
+                self._estado_pendiente(),
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="79",
+                WORKER_ATTEMPT="1",
+            )
+        self.assertEqual(despachados, [])
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertEqual(publicado.snapshot.pending_requests, [])
+
+    def test_un_worker_con_sha_fuera_de_main_se_rechaza(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 80)
+            with self.assertRaises(SystemExit):
+                self._reconciliar(
+                    self._estado_pendiente(),
+                    tmp,
+                    "workflow_dispatch",
+                    WORKER_RUN_ID="80",
+                    WORKER_ATTEMPT="1",
+                )
 
     def test_la_recuperacion_redescubre_lo_pendiente(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2578,6 +2578,25 @@ def fallo_de_resultado(artifact, run_id, attempt):
     )
 
 
+def metadatos_del_run(repo, run_id, attempt):
+    """Metadatos del run del worker leídos de la API, con la forma del payload
+    de workflow_run. El worker avisa por workflow_dispatch porque un run
+    despachado con GITHUB_TOKEN no dispara workflow_run al terminar."""
+    datos = json.loads(
+        sh("gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}").stdout
+    )
+    # Con run-name, la API devuelve en "name" el título del run; el workflow
+    # sale del path, que el título no puede imitar.
+    ruta = datos.get("path") or ""
+    return {
+        "id": datos.get("id"),
+        "name": Path(ruta).stem if ruta.startswith(".github/workflows/") else None,
+        "head_branch": datos.get("head_branch"),
+        "head_sha": datos.get("head_sha"),
+        "run_attempt": datos.get("run_attempt"),
+    }
+
+
 def cmd_reconcile(args):
     repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
@@ -2623,9 +2642,19 @@ def cmd_reconcile(args):
         )
     )
 
-    if event_name == "workflow_run":
-        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-        wr = payload.get("workflow_run") or {}
+    resultado_despachado = event_name == "workflow_dispatch" and bool(
+        os.environ.get("WORKER_RUN_ID")
+    )
+    if event_name == "workflow_run" or resultado_despachado:
+        if resultado_despachado:
+            wr = metadatos_del_run(
+                repo,
+                int(os.environ["WORKER_RUN_ID"]),
+                int(os.environ.get("WORKER_ATTEMPT") or 1),
+            )
+        else:
+            payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+            wr = payload.get("workflow_run") or {}
         artifact = json.loads((Path(args.work) / "result.json").read_text())
         solicitud = next(
             (r for r in current.pending_requests if r.id == artifact.get("request_id")),
@@ -2637,13 +2666,24 @@ def cmd_reconcile(args):
             )
         confiable = json.loads(
             sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
-        )
+        ).get("sha")
+        sha_del_run = wr.get("head_sha") or ""
+        if sha_del_run and sha_del_run != confiable:
+            # main pudo avanzar mientras el worker corría: el código del run
+            # sigue siendo confiable si es un ancestro de worker_ref.
+            comparacion = json.loads(
+                sh(
+                    "gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}"
+                ).stdout
+            )
+            if comparacion.get("status") in ("ahead", "identical"):
+                confiable = sha_del_run
         request = request_de_solicitud(
             solicitud,
             repository=repo,
             workflow="ai-review-worker",
             ref=worker_ref,
-            workflow_sha=confiable.get("sha"),
+            workflow_sha=confiable,
         )
         autenticado = authenticate_result(
             {
