@@ -112,13 +112,14 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done (PR #65, squash d9a60cf; evidencia docs/evidence/reviewer/D0-C0.md) |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done con desvío declarado (PR #65, squash d9a60cf; evidencia docs/evidence/reviewer/D0-C0.md: medición f11 de 63 corridas, costo $110.6439; decisión del operador opción 2, forzar revisión completa en el segundo push, ejecutada en review.py:997-1007; C0 queda sin decisión) |
 
 ### Residuales
 
 | Origen | Nota | Estado |
 |---|---|---|
-| T16-f15 análisis | full no forzada por rebase resuelve contra todo lo revisado (rutas_de_cambio, rama por defecto): comportamiento previo a T16, su efecto en falsos resueltos no esta medido; informativo, no bloquea (D0-C0.md) | abierta |
+| T16-f15 análisis | full no forzada por rebase resuelve contra todo lo revisado (rutas_de_cambio, rama por defecto): comportamiento previo a T16, su efecto en falsos resueltos no esta medido; informativo, no bloquea (análisis en rama rc/t16-piloto, pendiente de conciliación) | abierta |
+| T16-f11 análisis (rama rc/t16-piloto) | defecto de produccion: en modo incremental el modelo emite el bloque de hallazgos sin el cierre `-->`, read_snapshot lo rechaza y la corrida quedaria sin hallazgos publicados; 6 de 18 corridas incrementales medidas lo padecieron (0 de 32 completas). Evidencia: runs 37878698057, 37884726453, 37879482251, 37879576042, 37885194802 y 37879918075; bloques recuperados por conteo de llaves con el script versionado evaluation/reviewer/v2/medicion-t16/analisis-d0.py (en esa rama) | abierta |
 | T16 #65 ai-review F1 | preparar_lineal ignora su parametro y su docstring no coincide (tests/test_review.py:266); higiene de pruebas, no bloquea | abierta |
 | T16 #65 ai-review F2 | preparar_lineal hereda el entorno sin fijar EXTRA_EXCLUDES/MAX_DIFF_BYTES (tests/test_review.py:314); posible flake, CI verde | abierta |
 | T16 #65 ai-review F3 | action.yml max_turns documenta tope incremental inalcanzable tras forzar full; actualizar descripcion y prueba o aclarar camino execute-request | abierta |
