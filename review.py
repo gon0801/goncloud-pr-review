@@ -2130,9 +2130,10 @@ def _login_de(comentario):
     return comentario.get("login") or (user or {}).get("login")
 
 
-def publish_checkpoint(decision, observado, adaptador, login=None):
+def publish_checkpoint(decision, observado, adaptador, login=None, visible=None):
     """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
-    bloque y conserva el resto (la prosa puede citar otros). Relee antes de
+    bloque y conserva el resto (la prosa puede citar otros), salvo que
+    `visible(bloque, resto)` arme el cuerpo completo. Relee antes de
     escribir (duplicados del bot y checkpoint ya aplicado); una respuesta de
     PATCH/POST perdida devuelve Unconfirmed para que el siguiente paso relea.
     Un Keep no escribe: es un no-op confirmado.
@@ -2162,8 +2163,13 @@ def publish_checkpoint(decision, observado, adaptador, login=None):
             recibo={"comentario_id": observado.get("id"), "ya_aplicado": True},
             trabajo=decision.work_after_commit,
         )
+    if visible is None:
+
+        def visible(bloque, resto):
+            return f"{MARKER}\n{bloque}\n{resto}" if resto else f"{MARKER}\n{bloque}"
+
     if observado is None:
-        cuerpo = f"{MARKER}\n{bloque}"
+        cuerpo = visible(bloque, "")
         try:
             adaptador.crear(cuerpo)
         except Exception as exc:
@@ -2190,7 +2196,7 @@ def publish_checkpoint(decision, observado, adaptador, login=None):
         else original
     )
     resto = strip_findings_block(resto, last=False).strip()
-    cuerpo = f"{MARKER}\n{bloque}\n{resto}" if resto else f"{MARKER}\n{bloque}"
+    cuerpo = visible(bloque, resto)
     try:
         adaptador.parchar(observado["id"], cuerpo)
     except Exception as exc:
@@ -2642,6 +2648,7 @@ def cmd_reconcile(args):
         )
     )
 
+    artifact = None
     resultado_despachado = event_name == "workflow_dispatch" and bool(
         os.environ.get("WORKER_RUN_ID")
     )
@@ -2789,8 +2796,26 @@ def cmd_reconcile(args):
         for terminada in terminadas:
             print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
 
+    visible = None
+    # Solo un reporte de revisión del target vigente acredita: el dominio
+    # devuelve Commit también al descartar un head viejo o al cerrar una
+    # explicación, y esos no pueden publicar un SHA revisado.
+    if (
+        artifact is not None
+        and isinstance(decision, review_domain.Commit)
+        and solicitud.kind == "review"
+        and review_domain._target_vigente(solicitud, facts, policy)
+    ):
+        visible = revision_visible(
+            artifact,
+            decision.snapshot,
+            {f.id for f in current.findings},
+            artifact.get("pr_head_sha") or head,
+        )
     observado = sticky if sticky else None
-    resultado = publish_checkpoint(decision, observado, adaptador, login=login)
+    resultado = publish_checkpoint(
+        decision, observado, adaptador, login=login, visible=visible
+    )
     if isinstance(resultado, Unconfirmed):
         print(
             f"ai-review: escritura incierta ({resultado.motivo}); se relee en el próximo evento",
@@ -2909,7 +2934,11 @@ def cmd_close_result(args):
     work = Path(args.work)
     paquete = json.loads((work / "request-package.json").read_text())
     resultado = json.loads((work / "result.json").read_text())
-    texto = resultado.get("result") or ""
+    secretos = [
+        os.environ.get(n, "")
+        for n in ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
+    ]
+    texto = redact(resultado.get("result") or "", secretos)
     modelo = parse_model_findings(
         texto, conservar_anclas=politica_de_identidad() == "anchors"
     )
@@ -2921,9 +2950,62 @@ def cmd_close_result(args):
             "cobertura": cobertura_declarada(texto, modelo),
         }
     )
+    for campo in ("total_cost_usd", "usage", "num_turns"):
+        if campo in resultado:
+            paquete[campo] = resultado[campo]
+    paquete["review_provider"] = resultado.get("review_provider") or get_provider()[0]
+    paquete["model_ok"] = modelo is not None
+    manifiesto = work / "manifest.json"
+    if manifiesto.exists():
+        datos = json.loads(manifiesto.read_text())
+        paquete["manifest"] = {k: datos[k] for k in CAMPOS_DEL_ALCANCE if k in datos}
     if ERROR_KEY in resultado:
-        paquete[ERROR_KEY] = resultado[ERROR_KEY]
+        paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
+
+
+# Lo que el comentario visible necesita del manifest del worker; el diff y el
+# contexto se quedan en el worker.
+CAMPOS_DEL_ALCANCE = (
+    "reviewed",
+    "excluded",
+    "max_turns",
+    "mode",
+    "prev_sha",
+    "changed_files",
+)
+
+
+def revision_visible(artifact, snapshot, previos, head):
+    """Arma el comentario del resultado del worker con el mismo render que el
+    revisor directo. Un fallo no marca el SHA como revisado: antepone el aviso
+    a la revisión anterior."""
+
+    def armar(bloque, resto):
+        if ERROR_KEY in artifact:
+            banner = caution_banner(artifact[ERROR_KEY], head, has_previous=bool(resto))
+            return (
+                f"{MARKER}\n{bloque}\n" + insert_caution_banner(resto, banner).rstrip()
+            )
+        proveedor = artifact.get("review_provider")
+        if proveedor not in PROVIDERS:
+            proveedor = get_provider()[0]
+        manifest = {"reviewed": [], "excluded": [], **(artifact.get("manifest") or {})}
+        return compose(
+            artifact,
+            manifest,
+            sha=head,
+            provider=proveedor,
+            findings={
+                "merged": review_domain.hallazgos_legacy(snapshot),
+                "new_ids": [f.id for f in snapshot.findings if f.id not in previos],
+                "block": bloque,
+                "model_ok": artifact.get("model_ok", True),
+                "completion": snapshot.completion,
+            },
+        )
+
+    return armar
 
 
 if __name__ == "__main__":
