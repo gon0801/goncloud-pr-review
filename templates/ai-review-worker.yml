@@ -117,3 +117,25 @@ jobs:
           name: ai-review-result-request-${{ inputs.request_id }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: "${{ runner.temp }}/ai-review"
           retention-days: 7
+
+  # Un run despachado con GITHUB_TOKEN no dispara workflow_run al terminar, así
+  # que el worker avisa al publicador con workflow_dispatch. Job aparte para que
+  # el paso que corre el modelo no tenga actions: write.
+  avisar:
+    needs: execute
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: avisar al publicador
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+          WORKER_ATTEMPT: ${{ github.run_attempt }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "ai-review: número de PR inválido" >&2; exit 1; }
+          gh workflow run ai-review-publish.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" \
+            -f pr_number="$PR_NUMBER" -f worker_run_id="$WORKER_RUN_ID" -f worker_attempt="$WORKER_ATTEMPT"
