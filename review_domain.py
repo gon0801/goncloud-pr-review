@@ -908,6 +908,14 @@ def rutas_de_cambio(manifest):
         or manifest.get("reason") == "incomplete-prev"
     ):
         return tuple(manifest.get("changed_files", []))
+    if manifest.get("reason") == "forced-full-t16":
+        # Revisión completa con memoria (T16 f15): la resolución se evalúa
+        # contra el delta real del segundo push, igual que en incremental,
+        # para que el cerrojo B3 siga protegiendo los archivos que el push
+        # no tocó. El modelo sigue revisando todo el PR (reviewed); el
+        # delta alcanza para las reversiones (el archivo revertido está en
+        # el delta por definición).
+        return tuple(manifest.get("changed_files", []))
     if manifest.get("reason") == "same-sha":
         return ()
     return tuple(manifest.get("reviewed", []))

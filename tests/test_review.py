@@ -263,6 +263,93 @@ class Prepare(unittest.TestCase):
             self.assertNotIn("Ignore all previous rules", system)
             self.assertEqual((work / "pr.md").read_text(), "# Fix total\n\n\n")
 
+    def preparar_lineal(self, tmp, estado_hallazgos):
+        """Repo lineal base -> previo -> cabeza con prev.json usable en previo.
+
+        Devuelve (repo, work, previo) tras correr prepare; la memoria es
+        utilizable (estado con hallazgos y completion complete), exactamente el
+        caso que antes elegia el camino incremental.
+        """
+        repo, work = Path(tmp, "repo"), Path(tmp, "work")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "t@t")
+        git(repo, "config", "user.name", "t")
+        (repo / "app.py").write_text("def a():\n    return 1\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        base = git(repo, "rev-parse", "HEAD")
+        (repo / "previo.py").write_text("def b():\n    return 2\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "push anterior")
+        previo = git(repo, "rev-parse", "HEAD")
+        (repo / "cabeza.py").write_text("def c():\n    return 3\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "push medido")
+        cabeza = git(repo, "rev-parse", "HEAD")
+        work.mkdir()
+        (work / "prev.json").write_text(
+            json.dumps(
+                {
+                    "sha": previo,
+                    "state": {
+                        "seen": 1,
+                        "findings": [
+                            {
+                                "id": "F1",
+                                "file": "previo.py",
+                                "line": 1,
+                                "severity": "Low",
+                                "title": "algo menor",
+                                "state": "open",
+                            }
+                        ],
+                    },
+                    "completion": "complete",
+                }
+            )
+        )
+        event = Path(tmp, "event.json")
+        event.write_text(json.dumps({"pull_request": {"title": "t", "body": "b"}}))
+        env = dict(
+            os.environ,
+            HEAD_SHA=cabeza,
+            BASE_SHA=base,
+            GITHUB_EVENT_PATH=str(event),
+        )
+        subprocess.run(
+            [sys.executable, str(ROOT / "review.py"), "prepare", "--work", str(work)],
+            cwd=repo,
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        return work, previo
+
+    def test_prev_usable_forces_full_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work, previo = self.preparar_lineal(
+                tmp,
+                [{"id": "F1", "file": "previo.py", "severity": "Low"}],
+            )
+            manifest = json.loads((work / "manifest.json").read_text())
+            self.assertEqual(manifest["mode"], "full")
+            self.assertEqual(manifest["reason"], "forced-full-t16")
+            self.assertEqual(manifest["prev_sha"], previo)
+
+    def test_prev_usable_reviews_whole_pr_so_blocks_cannot_be_lost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work, previo = self.preparar_lineal(
+                tmp,
+                [{"id": "F1", "file": "previo.py", "severity": "Low"}],
+            )
+            manifest = json.loads((work / "manifest.json").read_text())
+            # Todo el diff del PR (base..cabeza), no solo el delta del ultimo
+            # push (cabeza.py): sin memoria que achique el alcance, los bloques
+            # de hallazgos no pueden perderse por el camino de la memoria.
+            self.assertEqual(sorted(manifest["reviewed"]), ["cabeza.py", "previo.py"])
+            self.assertNotEqual(manifest["mode"], "incremental")
+
 
 FAKE_GH = textwrap.dedent("""\
     #!/usr/bin/env python3
@@ -3689,7 +3776,10 @@ class IncrementalPrepare(unittest.TestCase):
         )
         return json.loads((work / "manifest.json").read_text())
 
-    def test_push2_narrows_diff_and_hands_prev_findings(self):
+    def test_push2_runs_full_by_decision(self):
+        # T16 f13 (D0-C0.md): el incremental medido costo 11-25% mas que una
+        # revision completa del mismo par y perdio bloques; por decision del
+        # operador el segundo push corre completo aunque la memoria sea usable.
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(
@@ -3703,15 +3793,15 @@ class IncrementalPrepare(unittest.TestCase):
                     "state": {"findings": [make_finding("F1")], "next": 2},
                 },
             )
-            self.assertEqual(manifest["mode"], "incremental")
-            self.assertEqual(manifest["changed_files"], ["other.py"])
-            self.assertEqual(manifest["reviewed"], ["other.py"])
+            self.assertEqual(
+                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+            )
+            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
             patch = (work / "diff.patch").read_text()
             self.assertIn("other.py", patch)
-            self.assertNotIn("app.py", patch)
+            self.assertIn("app.py", patch)
             prev_md = (work / "prev_findings.md").read_text()
             self.assertIn("F1", prev_md)
-            self.assertIn("app.py", prev_md)
 
     def test_rebase_falls_back_to_full(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3812,7 +3902,7 @@ class ReviewContinuity(unittest.TestCase):
             review.cmd_gate(argparse.Namespace(work=str(work)))
         return json.loads((work / "prev.json").read_text()), output.call_args.args
 
-    def test_partial_publish_recovers_full_scope_then_returns_to_incremental(self):
+    def test_partial_publish_recovers_full_scope_then_stays_full_by_decision(self):
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -3859,8 +3949,110 @@ class ReviewContinuity(unittest.TestCase):
             next_head = git(repo, "rev-parse", "HEAD")
             previous, _ = self.gate(work, next_head, body)
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
-            self.assertEqual(prepared["mode"], "incremental")
-            self.assertEqual(prepared["reviewed"], ["other.py"])
+            self.assertEqual(
+                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+            )
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+
+    def test_forced_full_still_resolves_reverted_files(self):
+        # T16 f14 (B1 del veredicto f13): en la corrida forzada a full, un
+        # hallazgo abierto sobre un archivo que el segundo push revierte a la
+        # base se resuelve igual que en incremental: el forzado conserva el
+        # delta real para la revision de reversiones.
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            finding = make_finding(file="app.py")
+            body = self.publish(
+                work,
+                prev,
+                {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []},
+                {"result": f"{block_of(finding)}\nCOVERAGE: complete"},
+                repo=repo,
+            )
+            previous, _ = self.gate(work, head, body)
+            # push2 revierte app.py al contenido de la base y cambia other.py
+            (repo / "app.py").write_text("v1\n")
+            (repo / "other.py").write_text("v3\n")
+            git(repo, "commit", "-qam", "push2 revierte app.py")
+            next_head = git(repo, "rev-parse", "HEAD")
+            prepared = fixture.run_prepare(repo, work, base, next_head, previous)
+            self.assertEqual(
+                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+            )
+            # El publicador corre en el checkout del repo bajo revision:
+            # _repo_actual se fija al repo temporal, como el sh mockeado de
+            # los otros tests de esta clase.
+            with mock.patch.object(
+                review, "_repo_actual", return_value=review.GitRepository(repo)
+            ):
+                body = self.publish(
+                    work,
+                    next_head,
+                    prepared,
+                    {
+                        "result": f"{block_of(make_finding(file='other.py'))}\n"
+                        "COVERAGE: complete"
+                    },
+                    body,
+                )
+            self.assertIn(
+                ("F1", "resolved"),
+                [
+                    (f["id"], f["state"])
+                    for f in review.parse_findings_block(body)["findings"]
+                ],
+            )
+
+    def test_forced_full_rejects_resolved_on_untouched_files(self):
+        # T16 f15 (B1 del veredicto f14): en la corrida forzada a full, el
+        # cerrojo B3 sigue vigente: un "resolved" que el modelo declara sobre
+        # un archivo que el push no toco queda abierto. La resolucion se
+        # evalua contra el delta real, no contra todo lo revisado.
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            body = self.publish(
+                work,
+                prev,
+                {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []},
+                {
+                    "result": f"{block_of(make_finding('F2', file='app.py'))}\n"
+                    "COVERAGE: complete"
+                },
+                repo=repo,
+            )
+            previous, _ = self.gate(work, head, body)
+            # push2 toca solo other.py; app.py (con F2 abierto) no cambia
+            (repo / "other.py").write_text("v3\n")
+            git(repo, "commit", "-qam", "push2 toca other.py")
+            next_head = git(repo, "rev-parse", "HEAD")
+            prepared = fixture.run_prepare(repo, work, base, next_head, previous)
+            self.assertEqual(
+                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+            )
+            self.assertEqual(prepared["changed_files"], ["other.py"])
+            with mock.patch.object(
+                review, "_repo_actual", return_value=review.GitRepository(repo)
+            ):
+                body = self.publish(
+                    work,
+                    next_head,
+                    prepared,
+                    {
+                        "result": f"{block_of(make_finding('F2', file='app.py', state='resolved'))}\n"
+                        "COVERAGE: complete"
+                    },
+                    body,
+                )
+            estados = [
+                (f["file"], f["state"])
+                for f in review.parse_findings_block(body)["findings"]
+            ]
+            # El id lo renumera el publicador; lo que afirma B3 es el estado
+            # del hallazgo sobre su archivo.
+            self.assertIn(("app.py", "open"), estados)
+            self.assertNotIn(("app.py", "resolved"), estados)
 
     def test_recovery_resolves_only_actual_changes_and_detects_reverts(self):
         fixture = IncrementalPrepare()
@@ -7122,9 +7314,10 @@ class GitPaths(unittest.TestCase):
             head2 = commit_tree(repo, entries2, [head])
 
             manifest = prepare_manifest(tmp, repo, head, head2)
-            self.assertIn("malo\\xff.py", manifest["changed_files"])
+            self.assertEqual(
+                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+            )
             self.assertEqual(manifest["reviewed"], ["nuevo.txt"])
-            self.assertEqual(manifest["mode"], "incremental")
             encoding = {
                 e["path"] for e in manifest["excluded"] if e["reason"] == "encoding"
             }

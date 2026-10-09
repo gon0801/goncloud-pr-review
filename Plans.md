@@ -118,6 +118,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 
 | Origen | Nota | Estado |
 |---|---|---|
+| T16-f15 análisis | full no forzada por rebase resuelve contra todo lo revisado (rutas_de_cambio, rama por defecto): comportamiento previo a T16, su efecto en falsos resueltos no esta medido; informativo, no bloquea (D0-C0.md) | abierta |
 | R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
 | R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
 | R0-r3 CodeRabbit | R0.md:26 recuento historico ronda 1 dice 11, deberian ser 10 (9 ContextSearch + 1); corregir numero o quitar parentesis | abierta |
