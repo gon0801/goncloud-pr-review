@@ -23,9 +23,9 @@ ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
   cambia lo que ejecutan los consumidores instalados.
 - Si la rama cambió durante la instalación, el instalador reintenta sobre la
   punta nueva sin forzar; si no logra en tres intentos, falla con error.
-- El conjunto lee los secrets `API_KEY` (proveedor principal) y
-  `FALLBACK_API_KEY` (respaldo) del consumidor; el escritor que el retorno
-  repone lee `AI_REVIEW_API_KEY` y `DEEPSEEK_API_KEY`.
+- El conjunto lee los mismos secrets que el escritor que el retorno repone:
+  `AI_REVIEW_API_KEY` (opencode-go, principal) y `DEEPSEEK_API_KEY`
+  (respaldo). No hace falta crear secrets nuevos para instalarlo.
 
 El modo actual (`scripts/install.sh gon0801/mi-repo`) no cambia: instala
 `ai-review.yml` y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de
