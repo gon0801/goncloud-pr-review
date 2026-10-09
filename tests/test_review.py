@@ -4004,6 +4004,56 @@ class ReviewContinuity(unittest.TestCase):
                 ],
             )
 
+    def test_forced_full_rejects_resolved_on_untouched_files(self):
+        # T16 f15 (B1 del veredicto f14): en la corrida forzada a full, el
+        # cerrojo B3 sigue vigente: un "resolved" que el modelo declara sobre
+        # un archivo que el push no toco queda abierto. La resolucion se
+        # evalua contra el delta real, no contra todo lo revisado.
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            body = self.publish(
+                work,
+                prev,
+                {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []},
+                {
+                    "result": f"{block_of(make_finding('F2', file='app.py'))}\n"
+                    "COVERAGE: complete"
+                },
+                repo=repo,
+            )
+            previous, _ = self.gate(work, head, body)
+            # push2 toca solo other.py; app.py (con F2 abierto) no cambia
+            (repo / "other.py").write_text("v3\n")
+            git(repo, "commit", "-qam", "push2 toca other.py")
+            next_head = git(repo, "rev-parse", "HEAD")
+            prepared = fixture.run_prepare(repo, work, base, next_head, previous)
+            self.assertEqual(
+                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+            )
+            self.assertEqual(prepared["changed_files"], ["other.py"])
+            with mock.patch.object(
+                review, "_repo_actual", return_value=review.GitRepository(repo)
+            ):
+                body = self.publish(
+                    work,
+                    next_head,
+                    prepared,
+                    {
+                        "result": f"{block_of(make_finding('F2', file='app.py', state='resolved'))}\n"
+                        "COVERAGE: complete"
+                    },
+                    body,
+                )
+            estados = [
+                (f["file"], f["state"])
+                for f in review.parse_findings_block(body)["findings"]
+            ]
+            # El id lo renumera el publicador; lo que afirma B3 es el estado
+            # del hallazgo sobre su archivo.
+            self.assertIn(("app.py", "open"), estados)
+            self.assertNotIn(("app.py", "resolved"), estados)
+
     def test_recovery_resolves_only_actual_changes_and_detects_reverts(self):
         fixture = IncrementalPrepare()
         cases = [
