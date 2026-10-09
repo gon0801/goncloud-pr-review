@@ -1936,13 +1936,143 @@ class Workflows(unittest.TestCase):
         cls.coord_lineas = cls.coord_texto.splitlines()
         cls.worker_lineas = cls.worker_texto.splitlines()
 
+    @staticmethod
+    def _bloques_run(texto):
+        bloques, actual, sangria = [], None, 0
+        for linea in texto.splitlines():
+            m = re.match(r"^(\s*)(?:- )?run: ?(\|)?(.*)$", linea)
+            if m:
+                actual = [m.group(3)]
+                bloques.append(actual)
+                sangria = len(m.group(1))
+                if not m.group(2):
+                    actual = None
+                continue
+            if actual is not None:
+                if linea.strip() and len(linea) - len(linea.lstrip()) <= sangria:
+                    actual = None
+                else:
+                    actual.append(linea)
+        return ["\n".join(b) for b in bloques]
+
+    def test_ningun_run_de_las_plantillas_expande_expresiones(self):
+        for nombre in ("ai-review-publish.yml", "ai-review-worker.yml"):
+            texto = (ROOT / "templates" / nombre).read_text()
+            bloques = self._bloques_run(texto)
+            self.assertGreaterEqual(len(bloques), 3, nombre)
+            for bloque in bloques:
+                with self.subTest(plantilla=nombre, run=bloque.strip()[:60]):
+                    self.assertNotIn("${{", bloque)
+
+    def _paso_publicador(self, nombre_paso):
+        texto = (ROOT / "templates" / "ai-review-publish.yml").read_text()
+        inicio = texto.index(f"- name: {nombre_paso}")
+        fin = texto.index("- name:", inicio + 1)
+        return texto[inicio:fin]
+
+    def _correr_preparar_entorno(self, pr_number, head="", base="", rama="main"):
+        paso = self._paso_publicador("preparar entorno")
+        script = self._bloques_run(paso)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            destino = Path(tmp) / "env"
+            destino.write_text("")
+            entorno = {
+                "PATH": os.environ["PATH"],
+                "GITHUB_ENV": str(destino),
+                "RUNNER_TEMP": tmp,
+                "GITHUB_REPOSITORY": "o/r",
+                "EV_PR": pr_number,
+                "EV_HEAD": head,
+                "EV_BASE": base,
+                "EV_PATH": "/tmp/evento.json",
+                "EV_DEFAULT_BRANCH": rama,
+            }
+            r = subprocess.run(
+                ["bash", "-eo", "pipefail", "-c", script],
+                env=entorno,
+                capture_output=True,
+                text=True,
+            )
+            return r.returncode, destino.read_text()
+
+    def test_preparar_entorno_rechaza_un_pr_que_no_es_numero(self):
+        for malicioso in ('1"\nGITHUB_TOKEN=robado', "12\nGITHUB_TOKEN=robado"):
+            with self.subTest(pr=malicioso):
+                codigo, escrito = self._correr_preparar_entorno(malicioso)
+                self.assertNotEqual(codigo, 0)
+                self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", "a" * 40 + "\nX=1")
+        self.assertNotEqual(codigo, 0)
+        self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", rama="main\nX=1")
+        self.assertNotEqual(codigo, 0)
+        self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", rama="release/v1+hotfix")
+        self.assertEqual(codigo, 0)
+        self.assertIn("WORKER_REF=release/v1+hotfix\n", escrito)
+        codigo, escrito = self._correr_preparar_entorno("12", "a" * 40, "b" * 40)
+        self.assertEqual(codigo, 0)
+        self.assertIn("PR_NUMBER=12\n", escrito)
+        self.assertIn(f"HEAD_SHA={'a' * 40}\n", escrito)
+        codigo, escrito = self._correr_preparar_entorno("12", "no-es-sha")
+        self.assertNotEqual(codigo, 0)
+
+    def test_validar_entradas_del_worker_rechaza_valores_multilinea(self):
+        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        inicio = texto.index("- name: validar entradas")
+        script = self._bloques_run(texto[inicio : texto.index("- name:", inicio + 1)])[
+            0
+        ]
+
+        def correr(**entradas):
+            base = {
+                "REQUEST_ID": "1",
+                "PR_NUMBER": "12",
+                "HEAD_SHA": "a" * 40,
+                "BASE_SHA": "b" * 40,
+            }
+            base.update(entradas)
+            return subprocess.run(
+                ["bash", "-eo", "pipefail", "-c", script],
+                env={"PATH": os.environ["PATH"], **base},
+                capture_output=True,
+            ).returncode
+
+        self.assertEqual(correr(), 0)
+        for campo, valor in (
+            ("REQUEST_ID", "1\nX=1"),
+            ("PR_NUMBER", '12"; touch pwn; "'),
+            ("HEAD_SHA", "a" * 40 + "\nX=1"),
+            ("BASE_SHA", "no-es-sha"),
+        ):
+            with self.subTest(campo=campo):
+                self.assertNotEqual(correr(**{campo: valor}), 0)
+
     def test_dogfood_workflow_matches_template(self):
-        template = (ROOT / "templates/ai-review.yml").read_text()
-        dogfood = (ROOT / ".github/workflows/ai-review.yml").read_text()
-        self.assertEqual(
-            dogfood,
-            template.replace("uses: gon0801/goncloud-pr-review@main", "uses: ./"),
-        )
+        flujos = ROOT / ".github" / "workflows"
+        coordinado = [flujos / "ai-review-publish.yml", flujos / "ai-review-worker.yml"]
+        dogfood = flujos / "ai-review.yml"
+        if dogfood.exists():
+            self.assertFalse(
+                any(p.exists() for p in coordinado), "un solo escritor por repo"
+            )
+            template = (ROOT / "templates/ai-review.yml").read_text()
+            self.assertEqual(
+                dogfood.read_text(),
+                template.replace("uses: gon0801/goncloud-pr-review@main", "uses: ./"),
+            )
+            return
+        fijados = set()
+        for instalado in coordinado:
+            with self.subTest(flujo=instalado.name):
+                texto = instalado.read_text()
+                self.assertIn("repository: gon0801/goncloud-pr-review", texto)
+                fijados.update(re.findall(r"ref: ([0-9a-f]{40})\b", texto))
+                plantilla = (ROOT / "templates" / instalado.name).read_text()
+                for linea in plantilla.splitlines():
+                    if "secrets." in linea:
+                        self.assertIn(linea.strip(), texto)
+        self.assertEqual(len(fijados), 1, "el conjunto coordinado fija un solo SHA")
 
     def test_template_passes_disabled_and_skips_checkout_when_disabled(self):
         template = (ROOT / "templates/ai-review.yml").read_text()
@@ -2136,9 +2266,9 @@ class Workflows(unittest.TestCase):
         exportado = next(
             linea.strip()
             for linea in self.coord_lineas
-            if linea.strip().startswith('echo "PR_NUMBER=')
+            if linea.strip().startswith("EV_PR: ")
         )
-        pr_number = self._render(exportado, ctx_wr).split("PR_NUMBER=", 1)[1].strip('"')
+        pr_number = self._render(exportado, ctx_wr).split("EV_PR: ", 1)[1].strip()
         self.assertEqual(int(pr_number), 12, "PR_NUMBER del workflow_run es el número")
 
     PASOS_Y_VARIABLES = {
@@ -2442,10 +2572,14 @@ class Workflows(unittest.TestCase):
             }
             evento = Path(ws) / "event.json"
             evento.write_text("{}")
+            env_traer = dict(os.environ)
+            for clave, valor in traer["env"].items():
+                env_traer[clave] = self._render(valor, valores)
             for linea in lineas_fetch:
                 subprocess.run(
                     ["bash", "-c", self._render(linea, valores)],
                     cwd=ws,
+                    env=env_traer,
                     check=True,
                     capture_output=True,
                 )
