@@ -1,0 +1,20 @@
+{
+  "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+  "head": "afb789720670aafcc09c48c4401dcabee18df556",
+  "reviewed": [
+    "review.py",
+    "scripts/install.sh",
+    "tests/test_review.py",
+    "action.yml",
+    "README.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 18799,
+  "over_budget_bytes": 0,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

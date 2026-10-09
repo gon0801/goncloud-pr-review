@@ -1,0 +1,24 @@
+{
+  "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+  "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+  "reviewed": [
+    "review.py",
+    "tests/test_review.py",
+    "action.yml",
+    "README.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 47540,
+  "over_budget_bytes": 0,
+  "mode": "incremental",
+  "prev_sha": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+  "changed_files": [
+    "README.md",
+    "action.yml",
+    "review.py",
+    "tests/test_review.py"
+  ],
+  "reason": "",
+  "has_prev_findings": true,
+  "max_turns": 60
+}

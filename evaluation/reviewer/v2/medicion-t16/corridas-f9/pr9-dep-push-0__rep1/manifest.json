@@ -1,0 +1,23 @@
+{
+  "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+  "head": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+  "reviewed": [
+    "review.py",
+    "tests/test_review.py",
+    ".github/workflows/ai-review.yml",
+    "action.yml",
+    "templates/ai-review.yml",
+    "Plans.md",
+    "README.md",
+    "prompt.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 78444,
+  "over_budget_bytes": 0,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

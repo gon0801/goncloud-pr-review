@@ -34,12 +34,35 @@ observación debe repetir el CaseKey declarado en el corpus, sin diferencias.
 
 ## Proyección de push-casos
 
-Para cada caso del corpus con `pushes = [p0, p1, …, pn]` y `n >= 1`, además del
-caso base (head del PR, `sha_anterior` null) existen los casos `<caso>-push-<i>`
-para `i = 1..n`, con `head = pushes[i]` y `sha_anterior = pushes[i-1]`; heredan
-`repo`, `base` y `tarea` (la categoría del PR). Los casos con 0 o 1 push no
-generan push-casos. Con el corpus congelado: 20 casos base y 6 push-casos
-(`pr2-push-1/2/3`, `pr4-push-1`, `pr9-push-1`, `pr13-push-1`), 26 en total.
+Para cada caso del corpus con `pushes = [p0, p1, …, pn]` y al menos un push,
+además del caso base (head del PR, `sha_anterior` null) existen los casos
+`<caso>-push-<i>` para `i = 1..n`, con `head = pushes[i]` y
+`sha_anterior = pushes[i-1]`; heredan `repo`, `base` y `tarea` (la categoría
+del PR). Los casos sin pushes o con un único push no generan push-casos. Con
+el corpus congelado: 20 casos base y 6 push-casos (`pr2-push-1/2/3`,
+`pr4-push-1`, `pr9-push-1`, `pr13-push-1`).
+
+## Dependencias T16
+
+Congeladas en T16 f6 y corregidas en f8 (decisión B1 de VEREDICTO-T16-f7,
+opción i). El experimento `dependencia-control-push-0` del `pairing.json`
+congela, para cada caso del corpus con al menos dos pushes, un caso
+`<caso>-dep-push-0` con `head = pushes[0]` y `sha_anterior` null (con un
+único push el caso base ya revisa `pushes[0]` y no hay dependencia). Con el
+corpus congelado: 4 dependencias (`pr2-dep-push-0`, `pr4-dep-push-0`,
+`pr9-dep-push-0`, `pr13-dep-push-0`), una corrida de control por PR, corrida
+una sola vez y compartida por las repeticiones 1-3 de su PR.
+
+Esa corrida es el eslabón inicial de la cadena de memoria de los deltas de
+push-1: no es un par medido y **no se registra en `observaciones.json` v2**.
+Su única salida es el bloque de hallazgos del control, que viaja como
+`prev_findings` a los deltas de push-1 y queda retenido en el artefacto
+`e1-salida-<caso>-…` de la corrida. Por eso los casos `<caso>-dep-push-0` NO
+están en `partition.json`: la partición sólo cubre los 26 casos que generan
+observaciones (20 base + 6 push-casos), y el generador ciego v2 exige
+`set(particion) == casos(observaciones)`. Si una corrida de dependencia se
+registrara como observación v2, el comparador la rechazaría como par con
+«contraparte ausente» (variante `ninguno`).
 
 `partition.json` lleva los 26 casos: cada push-caso hereda el grupo de
 partición de su PR. `pairing.json` declara cada par de `push-consecutivo` con
@@ -47,7 +70,9 @@ su caso `<caso>-push-<i>` y esa CaseKey de proyección. Las observaciones de un
 push se capturan con caso `<caso>-push-<i>` y su head/sha_anterior de
 proyección, nunca bajo el caso base: el comparador exige que cada observación
 repita la CaseKey del caso declarado y el caso base declara el head del PR, así
-que una observación de push bajo el caso base se rechaza con salida 2.
+que una observación de push bajo el caso base se rechaza con salida 2. Las corridas de
+las dependencias no generan observaciones adjudicables: no son pares y el
+informe v2 no las evalúa.
 
 ## Generar la hoja ciega v2
 

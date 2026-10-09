@@ -1,0 +1,24 @@
+{
+  "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+  "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+  "reviewed": [
+    ".saikit/decisiones/rollout-ai-review.tsv",
+    "review.py",
+    "tests/test_review.py",
+    ".saikit/findings/blast-rollout-ai-review.json"
+  ],
+  "excluded": [],
+  "diff_bytes": 29929,
+  "over_budget_bytes": 0,
+  "mode": "incremental",
+  "prev_sha": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+  "changed_files": [
+    ".saikit/decisiones/rollout-ai-review.tsv",
+    ".saikit/findings/blast-rollout-ai-review.json",
+    "review.py",
+    "tests/test_review.py"
+  ],
+  "reason": "",
+  "has_prev_findings": true,
+  "max_turns": 30
+}
