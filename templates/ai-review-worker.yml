@@ -43,6 +43,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: validar entradas
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          for valor in "$REQUEST_ID" "$PR_NUMBER"; do
+            printf '%s' "$valor" | grep -Eqx '[0-9]+' || { echo "ai-review: entrada numérica inválida" >&2; exit 1; }
+          done
+          for sha in "$HEAD_SHA" "$BASE_SHA"; do
+            printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}' || { echo "ai-review: SHA inválido" >&2; exit 1; }
+          done
       - name: preparar solicitud y paquete
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,15 +63,19 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ inputs.head_sha }}
           BASE_SHA: ${{ inputs.base_sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
         run: |
           mkdir -p "${RUNNER_TEMP}/ai-review"
           python "$GITHUB_WORKSPACE/review.py" execute-request \
-            --request-id "${{ inputs.request_id }}" \
+            --request-id "$REQUEST_ID" \
             --work "${RUNNER_TEMP}/ai-review"
       - name: traer el PR como datos
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
         run: |
-          git fetch --no-tags origin "+${{ inputs.head_sha }}:refs/ai-review/head"
-          git fetch --no-tags origin "${{ inputs.base_sha }}"
+          git fetch --no-tags origin "+${HEAD_SHA}:refs/ai-review/head"
+          git fetch --no-tags origin "${BASE_SHA}"
           git worktree add --detach pr refs/ai-review/head
       - name: preparar contexto
         working-directory: pr
