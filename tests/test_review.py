@@ -1970,7 +1970,7 @@ class Workflows(unittest.TestCase):
         fin = texto.index("- name:", inicio + 1)
         return texto[inicio:fin]
 
-    def _correr_preparar_entorno(self, pr_number, head="", base=""):
+    def _correr_preparar_entorno(self, pr_number, head="", base="", rama="main"):
         paso = self._paso_publicador("preparar entorno")
         script = self._bloques_run(paso)[0]
         with tempfile.TemporaryDirectory() as tmp:
@@ -1985,7 +1985,7 @@ class Workflows(unittest.TestCase):
                 "EV_HEAD": head,
                 "EV_BASE": base,
                 "EV_PATH": "/tmp/evento.json",
-                "EV_DEFAULT_BRANCH": "main",
+                "EV_DEFAULT_BRANCH": rama,
             }
             r = subprocess.run(
                 ["bash", "-eo", "pipefail", "-c", script],
@@ -2004,6 +2004,12 @@ class Workflows(unittest.TestCase):
         codigo, escrito = self._correr_preparar_entorno("12", "a" * 40 + "\nX=1")
         self.assertNotEqual(codigo, 0)
         self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", rama="main\nX=1")
+        self.assertNotEqual(codigo, 0)
+        self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", rama="release/v1+hotfix")
+        self.assertEqual(codigo, 0)
+        self.assertIn("WORKER_REF=release/v1+hotfix\n", escrito)
         codigo, escrito = self._correr_preparar_entorno("12", "a" * 40, "b" * 40)
         self.assertEqual(codigo, 0)
         self.assertIn("PR_NUMBER=12\n", escrito)
