@@ -274,6 +274,7 @@ class WorkflowE1Measure(unittest.TestCase):
         self.assertIn("if: inputs.prev_sha != ''", paso)
         self.assertIn("parse_model_findings", paso)
         self.assertIn("merge_findings", paso)
+        self.assertIn('merged["seen"] = 0', paso)
         self.assertIn("serialize_findings", paso)
         self.assertIn("parse_findings_block", paso)
         self.assertIn('"sha": os.environ["PREV_SHA"]', paso)

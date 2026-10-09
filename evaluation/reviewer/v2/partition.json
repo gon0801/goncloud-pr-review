@@ -1,18 +1,21 @@
 {
   "meta": {
     "que_es": "asignación de PRs completos a ajuste o evaluación reservada",
-    "regla": "hereda la partición congelada del corpus E1: orden por número de PR, reservada en los índices i % 3 == 0; cada caso es un PR completo y todos sus pushes quedan en el mismo grupo; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], que heredan repo, base y tarea (categoría) del PR y el grupo de partición de su PR; los casos con 0 o 1 push no generan push-casos",
+    "regla": "hereda la partición congelada del corpus E1: orden por número de PR, reservada en los índices i % 3 == 0; cada caso es un PR completo y todos sus pushes quedan en el mismo grupo; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], que heredan repo, base y tarea (categoría) del PR y el grupo de partición de su PR; los casos con 0 o 1 push no generan push-casos; proyección de dependencias T16 (congelada en f7): para cada caso del corpus con n >= 2 pushes existe el caso <caso>-dep-push-0 con head = pushes[0] y sha_anterior null, heredando repo, base, tarea y el grupo de partición de su PR; es el eslabón de memoria de los deltas de push-1, no es un par medido; con n = 1 el caso base ya revisa pushes[0] y no genera dependencia",
     "fuente": "evaluation/reviewer/corpus.json",
-    "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)"
+    "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)",
+    "congelado_T16_f7": "2026-10-08 (T16 f7, base 19e4928): 4 casos <caso>-dep-push-0 añadidos con la regla de arriba, uno por PR con pushes (pr2, pr4, pr9, pr13)"
   },
   "particion": {
     "pr10": "ajuste",
     "pr13": "reservada",
+    "pr13-dep-push-0": "reservada",
     "pr13-push-1": "reservada",
     "pr14": "ajuste",
     "pr18": "ajuste",
     "pr19": "reservada",
     "pr2": "reservada",
+    "pr2-dep-push-0": "reservada",
     "pr2-push-1": "reservada",
     "pr2-push-2": "reservada",
     "pr2-push-3": "reservada",
@@ -27,10 +30,12 @@
     "pr30": "reservada",
     "pr31": "ajuste",
     "pr4": "ajuste",
+    "pr4-dep-push-0": "ajuste",
     "pr4-push-1": "ajuste",
     "pr6": "ajuste",
     "pr8": "reservada",
     "pr9": "ajuste",
+    "pr9-dep-push-0": "ajuste",
     "pr9-push-1": "ajuste"
   }
 }

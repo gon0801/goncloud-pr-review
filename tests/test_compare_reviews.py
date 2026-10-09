@@ -465,6 +465,14 @@ def inventario_proyectado_v2():
                 "tarea": caso["categoria"],
                 "sha_anterior": pushes[i - 1],
             }
+        if len(pushes) >= 2:
+            inventario[f"{caso['caso']}-dep-push-0"] = {
+                "repo": caso["repo"],
+                "base": caso["base"],
+                "head": pushes[0],
+                "tarea": caso["categoria"],
+                "sha_anterior": None,
+            }
     return inventario
 
 
@@ -781,13 +789,14 @@ class ComparisonV2(unittest.TestCase):
 
     def test_pairing_congelado_cubre_pushes_con_casos_propios(self):
         inventario = inventario_proyectado_v2()
-        self.assertEqual(len(inventario), 26)
+        self.assertEqual(len(inventario), 30)
         particion = json.loads(
             (ROOT / "evaluation" / "reviewer" / "v2" / "partition.json").read_text()
         )["particion"]
         pairing = json.loads(
             (ROOT / "evaluation" / "reviewer" / "v2" / "pairing.json").read_text()
         )
+        por_par = {}
         for experimento in pairing["experimentos"]:
             for par in experimento["pares"]:
                 clave = f"{experimento['experimento']}/{par['caso']}"
@@ -801,23 +810,67 @@ class ComparisonV2(unittest.TestCase):
                             f"{clave}: {campo} declarado no coincide con la proyección",
                         )
                     self.assertIn(par["caso"], particion)
-        apariciones = {}
-        for experimento in pairing["experimentos"]:
-            for par in experimento["pares"]:
-                apariciones.setdefault(par["caso"], []).append(
-                    experimento["experimento"]
+                clave_par = (experimento["experimento"], par["caso"])
+                por_par.setdefault(clave_par, []).append(par)
+        for (experimento, caso), pares in sorted(por_par.items()):
+            repeticiones = [par["repeticion"] for par in pares]
+            with self.subTest(
+                unicidad=f"{experimento}/{caso}", repeticiones=repeticiones
+            ):
+                self.assertEqual(
+                    len(repeticiones),
+                    len(set(repeticiones)),
+                    "cada (experimento, caso, repetición) aparece una sola vez",
                 )
-        for caso, experimentos in sorted(apariciones.items()):
-            with self.subTest(caso=caso, experimentos=experimentos):
-                self.assertEqual(len(experimentos), 1)
+        medidos = {"producto-en-sha-exacto", "push-consecutivo"}
+        for (experimento, caso), pares in sorted(por_par.items()):
+            if experimento not in medidos:
+                continue
+            por_repeticion = {par["repeticion"]: par for par in pares}
+            with self.subTest(alternado=f"{experimento}/{caso}"):
+                self.assertEqual(
+                    sorted(por_repeticion),
+                    [1, 2, 3],
+                    "los pares medidos congelan repeticiones 1-3",
+                )
+                self.assertEqual(por_repeticion[1]["orden"], por_repeticion[3]["orden"])
+                self.assertNotEqual(
+                    por_repeticion[1]["orden"], por_repeticion[2]["orden"]
+                )
         with self.subTest(particion="cobertura y herencia de grupo"):
             self.assertEqual(set(particion), set(inventario))
             for caso in particion:
-                self.assertEqual(
-                    particion[caso], particion[caso.split("-push-")[0]], caso
-                )
+                origen = caso.split("-dep-")[0].split("-push-")[0]
+                self.assertEqual(particion[caso], particion[origen], caso)
         conteos = {e["experimento"]: len(e["pares"]) for e in pairing["experimentos"]}
-        self.assertEqual(conteos, {"producto-en-sha-exacto": 5, "push-consecutivo": 6})
+        self.assertEqual(
+            conteos,
+            {
+                "producto-en-sha-exacto": 15,
+                "push-consecutivo": 18,
+                "dependencia-control-push-0": 4,
+            },
+        )
+        corpus = {
+            c["caso"]: c
+            for c in json.loads(
+                (ROOT / "evaluation" / "reviewer" / "corpus.json").read_text()
+            )["casos"]
+        }
+        dependencias = next(
+            e
+            for e in pairing["experimentos"]
+            if e["experimento"] == "dependencia-control-push-0"
+        )
+        for par in dependencias["pares"]:
+            with self.subTest(dependencia=par["caso"]):
+                caso = par["caso"].split("-dep-")[0]
+                pushes = corpus[caso]["pushes"]
+                self.assertTrue(pushes, "la dependencia exige un PR con pushes")
+                self.assertEqual(par["head"], pushes[0])
+                self.assertIsNone(par["sha_anterior"])
+                self.assertEqual(par["variante"]["producto"], "ninguno")
+                self.assertIn("repeticiones 1-3", par["compartida"])
 
     def test_push_con_caso_propio_se_evalua(self):
         caso_pr2 = {**caso_v2(), "caso": "pr2"}

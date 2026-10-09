@@ -39,15 +39,30 @@ caso base (head del PR, `sha_anterior` null) existen los casos `<caso>-push-<i>`
 para `i = 1..n`, con `head = pushes[i]` y `sha_anterior = pushes[i-1]`; heredan
 `repo`, `base` y `tarea` (la categoría del PR). Los casos con 0 o 1 push no
 generan push-casos. Con el corpus congelado: 20 casos base y 6 push-casos
-(`pr2-push-1/2/3`, `pr4-push-1`, `pr9-push-1`, `pr13-push-1`), 26 en total.
+(`pr2-push-1/2/3`, `pr4-push-1`, `pr9-push-1`, `pr13-push-1`).
 
-`partition.json` lleva los 26 casos: cada push-caso hereda el grupo de
-partición de su PR. `pairing.json` declara cada par de `push-consecutivo` con
-su caso `<caso>-push-<i>` y esa CaseKey de proyección. Las observaciones de un
-push se capturan con caso `<caso>-push-<i>` y su head/sha_anterior de
-proyección, nunca bajo el caso base: el comparador exige que cada observación
-repita la CaseKey del caso declarado y el caso base declara el head del PR, así
-que una observación de push bajo el caso base se rechaza con salida 2.
+## Proyección de dependencias T16
+
+Congelada en T16 f7 (decisión B2 de VEREDICTO-T16-f5). Para cada caso del
+corpus con `n >= 2` pushes existe además el caso `<caso>-dep-push-0`, con
+`head = pushes[0]` y `sha_anterior` null; hereda `repo`, `base`, `tarea` y el
+grupo de partición de su PR. (Con `n = 1` el caso base ya revisa `pushes[0]` y
+no genera dependencia.) Su rol es ser el eslabón inicial de la cadena de
+memoria de los deltas de push-1 (experimento `dependencia-control-push-0` del
+`pairing.json`: una corrida de control por PR, compartida por las repeticiones,
+que no se adjudica como par). Con el corpus congelado: 4 dependencias
+(`pr2-dep-push-0`, `pr4-dep-push-0`, `pr9-dep-push-0`, `pr13-dep-push-0`).
+
+`partition.json` lleva los 30 casos (20 base + 6 push-casos + 4 dependencias):
+cada push-caso y cada dependencia hereda el grupo de partición de su PR.
+`pairing.json` declara cada par de `push-consecutivo` con su caso
+`<caso>-push-<i>` y esa CaseKey de proyección. Las observaciones de un push se
+capturan con caso `<caso>-push-<i>` y su head/sha_anterior de proyección, nunca
+bajo el caso base: el comparador exige que cada observación repita la CaseKey
+del caso declarado y el caso base declara el head del PR, así que una
+observación de push bajo el caso base se rechaza con salida 2. Las corridas de
+las dependencias no generan observaciones adjudicables: no son pares y el
+informe v2 no las evalúa.
 
 ## Generar la hoja ciega v2
 

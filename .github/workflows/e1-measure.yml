@@ -10,10 +10,11 @@
 # Brazo delta-d0 (T16): prev_sha + prev_findings construyen prev.json antes de
 # prepare, con el bloque numerado como lo dejaría el publicador
 # (merge_findings sobre parse_model_findings), para que la corrida salga
-# incremental contra el push anterior con ids estables; sin esas entradas el
-# brazo es control (full). La memoria viene de la revisión del push anterior
-# (para push-1, de la dependencia congelada sobre pushes[0]): la cadena es
-# control(push i-1) -> delta(push i).
+# incremental contra el push anterior con ids F1..Fn de ese eslabón; sin esas
+# entradas el brazo es control (full). La memoria viene de la revisión del
+# push anterior (para push-1, de la dependencia congelada sobre pushes[0]): la
+# cadena es control(push i-1) -> delta(push i); los ids se renumeran por
+# eslabón y no forman una cadena estable entre pushes.
 name: E1 measure
 
 on:
@@ -165,6 +166,7 @@ jobs:
               dismiss_ids=(),
               dismiss_all=False,
           )
+          merged["seen"] = 0
           bloque = serialize_findings(merged)
           if not isinstance(bloque, str):
               raise SystemExit(
