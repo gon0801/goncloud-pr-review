@@ -112,7 +112,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done con desvío declarado (PR #65, squash d9a60cf; evidencia docs/evidence/reviewer/D0-C0.md: medición f11 de 63 corridas, costo $110.6439; decisión del operador opción 2, forzar revisión completa en el segundo push, ejecutada en review.py:997-1007; C0 queda sin decisión) |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done con desvío declarado (PR #65, squash d9a60cf; evidencia docs/evidence/reviewer/D0-C0.md: análisis f11 sobre la medición de 63 corridas (f9/f10/f3), costo $110.6439; decisión del operador opción 2, forzar revisión completa en el segundo push, ejecutada en review.py:997-1007; C0 queda sin decisión) |
 
 ### Residuales
 
