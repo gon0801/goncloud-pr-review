@@ -46,17 +46,17 @@ jobs:
           EV_PATH: ${{ github.event_path }}
           EV_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if ! printf '%s' "$EV_PR" | grep -Eqx '[0-9]+'; then
+          if [[ ! "$EV_PR" =~ ^[0-9]+$ ]]; then
             echo "ai-review: número de PR inválido" >&2
             exit 1
           fi
           for sha in "$EV_HEAD" "$EV_BASE"; do
-            if [ -n "$sha" ] && ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            if [[ -n "$sha" && ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "ai-review: SHA inválido" >&2
               exit 1
             fi
           done
-          if ! printf '%s' "$EV_DEFAULT_BRANCH" | grep -Eqx '[A-Za-z0-9._/-]+'; then
+          if [[ -z "$EV_DEFAULT_BRANCH" || "$EV_DEFAULT_BRANCH" == *$'\n'* || "$EV_DEFAULT_BRANCH" == *$'\r'* ]]; then
             echo "ai-review: rama por defecto inválida" >&2
             exit 1
           fi

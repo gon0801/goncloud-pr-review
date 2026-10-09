@@ -1996,7 +1996,12 @@ class Workflows(unittest.TestCase):
             return r.returncode, destino.read_text()
 
     def test_preparar_entorno_rechaza_un_pr_que_no_es_numero(self):
-        codigo, escrito = self._correr_preparar_entorno('1"\nGITHUB_TOKEN=robado')
+        for malicioso in ('1"\nGITHUB_TOKEN=robado', "12\nGITHUB_TOKEN=robado"):
+            with self.subTest(pr=malicioso):
+                codigo, escrito = self._correr_preparar_entorno(malicioso)
+                self.assertNotEqual(codigo, 0)
+                self.assertEqual(escrito, "")
+        codigo, escrito = self._correr_preparar_entorno("12", "a" * 40 + "\nX=1")
         self.assertNotEqual(codigo, 0)
         self.assertEqual(escrito, "")
         codigo, escrito = self._correr_preparar_entorno("12", "a" * 40, "b" * 40)
@@ -2005,6 +2010,37 @@ class Workflows(unittest.TestCase):
         self.assertIn(f"HEAD_SHA={'a' * 40}\n", escrito)
         codigo, escrito = self._correr_preparar_entorno("12", "no-es-sha")
         self.assertNotEqual(codigo, 0)
+
+    def test_validar_entradas_del_worker_rechaza_valores_multilinea(self):
+        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        inicio = texto.index("- name: validar entradas")
+        script = self._bloques_run(texto[inicio : texto.index("- name:", inicio + 1)])[
+            0
+        ]
+
+        def correr(**entradas):
+            base = {
+                "REQUEST_ID": "1",
+                "PR_NUMBER": "12",
+                "HEAD_SHA": "a" * 40,
+                "BASE_SHA": "b" * 40,
+            }
+            base.update(entradas)
+            return subprocess.run(
+                ["bash", "-eo", "pipefail", "-c", script],
+                env={"PATH": os.environ["PATH"], **base},
+                capture_output=True,
+            ).returncode
+
+        self.assertEqual(correr(), 0)
+        for campo, valor in (
+            ("REQUEST_ID", "1\nX=1"),
+            ("PR_NUMBER", '12"; touch pwn; "'),
+            ("HEAD_SHA", "a" * 40 + "\nX=1"),
+            ("BASE_SHA", "no-es-sha"),
+        ):
+            with self.subTest(campo=campo):
+                self.assertNotEqual(correr(**{campo: valor}), 0)
 
     def test_dogfood_workflow_matches_template(self):
         flujos = ROOT / ".github" / "workflows"
