@@ -1,0 +1,109 @@
+name: ai-review-worker
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: ID de la solicitud persistida
+        required: true
+        type: string
+      pr_number:
+        description: PR de la solicitud
+        required: true
+        type: string
+      head_sha:
+        description: HEAD del PR a revisar (datos, no código del worker)
+        required: true
+        type: string
+      base_sha:
+        description: BASE del PR a revisar (datos, no código del worker)
+        required: true
+        type: string
+      coordinator_run_id:
+        description: Run del coordinador que despachó
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# La recuperación la decide el coordinador re-autorizando, no este grupo.
+concurrency:
+  group: ai-review-worker-${{ github.repository }}-${{ inputs.request_id }}
+  cancel-in-progress: false
+
+# El display_title de este run es la entrada del resultado en el grupo del PR.
+run-name: ${{ inputs.pr_number }}
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout del código confiable del worker
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: checkout del CLI confiable del repo central
+        uses: actions/checkout@v4
+        with:
+          repository: gon0801/goncloud-pr-review
+          ref: 210c58e17a6900b951ecef6d73b0e8913617ae4a
+          path: ai-review-code
+          persist-credentials: false
+      - name: preparar solicitud y paquete
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/ai-review"
+          python "$GITHUB_WORKSPACE/ai-review-code/review.py" execute-request \
+            --request-id "${{ inputs.request_id }}" \
+            --work "${RUNNER_TEMP}/ai-review"
+      - name: traer el PR como datos
+        run: |
+          git fetch --no-tags origin "+${{ inputs.head_sha }}:refs/ai-review/head"
+          git fetch --no-tags origin "${{ inputs.base_sha }}"
+          git worktree add --detach pr refs/ai-review/head
+      - name: preparar contexto
+        working-directory: pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          MAX_DIFF_BYTES: "1500000"
+        run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" prepare --work "${RUNNER_TEMP}/ai-review"
+      - name: versión de Python para la caché de instalación
+        id: py
+        run: echo "version=$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
+      - name: caché de instalación (Claude Code y LiteLLM)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ai-review
+          key: ai-review-install-${{ runner.os }}-py${{ steps.py.outputs.version }}-claude-2.1.282-litellm-1.102.1
+      - name: instalar Claude Code (y LiteLLM para opencode-go)
+        env:
+          PROVIDER: opencode-go
+          FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+        run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" install --work "${RUNNER_TEMP}/ai-review"
+      - name: modelo
+        working-directory: pr
+        env:
+          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: opencode-go
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" run --work "${RUNNER_TEMP}/ai-review"
+      - name: cerrar el resultado para el coordinador
+        run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" close-result --work "${RUNNER_TEMP}/ai-review"
+      - name: subir resultado como datos
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-result-request-${{ inputs.request_id }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: "${{ runner.temp }}/ai-review"
+          retention-days: 7

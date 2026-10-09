@@ -1,0 +1,79 @@
+name: ai-review-publish
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: [ai-review-worker]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR a recuperar
+        required: true
+        type: string
+
+# Un solo escritor por repositorio y PR: los cuatro eventos resuelven el
+# mismo grupo y nunca se cancela al escritor activo.
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # El coordinador corre código confiable: un workflow_run sólo se atiende
+    # si es un dispatch nuestro sobre el propio repo (anti pwn-request).
+    if: >-
+      (github.event_name != 'pull_request_target' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository))
+      && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_repository.full_name == github.repository))
+    steps:
+      - name: checkout del código confiable
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: checkout del CLI confiable del repo central
+        uses: actions/checkout@v4
+        with:
+          repository: gon0801/goncloud-pr-review
+          ref: 210c58e17a6900b951ecef6d73b0e8913617ae4a
+          path: ai-review-code
+          persist-credentials: false
+      - name: preparar entorno
+        run: |
+          {
+            echo "REPO=${{ github.repository }}"
+            echo "PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}"
+            echo "HEAD_SHA=${{ github.event.pull_request.head.sha }}"
+            echo "BASE_SHA=${{ github.event.pull_request.base.sha }}"
+            echo "GITHUB_EVENT_PATH=${{ github.event_path }}"
+            echo "BOT_LOGIN=github-actions[bot]"
+            echo "WORKER_REF=${{ github.event.repository.default_branch }}"
+          } >> "${GITHUB_ENV}"
+          mkdir -p "${RUNNER_TEMP}/ai-review"
+      - name: bajar el resultado del worker
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKER_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKER_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          gh run download "$WORKER_RUN_ID" --repo "${{ github.repository }}" --dir "${RUNNER_TEMP}/ai-review/descarga"
+          encontrados=$(find "${RUNNER_TEMP}/ai-review/descarga" -path "*attempt-${WORKER_ATTEMPT}*" -name result.json)
+          total=$(printf '%s' "$encontrados" | grep -c .)
+          if [ "$total" -ne 1 ]; then
+            echo "ai-review: se esperaba un result.json del attempt ${WORKER_ATTEMPT}, hubo ${total}" >&2
+            exit 1
+          fi
+          cp "$encontrados" "${RUNNER_TEMP}/ai-review/result.json"
+      - name: reconciliar (admitir, comandos, resultados, recuperar)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python "$GITHUB_WORKSPACE/ai-review-code/review.py" reconcile --work "${RUNNER_TEMP}/ai-review"
