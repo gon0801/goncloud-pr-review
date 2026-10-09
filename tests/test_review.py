@@ -2117,8 +2117,16 @@ class Workflows(unittest.TestCase):
             worker.index('review.py" run'),
             "el worker instala Claude Code y LiteLLM antes del paso modelo",
         )
-        self.assertEqual(worker.count("PROVIDER: opencode-go"), 2)
+        self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
         self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
+
+    def test_el_cierre_del_worker_conoce_proveedor_y_secretos_a_redactar(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
+        cierre = cierre.split("- name:")[0]
+        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", cierre)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
+        self.assertIn("PROVIDER: opencode-go", cierre)
 
     def test_action_caches_install_with_pinned_versions(self):
         action = (ROOT / "action.yml").read_text()
@@ -2928,7 +2936,7 @@ class Workflows(unittest.TestCase):
             (Path(work) / "result.json").write_text(
                 json.dumps(
                     {
-                        "result": "Sin hallazgos.\nCOVERAGE: complete",
+                        "result": "Sin hallazgos con sk-secreto.\nCOVERAGE: complete",
                         "subtype": "success",
                         "num_turns": 12,
                         "total_cost_usd": 0.0421,
@@ -2937,12 +2945,16 @@ class Workflows(unittest.TestCase):
                     }
                 )
             )
-            review.cmd_close_result(argparse.Namespace(work=work))
+            with mock.patch.dict(os.environ, {"API_KEY": "sk-secreto"}):
+                review.cmd_close_result(argparse.Namespace(work=work))
             paquete = json.loads((Path(work) / "result.json").read_text())
         self.assertEqual(paquete["total_cost_usd"], 0.0421)
         self.assertEqual(paquete["usage"], {"input_tokens": 900, "output_tokens": 80})
         self.assertEqual(paquete["num_turns"], 12)
         self.assertEqual(paquete["review_provider"], "deepseek")
+        self.assertEqual(
+            paquete["result"], "Sin hallazgos con [REDACTED].\nCOVERAGE: complete"
+        )
         self.assertFalse(paquete["model_ok"], "sin bloque de hallazgos del modelo")
         self.assertEqual(
             paquete["manifest"],
@@ -3007,7 +3019,10 @@ class Workflows(unittest.TestCase):
                 return mock.Mock(
                     returncode=0,
                     stdout=json.dumps(
-                        {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                        {
+                            "head": {"sha": entorno.get("HEAD_LIVE") or "c" * 40},
+                            "base": {"sha": "b" * 40},
+                        }
                     ),
                 )
             if "/commits/" in ruta:
@@ -3237,6 +3252,30 @@ class Workflows(unittest.TestCase):
         self.assertIsInstance(publicado, domain.Valid)
         self.assertEqual(publicado.snapshot.pending_requests, [])
         self.assertEqual([f.id for f in publicado.snapshot.findings], ["F2"])
+
+    def test_un_resultado_de_un_head_viejo_no_acredita_en_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 77)
+            artefacto = json.loads((Path(tmp) / "result.json").read_text())
+            artefacto.update(
+                {
+                    "result": "Texto de un head viejo.\nCOVERAGE: complete",
+                    "manifest": {"reviewed": ["a.py"], "excluded": []},
+                }
+            )
+            (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+            patches, despachados = self._reconciliar(
+                self._estado_pendiente(),
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="77",
+                WORKER_ATTEMPT="1",
+                HEAD_LIVE="d" * 40,
+            )
+        self.assertEqual(despachados, [2], "se pide revisar el head vivo")
+        cuerpo = patches[-1][1]
+        self.assertNotIn(review.SHA_PREFIX, cuerpo)
+        self.assertNotIn("Texto de un head viejo.", cuerpo)
 
     def test_el_error_del_worker_avisa_en_visible_sin_marcar_revisado(self):
         with tempfile.TemporaryDirectory() as tmp:

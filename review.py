@@ -2797,7 +2797,15 @@ def cmd_reconcile(args):
             print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
 
     visible = None
-    if artifact is not None and isinstance(decision, review_domain.Commit):
+    # Solo un reporte de revisión del target vigente acredita: el dominio
+    # devuelve Commit también al descartar un head viejo o al cerrar una
+    # explicación, y esos no pueden publicar un SHA revisado.
+    if (
+        artifact is not None
+        and isinstance(decision, review_domain.Commit)
+        and solicitud.kind == "review"
+        and review_domain._target_vigente(solicitud, facts, policy)
+    ):
         visible = revision_visible(
             artifact,
             decision.snapshot,
@@ -2926,7 +2934,11 @@ def cmd_close_result(args):
     work = Path(args.work)
     paquete = json.loads((work / "request-package.json").read_text())
     resultado = json.loads((work / "result.json").read_text())
-    texto = resultado.get("result") or ""
+    secretos = [
+        os.environ.get(n, "")
+        for n in ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
+    ]
+    texto = redact(resultado.get("result") or "", secretos)
     modelo = parse_model_findings(
         texto, conservar_anclas=politica_de_identidad() == "anchors"
     )
@@ -2948,7 +2960,7 @@ def cmd_close_result(args):
         datos = json.loads(manifiesto.read_text())
         paquete["manifest"] = {k: datos[k] for k in CAMPOS_DEL_ALCANCE if k in datos}
     if ERROR_KEY in resultado:
-        paquete[ERROR_KEY] = resultado[ERROR_KEY]
+        paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
 
 
