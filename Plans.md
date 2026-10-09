@@ -112,7 +112,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | en curso: medición y decisión cc:done; falta el piloto en el central (f16 frenado: el worker coordinado leía secrets API_KEY/FALLBACK_API_KEY inexistentes) y los consumidores (desvío declarado: C0 queda sin decisión por falta de pares medidos; evidencia cruda conciliada en main desde rc/t16-piloto; PR #65, squash d9a60cf; cierre y evidencia en PR #66, docs/evidence/reviewer/D0-C0.md: análisis f11 sobre la medición de 63 corridas (f9/f10/f3), costo $110.6439; decisión del operador opción 2, forzar revisión completa en el segundo push, ejecutada en review.py:997-1007; C0 queda sin decisión) |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | cc:done con desvío declarado: medición de 63 corridas ($110.6439) y decisión D0 opción 2 ejecutada en el PR #65; piloto del revisor coordinado en el repo central (PR de prueba #71) con seis defectos corregidos (#68, #70, #72, #74, #76; y #77 para volver) y la cadena funcionando de punta a punta, pero sin capa visible en el publicador, así que vuelve a current (#77). Desvíos: C0 no se activa (sin pares propios), precisión sin jueces, casos de descarte/explicación/re-revisión no ejercidos y consumidores fuera del plan. Evidencia: docs/evidence/reviewer/T16-piloto.md y D0-C0.md |
 
 ### Residuales
 
@@ -125,6 +125,12 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T16 #65 ai-review F3 | action.yml max_turns documenta tope incremental inalcanzable tras forzar full; actualizar descripcion y prueba o aclarar camino execute-request | abierta |
 | T16 #65 ai-review F4 | con diff mayor que MAX_DIFF_BYTES el forzado a full puede dejar archivos del push actual fuera del diff con causa budget (visible en manifest.excluded); priorizar delta o registrar perdida en medicion D0-C0 | abierta |
 | T16 #65 ai-review F5 | cuerpo del PR decia no tocar Plans.md pero el diff agrega fila T16-f15; corregir cuerpo o mover fila | abierta |
+| T16 piloto | el publicador coordinado solo escribe el bloque de memoria y no muestra los hallazgos; agregar la capa visible (hallazgos abiertos, cobertura y SHA) antes de reactivar el coordinador | abierta |
+| T16 piloto | ejercer en un piloto con capa visible: descarte concurrente, explicación, otra revisión del mismo SHA y casos representativos de T05 | abierta |
+| T16 consumidores | desplegar el coordinador en summonaikit-claude y los otros consumidores del rollout después de la capa visible; gon0801/openclaw y gon0801/Orbit no existen con esos nombres, confirmar los repos reales | abierta |
+| T16 piloto | close-result reescribe result.json con el paquete del coordinador y descarta total_cost_usd y usage: el camino coordinado no conserva el costo por corrida; conservarlo en el paquete | abierta |
+| T16 #69 CodeRabbit | fijar actions/* a SHA completo en workflows y plantillas: política de todo el repo, no del piloto | abierta |
+| T16 #74 | el camino workflow_run de cmd_reconcile todavía toma el workflow de name; con run-name es el título del run, derivarlo del path como metadatos_del_run | abierta |
 | T16 cierre | conciliacion con rc/t16-piloto: evidencia, brazo delta de e1-measure, script de analisis y rollout del piloto en main; PrepararBrazoDelta afirma el forzado (full, forced-full-t16, delta real conservado) porque el brazo delta solo reproduce incremental sobre el tag t16-candidato-e0898ff | cerrada (rama rc/t16-cierre) |
 | R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
 | R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
