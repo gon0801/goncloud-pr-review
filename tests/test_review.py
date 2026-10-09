@@ -2967,6 +2967,24 @@ class Workflows(unittest.TestCase):
                 return mock.Mock(
                     returncode=0, stdout=json.dumps({"permission": "admin"})
                 )
+            for corrida, sha_run in ((79, "e" * 40), (80, "d" * 40)):
+                if f"/actions/runs/{corrida}/attempts/1" in ruta:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=json.dumps(
+                            {
+                                "id": corrida,
+                                "name": "1",
+                                "path": ".github/workflows/ai-review-worker.yml",
+                                "head_branch": "main",
+                                "head_sha": sha_run,
+                                "run_attempt": 1,
+                            }
+                        ),
+                    )
+            if "/compare/" in ruta:
+                estado = "ahead" if f"{'e' * 40}..." in ruta else "diverged"
+                return mock.Mock(returncode=0, stdout=json.dumps({"status": estado}))
             if "/actions/runs/78/attempts/1" in ruta:
                 return mock.Mock(
                     returncode=0,
@@ -3150,6 +3168,59 @@ class Workflows(unittest.TestCase):
                     tmp,
                     "workflow_dispatch",
                     WORKER_RUN_ID="78",
+                    WORKER_ATTEMPT="1",
+                )
+
+    def _resultado_de_corrida(self, tmp, corrida):
+        import review_domain as domain
+
+        digest = review.digest_de_politica(review.politica_de_revision())
+        (Path(tmp) / "result.json").write_text(
+            json.dumps(
+                {
+                    "request_id": 1,
+                    "run_id": corrida,
+                    "attempt": 1,
+                    "pr_head_sha": "c" * 40,
+                    "policy_digest": digest,
+                    "target": domain.ReviewTarget(
+                        repository="o/r",
+                        pr_number=1,
+                        head_sha="c" * 40,
+                        base_sha="b" * 40,
+                        policy_digest=digest,
+                    ).json(),
+                    "observaciones": [],
+                    "cobertura": domain.COMPLETE_CLAIM,
+                }
+            )
+        )
+
+    def test_un_worker_de_un_main_anterior_se_acepta(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 79)
+            patches, despachados = self._reconciliar(
+                self._estado_pendiente(),
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="79",
+                WORKER_ATTEMPT="1",
+            )
+        self.assertEqual(despachados, [])
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertEqual(publicado.snapshot.pending_requests, [])
+
+    def test_un_worker_con_sha_fuera_de_main_se_rechaza(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 80)
+            with self.assertRaises(SystemExit):
+                self._reconciliar(
+                    self._estado_pendiente(),
+                    tmp,
+                    "workflow_dispatch",
+                    WORKER_RUN_ID="80",
                     WORKER_ATTEMPT="1",
                 )
 

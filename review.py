@@ -2666,13 +2666,24 @@ def cmd_reconcile(args):
             )
         confiable = json.loads(
             sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
-        )
+        ).get("sha")
+        sha_del_run = wr.get("head_sha") or ""
+        if sha_del_run and sha_del_run != confiable:
+            # main pudo avanzar mientras el worker corría: el código del run
+            # sigue siendo confiable si es un ancestro de worker_ref.
+            comparacion = json.loads(
+                sh(
+                    "gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}"
+                ).stdout
+            )
+            if comparacion.get("status") in ("ahead", "identical"):
+                confiable = sha_del_run
         request = request_de_solicitud(
             solicitud,
             repository=repo,
             workflow="ai-review-worker",
             ref=worker_ref,
-            workflow_sha=confiable.get("sha"),
+            workflow_sha=confiable,
         )
         autenticado = authenticate_result(
             {
