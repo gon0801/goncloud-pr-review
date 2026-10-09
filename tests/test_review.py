@@ -2973,7 +2973,9 @@ class Workflows(unittest.TestCase):
                     stdout=json.dumps(
                         {
                             "id": 78,
-                            "name": "otro-workflow",
+                            "name": "ai-review-worker",
+                            "display_title": "ai-review-worker",
+                            "path": ".github/workflows/otro.yml",
                             "head_branch": "main",
                             "head_sha": "f" * 40,
                             "run_attempt": 1,
@@ -2986,7 +2988,9 @@ class Workflows(unittest.TestCase):
                     stdout=json.dumps(
                         {
                             "id": 77,
-                            "name": "ai-review-worker",
+                            "name": "1",
+                            "display_title": "1",
+                            "path": ".github/workflows/ai-review-worker.yml",
                             "head_branch": "main",
                             "head_sha": "f" * 40,
                             "run_attempt": 1,
