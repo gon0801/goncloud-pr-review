@@ -465,14 +465,6 @@ def inventario_proyectado_v2():
                 "tarea": caso["categoria"],
                 "sha_anterior": pushes[i - 1],
             }
-        if len(pushes) >= 2:
-            inventario[f"{caso['caso']}-dep-push-0"] = {
-                "repo": caso["repo"],
-                "base": caso["base"],
-                "head": pushes[0],
-                "tarea": caso["categoria"],
-                "sha_anterior": None,
-            }
     return inventario
 
 
@@ -789,7 +781,7 @@ class ComparisonV2(unittest.TestCase):
 
     def test_pairing_congelado_cubre_pushes_con_casos_propios(self):
         inventario = inventario_proyectado_v2()
-        self.assertEqual(len(inventario), 30)
+        self.assertEqual(len(inventario), 26)
         particion = json.loads(
             (ROOT / "evaluation" / "reviewer" / "v2" / "partition.json").read_text()
         )["particion"]
@@ -800,16 +792,35 @@ class ComparisonV2(unittest.TestCase):
         for experimento in pairing["experimentos"]:
             for par in experimento["pares"]:
                 clave = f"{experimento['experimento']}/{par['caso']}"
-                with self.subTest(par=clave):
-                    self.assertIn(par["caso"], inventario)
-                    esperado = inventario[par["caso"]]
-                    for campo in ("repo", "base", "head", "tarea", "sha_anterior"):
-                        self.assertEqual(
-                            par[campo],
-                            esperado[campo],
-                            f"{clave}: {campo} declarado no coincide con la proyección",
+                if experimento["experimento"] == "dependencia-control-push-0":
+                    with self.subTest(dependencia=clave):
+                        self.assertNotIn(
+                            par["caso"],
+                            inventario,
+                            "la dependencia no es un caso proyectado",
                         )
-                    self.assertIn(par["caso"], particion)
+                        self.assertNotIn(
+                            par["caso"],
+                            particion,
+                            "la dependencia no genera observaciones: no va en la partición",
+                        )
+                else:
+                    with self.subTest(par=clave):
+                        self.assertIn(par["caso"], inventario)
+                        esperado = inventario[par["caso"]]
+                        for campo in (
+                            "repo",
+                            "base",
+                            "head",
+                            "tarea",
+                            "sha_anterior",
+                        ):
+                            self.assertEqual(
+                                par[campo],
+                                esperado[campo],
+                                f"{clave}: {campo} declarado no coincide con la proyección",
+                            )
+                        self.assertIn(par["caso"], particion)
                 clave_par = (experimento["experimento"], par["caso"])
                 por_par.setdefault(clave_par, []).append(par)
         for (experimento, caso), pares in sorted(por_par.items()):
@@ -840,7 +851,7 @@ class ComparisonV2(unittest.TestCase):
         with self.subTest(particion="cobertura y herencia de grupo"):
             self.assertEqual(set(particion), set(inventario))
             for caso in particion:
-                origen = caso.split("-dep-")[0].split("-push-")[0]
+                origen = caso.split("-push-")[0]
                 self.assertEqual(particion[caso], particion[origen], caso)
         conteos = {e["experimento"]: len(e["pares"]) for e in pairing["experimentos"]}
         self.assertEqual(
