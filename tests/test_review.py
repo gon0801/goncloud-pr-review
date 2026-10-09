@@ -2907,6 +2907,55 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["observaciones"], [])
         self.assertEqual(paquete["cobertura"], domain.UNKNOWN)
 
+    def test_close_result_conserva_costo_y_alcance(self):
+        with tempfile.TemporaryDirectory() as work:
+            (Path(work) / "request-package.json").write_text(
+                json.dumps({"request_id": 1, "run_id": 55, "attempt": 2})
+            )
+            (Path(work) / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "reviewed": ["a.py"],
+                        "excluded": [{"path": "big.bin", "reason": "budget"}],
+                        "max_turns": 40,
+                        "mode": "incremental",
+                        "prev_sha": "a" * 40,
+                        "changed_files": ["a.py"],
+                        "diff": "no viaja",
+                    }
+                )
+            )
+            (Path(work) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "result": "Sin hallazgos.\nCOVERAGE: complete",
+                        "subtype": "success",
+                        "num_turns": 12,
+                        "total_cost_usd": 0.0421,
+                        "usage": {"input_tokens": 900, "output_tokens": 80},
+                        "review_provider": "deepseek",
+                    }
+                )
+            )
+            review.cmd_close_result(argparse.Namespace(work=work))
+            paquete = json.loads((Path(work) / "result.json").read_text())
+        self.assertEqual(paquete["total_cost_usd"], 0.0421)
+        self.assertEqual(paquete["usage"], {"input_tokens": 900, "output_tokens": 80})
+        self.assertEqual(paquete["num_turns"], 12)
+        self.assertEqual(paquete["review_provider"], "deepseek")
+        self.assertFalse(paquete["model_ok"], "sin bloque de hallazgos del modelo")
+        self.assertEqual(
+            paquete["manifest"],
+            {
+                "reviewed": ["a.py"],
+                "excluded": [{"path": "big.bin", "reason": "budget"}],
+                "max_turns": 40,
+                "mode": "incremental",
+                "prev_sha": "a" * 40,
+                "changed_files": ["a.py"],
+            },
+        )
+
     def _estado_pendiente(self):
         import review_domain as domain
 
@@ -3136,6 +3185,82 @@ class Workflows(unittest.TestCase):
         self.assertIsInstance(publicado, domain.Valid)
         self.assertEqual(publicado.snapshot.pending_requests, [])
         self.assertEqual(publicado.snapshot.completion, domain.COMPLETE_CLAIM)
+
+    def test_el_resultado_del_worker_publica_la_revision_visible(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 77)
+            artefacto = json.loads((Path(tmp) / "result.json").read_text())
+            artefacto.update(
+                {
+                    "result": "El parseo falla con entradas vacías.\nCOVERAGE: complete",
+                    "subtype": "success",
+                    "model_ok": True,
+                    "review_provider": "opencode-go",
+                    "observaciones": [
+                        {
+                            "file": "a.py",
+                            "line": 3,
+                            "severity": "High",
+                            "title": "Parseo roto",
+                        }
+                    ],
+                    "manifest": {"reviewed": ["a.py"], "excluded": []},
+                }
+            )
+            (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+            patches, _ = self._reconciliar(
+                self._estado_pendiente(),
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="77",
+                WORKER_ATTEMPT="1",
+            )
+        cuerpo = patches[-1][1]
+        lineas = cuerpo.split("\n")
+        self.assertEqual(lineas[0], review.MARKER)
+        self.assertEqual(lineas[1], f"{review.SHA_PREFIX}{'c' * 40} -->")
+        self.assertEqual(
+            lineas[2], f"{review.COMPLETION_PREFIX}{'c' * 40}:complete -->"
+        )
+        self.assertIn(
+            "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · ccccccc",
+            lineas,
+        )
+        self.assertIn("**Veredicto:** 1 High abierto.", lineas)
+        nuevos = lineas.index("## Nuevos en este push")
+        self.assertEqual(lineas[nuevos + 2], "- 🟠 High · `a.py:3` · Parseo roto · F2")
+        self.assertIn("El parseo falla con entradas vacías.", lineas)
+        self.assertIn("- Revisados: 1 archivo(s)", lineas)
+        publicado = domain.read_snapshot(cuerpo, last=False)
+        self.assertIsInstance(publicado, domain.Valid)
+        self.assertEqual(publicado.snapshot.pending_requests, [])
+        self.assertEqual([f.id for f in publicado.snapshot.findings], ["F2"])
+
+    def test_el_error_del_worker_avisa_en_visible_sin_marcar_revisado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 77)
+            artefacto = json.loads((Path(tmp) / "result.json").read_text())
+            artefacto[review.ERROR_KEY] = "opencode-go agotó su cuota"
+            (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+            patches, _ = self._reconciliar(
+                self._estado_pendiente(),
+                tmp,
+                "workflow_dispatch",
+                WORKER_RUN_ID="77",
+                WORKER_ATTEMPT="1",
+            )
+        cuerpo = patches[-1][1]
+        lineas = cuerpo.split("\n")
+        self.assertEqual(lineas[2], "> [!CAUTION]")
+        self.assertTrue(
+            lineas[3].startswith(
+                "> **No se pudo revisar el commit ccccccc:** opencode-go agotó su cuota."
+            ),
+            lineas[3],
+        )
+        self.assertNotIn(review.SHA_PREFIX, cuerpo)
 
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
         import review_domain as domain
