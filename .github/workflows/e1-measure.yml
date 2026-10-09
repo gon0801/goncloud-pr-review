@@ -8,9 +8,11 @@
 # una ruta nunca cae a la llave de la otra.
 # No dispara ai-review.yml: ese sólo corre en eventos pull_request.
 # Brazo delta-d0 (T16): prev_sha + prev_findings construyen prev.json antes de
-# prepare, igual que lo escribiría cmd_observe, para que la corrida salga
-# incremental contra el push anterior; sin esas entradas el brazo es control
-# (full). El estado viene del control del push anterior: la cadena es
+# prepare, con el bloque numerado como lo dejaría el publicador
+# (merge_findings sobre parse_model_findings), para que la corrida salga
+# incremental contra el push anterior con ids estables; sin esas entradas el
+# brazo es control (full). La memoria viene de la revisión del push anterior
+# (para push-1, de la dependencia congelada sobre pushes[0]): la cadena es
 # control(push i-1) -> delta(push i).
 name: E1 measure
 
@@ -141,14 +143,39 @@ jobs:
           import json, os, sys
 
           sys.path.insert(0, os.path.join(os.environ["RUNNER_TEMP"], "reviewer"))
-          from review import parse_findings_block
+          from review import (
+              merge_findings,
+              parse_findings_block,
+              parse_model_findings,
+              serialize_findings,
+          )
 
           work = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review")
           os.makedirs(work, exist_ok=True)
-          state = parse_findings_block(os.environ["PREV_FINDINGS"], last=True)
-          if state is None:
+          modelo = parse_model_findings(os.environ["PREV_FINDINGS"])
+          if modelo is None:
               raise SystemExit(
                   "::error::prev_findings no trae un bloque de hallazgos legible"
+              )
+          merged, _nuevos = merge_findings(
+              None,
+              modelo,
+              changed_files=(),
+              reverted_files=(),
+              dismiss_ids=(),
+              dismiss_all=False,
+          )
+          bloque = serialize_findings(merged)
+          if not isinstance(bloque, str):
+              raise SystemExit(
+                  "::error::el bloque del control desborda el presupuesto de memoria"
+              )
+          state = parse_findings_block(bloque)
+          if state is None or any(
+              f.get("id") is None for f in state.get("findings", [])
+          ):
+              raise SystemExit(
+                  "::error::el estado del brazo delta quedo con hallazgos sin id"
               )
           prev = {
               "sha": os.environ["PREV_SHA"],

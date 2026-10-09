@@ -189,11 +189,16 @@ gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
 Los pares de push miden dos brazos del mismo push. El control es la invocación
 de arriba (revisión completa del par `head`/`base`). El brazo delta-d0 añade
 dos entradas opcionales: `prev_sha` (SHA del push anterior) y `prev_findings`
-(bloque de hallazgos `<!-- ai-review:findings=... -->` que produjo el control
-del push anterior). Con esas entradas el workflow construye `prev.json` (sha,
-state, completion complete) antes de `prepare`, exactamente lo que escribiría
-`cmd_observe`, y la corrida sale incremental (manifest `mode=incremental`,
-`prev_sha` del push anterior); sin ellas la corrida es control (`mode=full`).
+(bloque crudo de hallazgos `<!-- ai-review:findings=... -->` que el modelo dejó
+en el `result.json` del control del push anterior). Con esas entradas el
+workflow construye `prev.json` antes de `prepare` como lo dejaría el estado
+publicado que lee `cmd_gate`: numera los hallazgos con `merge_findings` sobre
+`parse_model_findings` (los `F-new` del modelo pasan a F1..Fn, nunca ids
+vacíos) y fija `completion` en complete. La corrida sale incremental (manifest
+`mode=incremental`, `prev_sha` del push anterior); sin las entradas, la corrida
+es control (`mode=full`). Declaración N2 del veredicto f5: `completion` queda
+fija en complete y no se aplican descartes, razonable en E1 porque nada se
+publica y no existen descartes que aplicar.
 
 ```
 gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
@@ -203,12 +208,17 @@ gh workflow run e1-measure.yml --ref t16-candidato-<sha8> \
 ```
 
 Límite en cadena, declarado: el brazo delta-d0 de un push depende del estado
-de hallazgos del control del push anterior. El control de push i debe correr
-primero, su bloque extraerse del `result.json` y pasarse como `prev_findings`
-al delta de push i; sin ese eslabón la corrida delta no puede ejecutarse con
-fidelidad al protocolo D0 (pasar `base=sha_anterior` no lo sustituye: sería
-una revisión completa del delta sin memoria). El artefacto del brazo delta
-lleva sufijo `-delta` en el nombre para no colisionar con el de su control.
+de hallazgos de la revisión del push i-1. Para los deltas de push-2 en
+adelante, el control del push i-1 corre primero, su bloque se extrae del
+`result.json` y se pasa como `prev_findings` al delta del push i. Para los
+deltas de push-1 (cuyo `sha_anterior` es `pushes[0]`, sin control congelado en
+el pairing original) existe la dependencia congelada del experimento
+«dependencia-control-push-0»: una corrida de control por PR sobre `pushes[0]`,
+compartida por las repeticiones, cuyo único rol es proveer ese bloque inicial.
+Sin ese eslabón la corrida delta no puede ejecutarse con fidelidad al protocolo
+D0 (pasar `base=sha_anterior` no lo sustituye: sería una revisión completa del
+delta sin memoria). El artefacto del brazo delta lleva sufijo `-delta` en el
+nombre para no colisionar con el de su control.
 
 ## Estimación de costo de la medición completa
 
@@ -221,8 +231,14 @@ producto pendientes × 1 corrida pagada cada uno (el lado CodeRabbit son
 comentarios existentes, sin gasto) + 18 de push pendientes × 2 corridas
 (control completo y variante delta-d0, las dos de proveedor) = **46 corridas**.
 
-Estimación con la ruta directa: mediana 46 × $1.4484 ≈ **$67**; media ≈ $80;
-rango $32-$165 con los unitarios extremos ($0.7051-$3.5961).
+Dependencias congeladas en f6 (decisión B2 del veredicto f5): 4 corridas más,
+el control compartido sobre `pushes[0]` de pr2, pr4, pr9 y pr13 que provee el
+bloque de memoria de los deltas de push-1. Total: **50 corridas pagadas**.
+
+Estimación con la ruta directa: 46 × $1.4484 ≈ **$67** (las 46 corridas del
+pairing); sumando las 4 dependencias, mediana 50 × $1.4484 ≈ **$72**; media
+50 × $1.7365 ≈ $87; rango $35-$180 con los unitarios extremos
+($0.7051-$3.5961). Con el unitario medido en f3 ($1.6149), 50 × $1.6149 ≈ $81.
 
 C0 NO está en esta estimación y no se mide sin pares propios congelados: el
 pairing no declara ningún brazo C0, y el plan exige congelar en pairing.json
