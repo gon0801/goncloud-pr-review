@@ -2585,9 +2585,12 @@ def metadatos_del_run(repo, run_id, attempt):
     datos = json.loads(
         sh("gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}").stdout
     )
+    # Con run-name, la API devuelve en "name" el título del run; el workflow
+    # sale del path, que el título no puede imitar.
+    ruta = datos.get("path") or ""
     return {
         "id": datos.get("id"),
-        "name": datos.get("name"),
+        "name": Path(ruta).stem if ruta.startswith(".github/workflows/") else None,
         "head_branch": datos.get("head_branch"),
         "head_sha": datos.get("head_sha"),
         "run_attempt": datos.get("run_attempt"),
