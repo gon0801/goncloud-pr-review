@@ -252,11 +252,16 @@ medición completa (f9) y $19.6463 en las 12 de la repetición de los pares de
 rep 2 (f10). Total T16 incluyendo la corrida unitaria de f3 ($1.6149):
 **$110.6439**. Dentro del rango declarado.
 
-**Decisión registrada (docs/evidence/reviewer/D0-C0.md)**: D0 vuelve a
-`current` (no se activa el protocolo delta-d0: el criterio de 20% de ahorro no
-cumple — el delta salió 11-25% más caro en todas las lecturas —, con 0
-High/Critical perdidos y 0 falsos resueltos); C0 queda sin decisión hasta
-congelar y medir pares propios.
+**Decisión propuesta al operador (docs/evidence/reviewer/D0-C0.md)**: el
+brazo delta medido ES el modo incremental vigente en producción en cada
+segundo push (`action.yml` corre gate+prepare; `cmd_gate` escribe prev.json y
+`cmd_prepare` entra incremental). Opciones reales: (1) mantener el
+incremental actual, que la medición muestra 11-25% más caro y con pérdida de
+bloques (6 de 18 corridas incrementales con el comentario sin cierre; 0 de 32
+completas; defecto de producción registrado en Plans.md), o (2) volver a
+revisión completa en el segundo push, un cambio en `cmd_prepare` con su
+encargo, pruebas y revisión. Calidad medida: 0 High/Critical perdidos y 0
+falsos resueltos en ambos brazos; precisión sin jueces.
 
 Desvío registrado y reemplazado (B1 de VEREDICTO-T16-f9): en f9 los 6 pares de
 la repetición 2 corrieron control antes que delta, al revés del orden congelado

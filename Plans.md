@@ -112,12 +112,13 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | T13 | E2 | Adjudicación versionada y muestra reservada | T12 | cc:done (PR #58, squash 47336dc; evidencia docs/evidence/reviewer/E2.md) |
 | T14 | D0 | Delta real y fallback a revisión completa | T03, T06 y T08 | cc:done (PR #60, squash ca5a7a5; evidencia docs/evidence/reviewer/D0.md) |
 | T15 | C0 | Contexto seleccionado con procedencia | T02 y T14 | cc:done (PR #62, squash bebd325; evidencia docs/evidence/reviewer/C0.md) |
-| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | medición terminada con go de David (63 corridas, $110.6439, tag `t16-candidato-e0898ff` = e0898ff; fases f1-f11 locales en rc/t16-piloto, sin push: e318211 evidencia y análisis); decisión: D0 volver a current (criterio de 20% de ahorro no cumple: delta 11-25% más caro; 0 perdidos, 0 falsos resueltos, precisión sin jueces) y C0 sin decidir hasta congelar y medir pares propios; evidencia docs/evidence/reviewer/D0-C0.md y evaluation/reviewer/v2/medicion-t16/ |
+| T16 | Activación | Piloto, medición y decisión registrada | T05, T11 y T13–T15 | medición terminada con go de David (63 corridas, $110.6439, tag `t16-candidato-e0898ff` = e0898ff; fases f1-f11 locales en rc/t16-piloto, sin push: e318211 evidencia, a6d9ccb análisis); decisión PROPUESTA al operador (docs/evidence/reviewer/D0-C0.md): el brazo delta medido ES el modo incremental vigente en producción en el segundo push; (1) mantenerlo, que la medición muestra 11-25% más caro y con pérdida de bloques, o (2) volver a revisión completa en el segundo push (cambio en cmd_prepare con encargo, pruebas y revisión); 0 High/Critical perdidos, 0 falsos resueltos, precisión sin jueces. C0 sin decidir hasta congelar y medir pares propios; evidencia docs/evidence/reviewer/D0-C0.md y evaluation/reviewer/v2/medicion-t16/ |
 
 ### Residuales
 
 | Origen | Nota | Estado |
 |---|---|---|
+| T16-f11 análisis | defecto de produccion: en modo incremental el modelo emite el bloque de hallazgos sin el cierre `-->`, read_snapshot lo rechaza y la corrida quedaria sin hallazgos publicados; 6 de 18 corridas incrementales medidas lo padecieron (0 de 32 completas). Evidencia: runs 37878698057, 37884726453, 37879482251, 37879576042, 37885194802 y 37879918075; bloques recuperados por conteo de llaves con el script versionado evaluation/reviewer/v2/medicion-t16/analisis-d0.py | abierta |
 | R0-r3 CodeRabbit | proc.wait sin timeout en flujo post-EOF de review.py; acotar al deadline restante con stop_proc; sin reproduccion | abierta |
 | R0-r3 CodeRabbit | encoding_omissions no acotada al modo incremental en review.py; filtrar por wanted en incremental + prueba | abierta |
 | R0-r3 CodeRabbit | R0.md:26 recuento historico ronda 1 dice 11, deberian ser 10 (9 ContextSearch + 1); corregir numero o quitar parentesis | abierta |
