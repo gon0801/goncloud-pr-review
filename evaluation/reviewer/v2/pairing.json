@@ -1,251 +1,821 @@
 {
-  "meta": {
-    "que_es": "pares y repeticiones fijados antes de observar resultados nuevos",
-    "regla": "los pares comparten tarea y SHAs; la configuración experimental cambia sólo en la dimensión declarada; el estado de cada par declara si sus salidas ya fueron observadas antes de este congelamiento; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], heredando repo, base y tarea (categoría) del PR; los pares de push-consecutivo declaran su caso <caso>-push-<i> con esa CaseKey de proyección; los casos con 0 o 1 push no generan push-casos",
-    "fuentes": [
-      "evaluation/reviewer/corpus.json",
-      "evaluation/reviewer/observaciones.json"
-    ],
-    "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)"
-  },
-  "experimentos": [
+ "meta": {
+  "que_es": "pares y repeticiones fijados antes de observar resultados nuevos",
+  "regla": "los pares comparten tarea y SHAs; la configuración experimental cambia sólo en la dimensión declarada; el estado de cada par declara si sus salidas ya fueron observadas antes de este congelamiento; proyección de push-casos (congelada en r4): para un caso del corpus con pushes = [p0, …, pn] y n >= 1 existen los casos <caso>-push-<i> para i = 1..n, con head = pushes[i] y sha_anterior = pushes[i-1], heredando repo, base y tarea (categoría) del PR; los pares de push-consecutivo declaran su caso <caso>-push-<i> con esa CaseKey de proyección; los casos con 0 o 1 push no generan push-casos",
+  "fuentes": [
+   "evaluation/reviewer/corpus.json",
+   "evaluation/reviewer/observaciones.json"
+  ],
+  "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)",
+  "congelado_T16": "2026-10-08 (T16, base 3c3d9eb): 3 repeticiones por par, orden alternado",
+  "congelado_dependencias_T16": "2026-10-08 (T16 f6, base c7737c0): 4 controles compartidos sobre pushes[0] (pr2, pr4, pr9, pr13), eslabón inicial de la cadena de memoria de los deltas; decisión B2 de VEREDICTO-T16-f5, congelada antes de medir",
+  "nota_T16": "repeticion 1 = ya observada en E1/E2 (testigo historico), excepto push-consecutivo, cuyos pares de repeticion 1 quedaron pendientes en el congelamiento y se midieron despues en T16 f9; repeticiones 2-3 = brazos control (revision completa 2o push) vs variante (D0; C0 por separado)"
+ },
+ "experimentos": [
+  {
+   "experimento": "producto-en-sha-exacto",
+   "pares": [
     {
-      "experimento": "producto-en-sha-exacto",
-      "pares": [
-        {
-          "caso": "pr13",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
-          "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
-          "tarea": "entre_modulos",
-          "sha_anterior": null,
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "coderabbit",
-            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
-            "intento": 1
-          },
-          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
-        },
-        {
-          "caso": "pr2",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
-          "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
-          "tarea": "entre_modulos",
-          "sha_anterior": null,
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "coderabbit",
-            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
-            "intento": 1
-          },
-          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
-        },
-        {
-          "caso": "pr24",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
-          "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
-          "tarea": "entre_modulos",
-          "sha_anterior": null,
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "coderabbit",
-            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
-            "intento": 1
-          },
-          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
-        },
-        {
-          "caso": "pr4",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
-          "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
-          "tarea": "entre_modulos",
-          "sha_anterior": null,
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "coderabbit",
-            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
-            "intento": 1
-          },
-          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
-        },
-        {
-          "caso": "pr9",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
-          "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
-          "tarea": "entre_modulos",
-          "sha_anterior": null,
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "coderabbit",
-            "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
-            "intento": 1
-          },
-          "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento"
-        }
-      ]
+     "caso": "pr13",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento",
+     "orden": "control-variante"
     },
     {
-      "experimento": "push-consecutivo",
-      "pares": [
-        {
-          "caso": "pr13-push-1",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
-          "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
-          "tarea": "entre_modulos",
-          "sha_anterior": "bc01955781232c240227ba8ddbec8f19045d635a",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        },
-        {
-          "caso": "pr2-push-1",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
-          "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
-          "tarea": "entre_modulos",
-          "sha_anterior": "afb789720670aafcc09c48c4401dcabee18df556",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        },
-        {
-          "caso": "pr2-push-2",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
-          "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
-          "tarea": "entre_modulos",
-          "sha_anterior": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        },
-        {
-          "caso": "pr2-push-3",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
-          "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
-          "tarea": "entre_modulos",
-          "sha_anterior": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        },
-        {
-          "caso": "pr4-push-1",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
-          "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
-          "tarea": "entre_modulos",
-          "sha_anterior": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        },
-        {
-          "caso": "pr9-push-1",
-          "repo": "gon0801/goncloud-pr-review",
-          "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
-          "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",
-          "tarea": "entre_modulos",
-          "sha_anterior": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
-          "repeticion": 1,
-          "control": {
-            "producto": "revisor",
-            "configuracion": "revision completa (protocolo D0)",
-            "intento": 1
-          },
-          "variante": {
-            "producto": "revisor",
-            "configuracion": "delta-d0 (protocolo D0)",
-            "intento": 1
-          },
-          "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)"
-        }
-      ]
+     "caso": "pr2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr24",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+     "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr4",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr9",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "ya observado: salidas retenidas y adjudicadas en E1 antes de este congelamiento; el par se fija aquí para el informe v2 sin re-cegamiento",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr13",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr13",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "6eb8cc7bd96aa812e732a7eafa1f22e54501408a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr24",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+     "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr24",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "2b3723057100ae12564ef7b9b0b55aee617274fd",
+     "head": "0ace22fb12a0935319b0d6fdd0d9fc8e349cb454",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr4",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr4",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr9",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr9",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "09c67ab8f35e6b36e8a46fe49ed4a8fcf67fd852",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "deepseek-v4.1-flash vía deepseek directo (retanda E1aP; ATTEMPTS=2, presupuesto 1320 s)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "coderabbit",
+      "configuracion": "comentarios existentes en el SHA exacto; sin revisión disparada",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
     }
-  ],
-  "adjudicacion": {
-    "normalizacion": "1",
-    "jueces": [],
-    "desempates": {
-      "version": "1",
-      "regla": "donde los jueces difieren decide un tercer juez sin producto; si persiste, unresolved; la lista de jueces se congela en este archivo antes de la próxima hoja (pendiente: no hay recolección autorizada)"
+   ]
+  },
+  {
+   "experimento": "push-consecutivo",
+   "pares": [
+    {
+     "caso": "pr13-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
+     "tarea": "entre_modulos",
+     "sha_anterior": "bc01955781232c240227ba8ddbec8f19045d635a",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "tarea": "entre_modulos",
+     "sha_anterior": "afb789720670aafcc09c48c4401dcabee18df556",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "tarea": "entre_modulos",
+     "sha_anterior": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-3",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
+     "tarea": "entre_modulos",
+     "sha_anterior": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr4-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr9-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",
+     "tarea": "entre_modulos",
+     "sha_anterior": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+     "repeticion": 1,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "sin observaciones capturadas: recolección pendiente (sin autorización de mediciones pagadas)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr13-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
+     "tarea": "entre_modulos",
+     "sha_anterior": "bc01955781232c240227ba8ddbec8f19045d635a",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr13-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "f890ca6ca769dffbe876cb685214b9c1f6eb477b",
+     "tarea": "entre_modulos",
+     "sha_anterior": "bc01955781232c240227ba8ddbec8f19045d635a",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "tarea": "entre_modulos",
+     "sha_anterior": "afb789720670aafcc09c48c4401dcabee18df556",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr2-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "tarea": "entre_modulos",
+     "sha_anterior": "afb789720670aafcc09c48c4401dcabee18df556",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "tarea": "entre_modulos",
+     "sha_anterior": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr2-push-2",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "tarea": "entre_modulos",
+     "sha_anterior": "8842b001ee6fe12ef481c48e11ae2cf016d87cda",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr2-push-3",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
+     "tarea": "entre_modulos",
+     "sha_anterior": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr2-push-3",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "de5e82e9cd0717bf7c2ee970c9718c82cb0b3698",
+     "tarea": "entre_modulos",
+     "sha_anterior": "48c43a90ae593c12f7777fdb67381f8e1d139cbc",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr4-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr4-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "ac1d208fd3378ce343445f19028af06df0342a0a",
+     "tarea": "entre_modulos",
+     "sha_anterior": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr9-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",
+     "tarea": "entre_modulos",
+     "sha_anterior": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+     "repeticion": 2,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "variante-control"
+    },
+    {
+     "caso": "pr9-push-1",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "347aad632f0d719ca1968f50861bc5a1af3e92a2",
+     "tarea": "entre_modulos",
+     "sha_anterior": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+     "repeticion": 3,
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0)",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "revisor",
+      "configuracion": "delta-d0 (protocolo D0)",
+      "intento": 1
+     },
+     "estado": "T16: pendiente de observacion (congelado 2026-10-08, base 3c3d9eb)",
+     "orden": "control-variante"
     }
+   ]
+  },
+  {
+   "experimento": "dependencia-control-push-0",
+   "nota": "decisión B2 de VEREDICTO-T16-f5: en los push-1 el sha_anterior es pushes[0] y ningún par congelado lo controlaba; este experimento congela el eslabón inicial de la cadena de memoria. Son dependencias, no pares medidos: no se adjudican y su variante no existe. Una corrida por PR, compartida por las repeticiones 1-3 (la memoria es insumo del par, no un brazo observado)",
+   "pares": [
+    {
+     "caso": "pr2-dep-push-0",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+     "head": "afb789720670aafcc09c48c4401dcabee18df556",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "compartida": "repeticiones 1-3 de pr2-push-1",
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0); dependencia compartida: provee el bloque de memoria de los deltas de pr2",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "ninguno",
+      "configuracion": "no aplica: eslabón de memoria, no es un par medido",
+      "intento": 1
+     },
+     "estado": "T16 f6: dependencia congelada (2026-10-08, base c7737c0); recolección pendiente, con autorización de gasto ya otorgada para la medición",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr4-dep-push-0",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "f6a3897a87de0e6655c916b6c2913a8b27bf6cfa",
+     "head": "49bfde8b34acf65f4be70ecfa7436a64790cc0e6",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "compartida": "repeticiones 1-3 de pr4-push-1",
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0); dependencia compartida: provee el bloque de memoria de los deltas de pr4",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "ninguno",
+      "configuracion": "no aplica: eslabón de memoria, no es un par medido",
+      "intento": 1
+     },
+     "estado": "T16 f6: dependencia congelada (2026-10-08, base c7737c0); recolección pendiente, con autorización de gasto ya otorgada para la medición",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr9-dep-push-0",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "d2e8dd3c5b84a2f0ffcfeae65a98b72fb6665a86",
+     "head": "9fda345bc4c9720f2cbef5eb391ac6aa020fad95",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "compartida": "repeticiones 1-3 de pr9-push-1",
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0); dependencia compartida: provee el bloque de memoria de los deltas de pr9",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "ninguno",
+      "configuracion": "no aplica: eslabón de memoria, no es un par medido",
+      "intento": 1
+     },
+     "estado": "T16 f6: dependencia congelada (2026-10-08, base c7737c0); recolección pendiente, con autorización de gasto ya otorgada para la medición",
+     "orden": "control-variante"
+    },
+    {
+     "caso": "pr13-dep-push-0",
+     "repo": "gon0801/goncloud-pr-review",
+     "base": "ee06f9760143d5a2375726a01ef5e4d0dd92171e",
+     "head": "bc01955781232c240227ba8ddbec8f19045d635a",
+     "tarea": "entre_modulos",
+     "sha_anterior": null,
+     "repeticion": 1,
+     "compartida": "repeticiones 1-3 de pr13-push-1",
+     "control": {
+      "producto": "revisor",
+      "configuracion": "revision completa (protocolo D0); dependencia compartida: provee el bloque de memoria de los deltas de pr13",
+      "intento": 1
+     },
+     "variante": {
+      "producto": "ninguno",
+      "configuracion": "no aplica: eslabón de memoria, no es un par medido",
+      "intento": 1
+     },
+     "estado": "T16 f6: dependencia congelada (2026-10-08, base c7737c0); recolección pendiente, con autorización de gasto ya otorgada para la medición",
+     "orden": "control-variante"
+    }
+   ]
   }
+ ],
+ "adjudicacion": {
+  "normalizacion": "1",
+  "jueces": [],
+  "desempates": {
+   "version": "1",
+   "regla": "donde los jueces difieren decide un tercer juez sin producto; si persiste, unresolved; la lista de jueces se congela en este archivo antes de la próxima hoja (pendiente: no hay recolección autorizada)"
+  }
+ }
 }

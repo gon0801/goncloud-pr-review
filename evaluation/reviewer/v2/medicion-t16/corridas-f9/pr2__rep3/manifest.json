@@ -1,0 +1,24 @@
+{
+  "base": "5844ff63ab7bcd10644824f70ccfb7dd7791c0ba",
+  "head": "3166ad5a7f6ca4a95b00432154fc19cfb689e3c5",
+  "reviewed": [
+    "review.py",
+    "scripts/install.sh",
+    "scripts/set-secret.sh",
+    "tests/test_review.py",
+    ".github/workflows/ai-review.yml",
+    "action.yml",
+    "templates/ai-review.yml",
+    "README.md",
+    "prompt.md"
+  ],
+  "excluded": [],
+  "diff_bytes": 54321,
+  "over_budget_bytes": 0,
+  "mode": "full",
+  "prev_sha": null,
+  "changed_files": [],
+  "reason": "no-prev",
+  "has_prev_findings": false,
+  "max_turns": 60
+}

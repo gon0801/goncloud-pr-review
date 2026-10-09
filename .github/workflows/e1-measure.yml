@@ -7,6 +7,17 @@
 # ruta; la validación temprana lo compara contra vacío sin leer su valor y
 # una ruta nunca cae a la llave de la otra.
 # No dispara ai-review.yml: ese sólo corre en eventos pull_request.
+# Brazo delta-d0 (T16): prev_sha + prev_findings construyen prev.json antes de
+# prepare, con el bloque numerado como lo dejaría el publicador
+# (merge_findings sobre parse_model_findings), para que la corrida salga
+# incremental contra el push anterior con ids F1..Fn de ese eslabón; sin esas
+# entradas el brazo es control (full). La memoria viene de la revisión del
+# push anterior (para push-1, de la dependencia congelada sobre pushes[0]): la
+# cadena es control(push i-1) -> delta(push i); los ids se renumeran por
+# eslabón y no forman una cadena estable entre pushes. Desde T16 f13 el
+# segundo push se fuerza a full: con este código la entrada delta sale full
+# (forced-full-t16) conservando el delta real; el brazo incremental medido
+# solo se reproduce despachando el tag t16-candidato-e0898ff.
 name: E1 measure
 
 on:
@@ -31,6 +42,14 @@ on:
         options:
           - opencode-go
           - deepseek
+      prev_sha:
+        description: "Brazo delta-d0: SHA hex40 del push anterior; vacío = brazo control (full)"
+        required: false
+        default: ""
+      prev_findings:
+        description: "Brazo delta-d0: bloque de hallazgos del control del push anterior; vacío = brazo control"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -72,6 +91,21 @@ jobs:
           esac
           echo "nombre=$proveedor" >> "$GITHUB_OUTPUT"
 
+      - name: Validar entradas del brazo delta
+        if: inputs.prev_sha != '' || inputs.prev_findings != ''
+        env:
+          PREV_SHA: ${{ inputs.prev_sha }}
+          PREV_FINDINGS: ${{ inputs.prev_findings }}
+        run: |
+          if [ -z "$PREV_SHA" ] || [ -z "$PREV_FINDINGS" ]; then
+            echo "::error::el brazo delta necesita prev_sha y prev_findings juntos (uno de los dos llegó vacío)" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$PREV_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::prev_sha debe ser hex40" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -86,7 +120,7 @@ jobs:
       - name: Revisor fijo fuera del árbol medido
         run: |
           mkdir -p "$RUNNER_TEMP/reviewer"
-          cp review.py prompt.md "$RUNNER_TEMP/reviewer/"
+          cp review.py review_domain.py review_context.py prompt.md "$RUNNER_TEMP/reviewer/"
 
       - name: Mover el árbol al head del PR y verificar SHAs
         run: |
@@ -102,6 +136,64 @@ jobs:
         run: |
           gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr }}" \
             --jq '{pull_request:{title:.title,body:.body}}' > /tmp/e1-event.json
+
+      - name: Construir prev.json del brazo delta
+        if: inputs.prev_sha != ''
+        env:
+          PREV_SHA: ${{ inputs.prev_sha }}
+          PREV_FINDINGS: ${{ inputs.prev_findings }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          sys.path.insert(0, os.path.join(os.environ["RUNNER_TEMP"], "reviewer"))
+          from review import (
+              merge_findings,
+              parse_findings_block,
+              parse_model_findings,
+              serialize_findings,
+          )
+
+          work = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review")
+          os.makedirs(work, exist_ok=True)
+          modelo = parse_model_findings(os.environ["PREV_FINDINGS"])
+          if modelo is None:
+              raise SystemExit(
+                  "::error::prev_findings no trae un bloque de hallazgos legible"
+              )
+          merged, _nuevos = merge_findings(
+              None,
+              modelo,
+              changed_files=(),
+              reverted_files=(),
+              dismiss_ids=(),
+              dismiss_all=False,
+          )
+          merged["seen"] = 0
+          bloque = serialize_findings(merged)
+          if not isinstance(bloque, str):
+              raise SystemExit(
+                  "::error::el bloque del control desborda el presupuesto de memoria"
+              )
+          state = parse_findings_block(bloque)
+          if state is None or any(
+              f.get("id") is None for f in state.get("findings", [])
+          ):
+              raise SystemExit(
+                  "::error::el estado del brazo delta quedo con hallazgos sin id"
+              )
+          prev = {
+              "sha": os.environ["PREV_SHA"],
+              "state": state,
+              "completion": "complete",
+          }
+          with open(os.path.join(work, "prev.json"), "w") as fh:
+              json.dump(prev, fh)
+          print(
+              f"brazo delta: prev_sha={os.environ['PREV_SHA']} "
+              f"hallazgos_previos={len(state.get('findings', []))}"
+          )
+          PY
 
       - name: Preparar diff y contexto
         env:
@@ -170,7 +262,7 @@ jobs:
       - name: Subir salidas del caso
         uses: actions/upload-artifact@v4
         with:
-          name: e1-salida-${{ inputs.caso }}-${{ steps.sha.outputs.corto }}
+          name: e1-salida-${{ inputs.caso }}-${{ steps.sha.outputs.corto }}${{ inputs.prev_sha != '' && '-delta' || '' }}
           path: |
             ${{ runner.temp }}/ai-review/result.json
             ${{ runner.temp }}/ai-review/manifest.json
