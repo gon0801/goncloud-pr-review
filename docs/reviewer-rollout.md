@@ -85,10 +85,12 @@ completo desde el paso 1.
 # Piloto de T16: orden, avance y medición
 
 Estado: la medición terminó (63 corridas, $110.6439) y la decisión de D0 se
-ejecutó en el PR #65; el piloto en el repo central y en los consumidores sigue
-pendiente. Nada está activado. Cualquier activación requiere encargo con
-revisión cruzada previa. El corte y el retorno mecánicos son los
-que describe el procedimiento de T11 de arriba.
+ejecutó en el PR #65. El piloto en el repo central se ejecutó: la cadena
+coordinador → worker → publicador funciona tras seis arreglos, pero el
+publicador no muestra los hallazgos, así que el repo central volvió al revisor
+actual (#77). Resultado y decisiones en `docs/evidence/reviewer/T16-piloto.md`.
+Los consumidores quedan para después de la capa visible. El corte y el retorno
+mecánicos son los que describe el procedimiento de T11 de arriba.
 
 ## Qué hay congelado hoy
 
