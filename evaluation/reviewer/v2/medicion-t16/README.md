@@ -15,9 +15,11 @@ VEREDICTO-T16-f9: los artefactos de GitHub vencen, esta copia no).
 
 - `corridas-f9/<corrida>/result.json` y `manifest.json`: las 50 corridas de la
   medición completa (fase 9, 2026-10-09). El campo `result` de `result.json`
-  (texto de hallazgos) se quitó para no inflar el árbol; el `result.json`
-  completo vive en el artefacto `e1-salida-…` de cada run ID (retención
-  GitHub hasta 2027-01-07) y en `/tmp/t16-f9` mientras exista.
+  (texto de hallazgos) se quitó de esos archivos y vive en `textos.jsonl`.
+- `textos.jsonl`: el texto completo (`result`) de las 62 corridas, una fila
+  por corrida con `id`, `fase` y `run_id`, copiado de los artefactos de GitHub
+  antes de su vencimiento (2027-01-07). Con él, `analisis-d0.py` reproduce el
+  análisis desde el repo sin depender de `/tmp` ni de los artefactos.
 - `corridas-f10/<corrida>/…`: las 12 corridas de la repetición de los 6 pares
   de repetición 2 en el orden congelado `variante-control` (fase 10). Misma
   decisión de recorte de texto.

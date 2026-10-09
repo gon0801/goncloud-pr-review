@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Análisis por par de D0 (reps válidas: 1 y 3 de f9, 2 de f10). Parser canónico.
 
-Ver docs/evidence/reviewer/D0-C0.md. Entradas: artefactos completos (con campo `result`) en /tmp/t16-f9/artefactos y /tmp/t16-f10/artefactos (copia volátil; re-descargables por run ID con los ledgers de este directorio, que no retienen el texto), ledgers por fase y SHAs del pairing. La copia versionada de los result.json NO conserva el campo `result`."""
+Ver docs/evidence/reviewer/D0-C0.md. Entradas, todas versionadas en este
+directorio: ledger-f9.jsonl y ledger-f10.jsonl, los manifest.json y result.json
+de corridas-f9/ y corridas-f10/, y textos.jsonl con el texto completo
+(`result`) de cada corrida. Prerrequisito: los commits de los PRs del corpus
+alcanzables en el clon (git fetch origin 'refs/pull/*/head:refs/remotes/pr/*')."""
 
 import json
 import re
@@ -10,14 +14,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-WT = Path("/Users/dn/dev/wt/rc-t16")
+EV = Path(__file__).resolve().parent
+WT = EV.parents[3]
 sys.path.insert(0, str(WT))
 from review_domain import read_snapshot  # noqa: E402
 
-F9 = Path("/tmp/t16-f9")
-F10 = Path("/tmp/t16-f10")
-f9 = {r["id"]: r for r in map(json.loads, (F9 / "ledger.jsonl").open())}
-f10 = {r["id"]: r for r in map(json.loads, (F10 / "ledger.jsonl").open())}
+f9 = {r["id"]: r for r in map(json.loads, (EV / "ledger-f9.jsonl").open())}
+f10 = {r["id"]: r for r in map(json.loads, (EV / "ledger-f10.jsonl").open())}
+TEXTOS = {r["id"]: r["result"] for r in map(json.loads, (EV / "textos.jsonl").open())}
 CASOS = [
     "pr13-push-1",
     "pr2-push-1",
@@ -45,11 +49,11 @@ def corrida(caso, rep, brazo):
 
 
 def artefacto(rid):
-    raiz = F10 if "/rep2-rerun" in rid else F9
-    d = raiz / "artefactos" / rid.replace("/", "__")
-    return json.loads((d / "result.json").read_text()), json.loads(
-        (d / "manifest.json").read_text()
-    )
+    fase = "corridas-f10" if "/rep2-rerun" in rid else "corridas-f9"
+    d = EV / fase / rid.replace("/", "__")
+    resultado = json.loads((d / "result.json").read_text())
+    resultado["result"] = TEXTOS[rid]
+    return resultado, json.loads((d / "manifest.json").read_text())
 
 
 def hallazgos(texto):

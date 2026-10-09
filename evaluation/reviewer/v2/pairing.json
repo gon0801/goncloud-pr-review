@@ -9,7 +9,7 @@
   "congelado": "2026-10-07 (bloque E2 r4, base 9e3ebfa)",
   "congelado_T16": "2026-10-08 (T16, base 3c3d9eb): 3 repeticiones por par, orden alternado",
   "congelado_dependencias_T16": "2026-10-08 (T16 f6, base c7737c0): 4 controles compartidos sobre pushes[0] (pr2, pr4, pr9, pr13), eslabón inicial de la cadena de memoria de los deltas; decisión B2 de VEREDICTO-T16-f5, congelada antes de medir",
-  "nota_T16": "repeticion 1 = ya observada en E1/E2 (testigo historico); repeticiones 2-3 = brazos control (revision completa 2o push) vs variante (D0; C0 por separado)"
+  "nota_T16": "repeticion 1 = ya observada en E1/E2 (testigo historico), excepto push-consecutivo, cuyos pares de repeticion 1 quedaron pendientes en el congelamiento y se midieron despues en T16 f9; repeticiones 2-3 = brazos control (revision completa 2o push) vs variante (D0; C0 por separado)"
  },
  "experimentos": [
   {

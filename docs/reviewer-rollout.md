@@ -165,7 +165,7 @@ satisfechos identificados; cada opción conserva el esquema y el presupuesto
 necesarios para desactivarla. La medición viva y la activación requieren encargo
 posterior y revisión cruzada previa.
 
-## Diseño de la corrida de costo unitario (no ejecutada)
+## Diseño original de la corrida de costo unitario
 
 El candidato de medición es el commit que ya incluye el arreglo del `cp` (con
 su prueba actualizada), publicado como tag `t16-candidato-<sha8>` en el remoto
@@ -201,8 +201,11 @@ en el `result.json` del control del push anterior). Con esas entradas el
 workflow construye `prev.json` antes de `prepare` como lo dejaría el estado
 publicado que lee `cmd_gate`: numera los hallazgos con `merge_findings` sobre
 `parse_model_findings` (los `F-new` del modelo pasan a F1..Fn, nunca ids
-vacíos) y fija `completion` en complete. La corrida sale incremental (manifest
-`mode=incremental`, `prev_sha` del push anterior); sin las entradas, la corrida
+vacíos) y fija `completion` en complete. Sobre el tag de la medición
+(`t16-candidato-e0898ff`) la corrida sale incremental (manifest
+`mode=incremental`, `prev_sha` del push anterior); desde el forzado del PR #65,
+con el código de `main` la misma entrada sale `full` con
+`reason=forced-full-t16` y conserva el delta real. Sin las entradas, la corrida
 es control (`mode=full`). Declaración N2 del veredicto f5: `completion` queda
 fija en complete y no se aplican descartes, razonable en E1 porque nada se
 publica y no existen descartes que aplicar.
@@ -256,8 +259,8 @@ medición completa (f9) y $19.6463 en las 12 de la repetición de los pares de
 rep 2 (f10). Total T16 incluyendo la corrida unitaria de f3 ($1.6149):
 **$110.6439**. Dentro del rango declarado.
 
-**Decisión propuesta al operador (docs/evidence/reviewer/D0-C0.md)**: el
-brazo delta medido ES el modo incremental vigente en producción en cada
+**Propuesta histórica al operador (docs/evidence/reviewer/D0-C0.md)**. En el
+momento de la medición el brazo delta medido ERA el modo incremental vigente en producción en cada
 segundo push (`action.yml` corre gate+prepare; `cmd_gate` escribe prev.json y
 `cmd_prepare` entra incremental). Opciones reales: (1) mantener el
 incremental actual, que la medición muestra 11-25% más caro y con pérdida de
@@ -265,7 +268,8 @@ bloques (6 de 18 corridas incrementales con el comentario sin cierre; 0 de 32
 completas; defecto de producción registrado en Plans.md), o (2) volver a
 revisión completa en el segundo push, un cambio en `cmd_prepare` con su
 encargo, pruebas y revisión. Calidad medida: 0 High/Critical perdidos y 0
-falsos resueltos en ambos brazos; precisión sin jueces.
+falsos resueltos en ambos brazos; precisión sin jueces. El operador eligió la
+opción (2), ejecutada en el PR #65.
 
 Desvío registrado y reemplazado (B1 de VEREDICTO-T16-f9): en f9 los 6 pares de
 la repetición 2 corrieron control antes que delta, al revés del orden congelado
@@ -291,8 +295,9 @@ modelo, proveedor y reglas) y recién entonces estimar su costo aparte.
 
 Límites de la estimación, declarados: (1) no incluye corridas de calibración
 ni repeticiones por fallos del proveedor (E1 necesitó retanda por cuota); (2)
-los costos unitarios vienen de diffs de E1 (0.7-3.6 KB revisados), y casos más
-grandes cuestan más por la relación turnos-diff; (3) el lado CodeRabbit de las
+los costos unitarios vienen de los diffs de E1, cuyo tamaño no se midió
+(el diff de pr2 mide 54 321 bytes; el rango 0.7-3.6 es de costo en dólares),
+y casos más grandes cuestan más por la relación turnos-diff; (3) el lado CodeRabbit de las
 reps 2-3 de producto son los mismos comentarios existentes en cada repetición:
 su dispersión es cero por construcción y el informe de T16 debe declararlo
 para no leerla como estabilidad; (4) el gasto de proveedor de la variante
