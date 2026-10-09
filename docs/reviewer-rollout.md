@@ -95,9 +95,11 @@ que describe el procedimiento de T11 de arriba.
   alternado control-variante, congelado en `882d006` antes de medir. 15 pares de
   producto en el SHA exacto (5 ya observados en E1, 10 pendientes) y 18 pares de
   pushes consecutivos (12 pendientes de T16 y 6 de la repeticion 1 sin capturar).
-- SHA candidato del código: `882d00610fe8546b8ccc2404a9f5639c19632bbb` (punta de
-  `rc/t16-piloto`). El piloto queda clavado a ese `ACTION_SHA`; un merge de
-  `main` del repo central no cambia lo que ejecutan los consumidores instalados.
+- SHA candidato del código: tag `t16-candidato-e0898ff` =
+  `e0898ffbb305547bc8175ec64ca1573b7e3c337b`, punta de `rc/t16-piloto` y
+  ref de la medición completa. El piloto queda clavado a ese `ACTION_SHA`; un
+  merge de `main` del repo central no cambia lo que ejecutan los consumidores
+  instalados. (`882d006` queda como el commit que congeló el pairing.)
 - D0 y C0 desactivadas por defecto y sin caller que las active:
   `ReviewPolicy.strict_budget=False` en los dos únicos callers de producción
   (`review.py` prepare y execute-request) y `selectivo` sin pasar en ninguno.
@@ -239,6 +241,30 @@ Estimación con la ruta directa: 46 × $1.4484 ≈ **$67** (las 46 corridas del
 pairing); sumando las 4 dependencias, mediana 50 × $1.4484 ≈ **$72**; media
 50 × $1.7365 ≈ $87; rango $35-$180 con los unitarios extremos
 ($0.7051-$3.5961). Con el unitario medido en f3 ($1.6149), 50 × $1.6149 ≈ $81.
+
+## Resultado real de la medición (fases 9 y 10, 2026-10-09)
+
+Ejecutada sobre el tag `t16-candidato-e0898ff` con proveedor deepseek, 3
+corridas concurrentes como máximo y cadena de memoria por PR. Total:
+**$109.029** — $89.3827 en las 50 corridas de la medición completa (f9) y
+$19.6463 en las 12 de la repetición de los pares de rep 2 (f10). Dentro del
+rango declarado.
+
+Desvío registrado y reemplazado (B1 de VEREDICTO-T16-f9): en f9 los 6 pares de
+la repetición 2 corrieron control antes que delta, al revés del orden congelado
+(`variante-control`). Esas 12 corridas quedan como desvío sin borrar
+(evidencia en `evaluation/reviewer/v2/medicion-t16/`) y la f10 repitió esos 6
+pares en el orden congelado con los mismos bloques fuente. Para el análisis de
+D0, la repetición 2 válida de cada par de push es la de f10.
+
+Observación para el informe: en mediana no pareada, el brazo delta-d0 de f9
+salió por encima del control ($1.6322 contra $1.3516); la lectura de costo de
+D0 corresponde al análisis por par con la repetición 2 de f10.
+
+Límite operativo del workflow (N3 de VEREDICTO-T16-f9): dos despachos con el
+mismo `caso` comparten grupo de concurrencia y GitHub cancela el pendiente más
+viejo. La medición usó etiquetas únicas por corrida (`-rN`, `-r2b`); cualquier
+re-dispacho debe hacer lo mismo.
 
 C0 NO está en esta estimación y no se mide sin pares propios congelados: el
 pairing no declara ningún brazo C0, y el plan exige congelar en pairing.json
