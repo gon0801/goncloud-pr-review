@@ -994,6 +994,13 @@ def cmd_prepare(args):
         mode, reason = "full", "no-state"
     if mode == "incremental" and prev.get("completion") != "complete":
         mode, reason = "full", "incomplete-prev"
+    if mode == "incremental":
+        # T16 f13 (docs/evidence/reviewer/D0-C0.md): el incremental medido en la
+        # medicion completa costo 11-25% mas que una revision completa del mismo
+        # par y 6 de 18 corridas perdieron el bloque de hallazgos (sin el cierre
+        # `-->`, read_snapshot lo rechaza). Decision del operador: el segundo push
+        # se revisa completo. El camino incremental queda intacto para revertir.
+        mode, reason = "full", "forced-full-t16"
     changed = (
         changed_since(repo, prev_sha, head)
         if mode == "incremental" or reason == "incomplete-prev"
@@ -1011,7 +1018,14 @@ def cmd_prepare(args):
         ),
     )
     digest = digest_de_politica(policy)
-    if prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
+    # La corrida forzada a full no recibe memoria: si se la pasaramos,
+    # prepare_review prepararia el delta por su cuenta y el manifest mentiria.
+    if (
+        reason != "forced-full-t16"
+        and prev_sha
+        and _sha_hexa(prev_sha)
+        and prev.get("state")
+    ):
         current = review_domain.snapshot_a_v3(
             review_domain.Snapshot(
                 schema=2,
