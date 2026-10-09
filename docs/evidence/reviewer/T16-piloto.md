@@ -8,7 +8,18 @@ decisión de D0 están en `D0-C0.md`.
 
 El conjunto coordinado (publicador `ai-review-publish.yml` y worker
 `ai-review-worker.yml`) se instaló en el repo central con
-`scripts/install.sh --coordinado`, fijado a un SHA candidato por tag. El
+`scripts/install.sh --coordinado`, fijado a un SHA candidato por tag. Cada
+arreglo produjo un candidato nuevo y una reinstalación:
+
+| Tag | SHA | Instalación |
+|---|---|---|
+| `t16-piloto-210c58e1` | `210c58e17a6900b951ecef6d73b0e8913617ae4a` | no se activó (inyección en las plantillas, #70) |
+| `t16-piloto-a2267ad3` | `a2267ad35b54ce18be2d73f5a3f339f5389db161` | #69 |
+| `t16-piloto-e28bd4b5` | `e28bd4b5f8cb67914b8dbc10cb4a9e2a7c90d2a4` | #73 |
+| `t16-piloto-73878f38` | `73878f38add3a0ee06650a0547bab5957cf149fb` | #75, el que publicó en el #71 |
+
+El arreglo de #76 (SHA ancestro de `main`) se mergeó después del último
+candidato y no llegó a instalarse antes de volver a current. El
 PR de prueba #71 tiene errores a propósito (división por cero, índice fuera
 de rango y `eval` sobre datos leídos de archivo).
 
@@ -51,15 +62,6 @@ Ninguno se veía en las pruebas, porque simulaban los eventos de GitHub.
   repo central (#77). Reactivarlo exige primero la capa visible del publicador,
   como tarea aparte.
 
-## Ensayo de retorno
-
-Tras el #77, un segundo push al #71 (0a88e65) hizo correr el revisor actual
-sobre la memoria schema 3 que dejó el coordinador. El revisor la leyó y la
-actualizó: conservó F1 Critical con el mismo id en «Siguen abiertos», agregó
-F2 a F5 como nuevos, avanzó la generación de 2 a 3 sin cambiar el schema, dejó
-un único comentario identificado por el SHA y la memoria quedó en
-`complete_claim` sin solicitudes pendientes. El escritor compatible continúa
-publicando sobre la memoria ampliada, como pide el plan.
 - **D0: revisión completa en el segundo push**, ejecutada en el PR #65
   (detalle en `D0-C0.md`).
 - **C0: no se activa.** No tiene pares propios congelados ni medición; medirlo
@@ -71,6 +73,15 @@ publicando sobre la memoria ampliada, como pide el plan.
   `gon0801/openclaw` y `gon0801/Orbit` no existen con esos nombres; la tarea
   tiene que confirmar los repos reales.
 
+## Ensayo de retorno
+
+Tras el #77, un segundo push al #71 (0a88e65) hizo correr el revisor actual
+sobre la memoria schema 3 que dejó el coordinador. El revisor la leyó y la
+actualizó: conservó F1 Critical con el mismo id en «Siguen abiertos», agregó
+F2 a F5 como nuevos, avanzó la generación de 2 a 3 sin cambiar el schema, dejó
+un único comentario identificado por el SHA y la memoria quedó en
+`complete_claim` sin solicitudes pendientes. El escritor compatible continúa
+publicando sobre la memoria ampliada, como pide el plan.
 ## Costo
 
 La medición de T16 costó $110.6439 (`D0-C0.md`). Durante el piloto, el
