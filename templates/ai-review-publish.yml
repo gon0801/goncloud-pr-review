@@ -21,7 +21,7 @@ on:
       worker_attempt:
         description: Attempt del run del worker
         required: false
-        default: ""
+        default: "1"
         type: string
 
 # Un solo escritor por repositorio y PR: los cuatro eventos resuelven el
