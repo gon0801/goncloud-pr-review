@@ -1937,12 +1937,30 @@ class Workflows(unittest.TestCase):
         cls.worker_lineas = cls.worker_texto.splitlines()
 
     def test_dogfood_workflow_matches_template(self):
-        template = (ROOT / "templates/ai-review.yml").read_text()
-        dogfood = (ROOT / ".github/workflows/ai-review.yml").read_text()
-        self.assertEqual(
-            dogfood,
-            template.replace("uses: gon0801/goncloud-pr-review@main", "uses: ./"),
-        )
+        flujos = ROOT / ".github" / "workflows"
+        coordinado = [flujos / "ai-review-publish.yml", flujos / "ai-review-worker.yml"]
+        dogfood = flujos / "ai-review.yml"
+        if dogfood.exists():
+            self.assertFalse(
+                any(p.exists() for p in coordinado), "un solo escritor por repo"
+            )
+            template = (ROOT / "templates/ai-review.yml").read_text()
+            self.assertEqual(
+                dogfood.read_text(),
+                template.replace("uses: gon0801/goncloud-pr-review@main", "uses: ./"),
+            )
+            return
+        fijados = set()
+        for instalado in coordinado:
+            with self.subTest(flujo=instalado.name):
+                texto = instalado.read_text()
+                self.assertIn("repository: gon0801/goncloud-pr-review", texto)
+                fijados.update(re.findall(r"ref: ([0-9a-f]{40})\b", texto))
+                plantilla = (ROOT / "templates" / instalado.name).read_text()
+                for linea in plantilla.splitlines():
+                    if "secrets." in linea:
+                        self.assertIn(linea.strip(), texto)
+        self.assertEqual(len(fijados), 1, "el conjunto coordinado fija un solo SHA")
 
     def test_template_passes_disabled_and_skips_checkout_when_disabled(self):
         template = (ROOT / "templates/ai-review.yml").read_text()
