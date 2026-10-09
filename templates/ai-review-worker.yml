@@ -72,7 +72,7 @@ jobs:
         run: python "$GITHUB_WORKSPACE/review.py" prepare --work "${RUNNER_TEMP}/ai-review"
       - name: versión de Python para la caché de instalación
         id: py
-        run: echo "version=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" >> "$GITHUB_OUTPUT"
       - name: caché de instalación (Claude Code y LiteLLM)
         uses: actions/cache@v4
         with:

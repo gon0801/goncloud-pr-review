@@ -197,7 +197,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | UW-r6 veredicto N3 | FINDING_IDENTITY no viaja al worker; close-result parsea con current aunque el coordinador opere en anchors (T16) | abierta |
 | UW-r4 LISTO | flags de aislamiento del runtime sin prueba que los fije; working-directory de preparar contexto sin discriminante (benigno); instalacion y firma del proveedor en T11 | abierta |
 | UW cierre | timeout-minutes de las plantillas nuevas sin valor fijado (UW.md:97; AI_REVIEW_DISABLED ya en F9) | abierta |
-| UW cierre | secrets.API_KEY vs el nombre real en consumidores (UW.md:97, T11) | abierta |
+| UW cierre | secrets.API_KEY vs el nombre real en consumidores (UW.md:97, T11): el worker usa AI_REVIEW_API_KEY y DEEPSEEK_API_KEY, como el escritor actual | cerrada (rama rc/t16-worker-secrets) |
 | UW cierre | git fetch sin credenciales en repos privados (UW.md:97, T11) | abierta |
 | UW cierre | filtros de issue vs PR en issue_comment (UW.md:97, T11) | abierta |
 | UW cierre | intent no numerico en execute-request deja traceback crudo (UW.md:97, T11) | abierta |
