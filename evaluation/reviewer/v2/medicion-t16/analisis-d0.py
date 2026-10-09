@@ -222,6 +222,7 @@ print(
     f"mediana ratios {statistics.median(ratios):.3f}; media ratios {statistics.fmean(ratios):.3f}"
 )
 print(f"delta mas barato en {sum(1 for r in ratios if r < 1)} de {len(ratios)} pares")
+print(f"diferencia pareada mediana (delta - control) ${statistics.median(difs):.4f}")
 print(
     f"criterio >=20% menor: {statistics.median(dlt) <= 0.8 * statistics.median(ctrl)} (umbral ${0.8 * statistics.median(ctrl):.4f})"
 )
