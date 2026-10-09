@@ -908,6 +908,15 @@ def rutas_de_cambio(manifest):
         or manifest.get("reason") == "incomplete-prev"
     ):
         return tuple(manifest.get("changed_files", []))
+    if manifest.get("reason") == "forced-full-t16":
+        # Revisión completa con memoria (T16 f14): todo lo revisado más el
+        # delta real del segundo push, para que las reversiones resuelvan.
+        return tuple(
+            dict.fromkeys(
+                list(manifest.get("reviewed", []))
+                + list(manifest.get("changed_files", []))
+            )
+        )
     if manifest.get("reason") == "same-sha":
         return ()
     return tuple(manifest.get("reviewed", []))

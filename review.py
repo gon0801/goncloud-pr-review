@@ -999,11 +999,15 @@ def cmd_prepare(args):
         # medicion completa costo 11-25% mas que una revision completa del mismo
         # par y 6 de 18 corridas perdieron el bloque de hallazgos (sin el cierre
         # `-->`, read_snapshot lo rechaza). Decision del operador: el segundo push
-        # se revisa completo. El camino incremental queda intacto para revertir.
+        # se revisa completo, conservando el delta real (changed_files abajo) para
+        # que las reversiones resuelvan hallazgos. El camino incremental queda
+        # intacto para revertir. Ojo: el 11-25% es una cota a verificar con los
+        # costos reales despues del merge; la corrida forzada es una full CON
+        # memoria, y ese costo no se midio.
         mode, reason = "full", "forced-full-t16"
     changed = (
         changed_since(repo, prev_sha, head)
-        if mode == "incremental" or reason == "incomplete-prev"
+        if mode == "incremental" or reason in ("incomplete-prev", "forced-full-t16")
         else []
     )
 
@@ -2032,10 +2036,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             file=sys.stderr,
         )
         dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
-    has_previous_changes = (
-        manifest.get("mode") == "incremental"
-        or manifest.get("reason") == "incomplete-prev"
-    )
+    has_previous_changes = manifest.get("mode") == "incremental" or manifest.get(
+        "reason"
+    ) in ("incomplete-prev", "forced-full-t16")
     changed = review_domain.rutas_de_cambio(manifest)
     watched = {
         f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN

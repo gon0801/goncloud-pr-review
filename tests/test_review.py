@@ -3954,6 +3954,56 @@ class ReviewContinuity(unittest.TestCase):
             )
             self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
 
+    def test_forced_full_still_resolves_reverted_files(self):
+        # T16 f14 (B1 del veredicto f13): en la corrida forzada a full, un
+        # hallazgo abierto sobre un archivo que el segundo push revierte a la
+        # base se resuelve igual que en incremental: el forzado conserva el
+        # delta real para la revision de reversiones.
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = fixture.make_repo(tmp)
+            finding = make_finding(file="app.py")
+            body = self.publish(
+                work,
+                prev,
+                {"base": base, "head": prev, "reviewed": ["app.py"], "excluded": []},
+                {"result": f"{block_of(finding)}\nCOVERAGE: complete"},
+                repo=repo,
+            )
+            previous, _ = self.gate(work, head, body)
+            # push2 revierte app.py al contenido de la base y cambia other.py
+            (repo / "app.py").write_text("v1\n")
+            (repo / "other.py").write_text("v3\n")
+            git(repo, "commit", "-qam", "push2 revierte app.py")
+            next_head = git(repo, "rev-parse", "HEAD")
+            prepared = fixture.run_prepare(repo, work, base, next_head, previous)
+            self.assertEqual(
+                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+            )
+            # El publicador corre en el checkout del repo bajo revision:
+            # _repo_actual se fija al repo temporal, como el sh mockeado de
+            # los otros tests de esta clase.
+            with mock.patch.object(
+                review, "_repo_actual", return_value=review.GitRepository(repo)
+            ):
+                body = self.publish(
+                    work,
+                    next_head,
+                    prepared,
+                    {
+                        "result": f"{block_of(make_finding(file='other.py'))}\n"
+                        "COVERAGE: complete"
+                    },
+                    body,
+                )
+            self.assertIn(
+                ("F1", "resolved"),
+                [
+                    (f["id"], f["state"])
+                    for f in review.parse_findings_block(body)["findings"]
+                ],
+            )
+
     def test_recovery_resolves_only_actual_changes_and_detects_reverts(self):
         fixture = IncrementalPrepare()
         cases = [
