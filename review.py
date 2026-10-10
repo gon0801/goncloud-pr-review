@@ -1836,11 +1836,9 @@ def politica_de_identidad():
 
 
 def politica_de_revision(manifest=None, identidad=None):
-    """La identidad externa `current` se adapta al valor interno antiguo
-    `titles` en la frontera de compatibilidad."""
-    externa = identidad or politica_de_identidad()
+    """ReviewPolicy normaliza la identidad externa (`current` → `titles`)."""
     return review_domain.ReviewPolicy(
-        finding_identity="anchors" if externa == "anchors" else "titles",
+        finding_identity=identidad or politica_de_identidad(),
         diff_mode=(manifest or {}).get("mode", "full"),
     )
 
@@ -1896,7 +1894,7 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
     con identidad `anchors`. Las rutas del delta real van también: una cita
     sobre un archivo cambiado ausente del manifiesto no debe degradar a
     coincidencia por título."""
-    if policy.finding_identity != "anchors":
+    if policy.finding_identity != review_domain.IDENTIDAD_ANCLAS:
         return {}
     rutas = sorted(
         set(manifest.get("reviewed", []) or [])
@@ -1958,7 +1956,7 @@ def actualizar_memoria_valida(
     snapshot = load.snapshot
     model = parse_model_findings(
         (result or {}).get("result") or "",
-        conservar_anclas=policy.finding_identity == "anchors",
+        conservar_anclas=policy.finding_identity == review_domain.IDENTIDAD_ANCLAS,
     )
     try:
         dismiss_ids, dismiss_all, seen = collect_dismissals(
