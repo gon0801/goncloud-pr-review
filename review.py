@@ -3110,11 +3110,14 @@ EXPLICACIONES_VISIBLES = 3
 
 def texto_de_explicacion(artifact):
     """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
-    Sus encabezados bajan a ####: la prosa no puede imitar las secciones del
-    comentario que el re-render busca."""
+    La prosa sale del contenido del PR: no puede imitar las secciones que el
+    re-render busca (encabezados bajan a ####, también con sangría), ni los
+    marcadores ai-review:* (todo <!-- se escapa), ni cerrar un <details>."""
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
-    texto = re.sub(r"^#{1,6} ", "#### ", texto, flags=re.M)
+    texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
+    texto = texto.replace("<!--", "&lt;!--")
+    texto = re.sub(r"<(/?details)", r"&lt;\1", texto, flags=re.I)
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
     return texto or "_El revisor no devolvió texto._"
@@ -3193,11 +3196,16 @@ def estado_visible(snapshot, explicacion=None):
                 if e[0].split(" · ")[0] != nueva[0].split(" · ")[0]
             ]
             explicaciones.append(nueva)
+        conservadas = [linea for linea in lineas[:titulo] if linea.startswith(marcas)]
+        # Con un aviso previo, la forma de revision_visible ante un fallo: el
+        # aviso pegado a los marcadores, para que el próximo fallo lo reemplace.
+        cabecera = (
+            [MARKER, bloque, *conservadas, *previo, ""]
+            if previo
+            else [MARKER, *conservadas, bloque]
+        )
         cuerpo = [
-            MARKER,
-            *[linea for linea in lineas[:titulo] if linea.startswith(marcas)],
-            bloque,
-            *(previo + [""] if previo else []),
+            *cabecera,
             lineas[titulo],
             *lineas[titulo + 1 : veredicto],
             verdict_for(merged),
