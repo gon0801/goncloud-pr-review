@@ -7,19 +7,21 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
-> **Estado del modo coordinado.** Activo solo en el repo central (#96, CLI
-> `dff2ad3`). La ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
-> pasó los casos 1 a 5 después de que la ronda 2 encontrara pérdida de
-> hallazgos, y la resolución ya se ve en el central (revisión coordinada del #93,
-> con #94). Pendiente: con memoria, el modelo a veces responde sin bloque y ese
-> push no resuelve nada (#98). Los consumidores no se despliegan sin decisión
-> del operador. Hasta que se quite esa barrera, `install.sh --coordinado` se
-> niega sin `AI_REVIEW_PILOTO=1`.
+> **Estado del modo coordinado (2026-10-10).** El piloto T16 pasó: rondas 2, 3
+> y 3b en `docs/evidence/reviewer/T16-piloto-2.md` (descarte concurrente,
+> explicación, re-revisión del mismo SHA, resolución vista en el central y
+> worker sin tronar con base desfasada). El repo central corre el modo
+> coordinado instalado por #96 con el CLI fijado a `dff2ad3`; falta
+> reinstalarlo fijado a `59d31da` para que entre #98 (el recordatorio del bloque
+> en la revisión completa con memoria, que se comprueba en revisiones reales).
+> Los consumidores (summonaikit-claude, goncloud-openclaw, goncloud-Orbit)
+> siguen con el revisor directo hasta que el operador apruebe su activación;
+> `install.sh --coordinado` ya no exige bandera de piloto.
 
 ## Qué instala el modo coordinado
 
 ```bash
-AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
 ```
 
 - Un único commit en `chore/ai-review` que agrega
@@ -27,18 +29,20 @@ AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado go
   `.github/workflows/ai-review-worker.yml`, retira el escritor anterior
   `.github/workflows/ai-review.yml` y conserva cualquier otro archivo.
 - Ambos workflows fijan el CLI confiable a `gon0801/goncloud-pr-review`
-  en `ACTION_SHA` (checkout con `repository` y `ref` explícitos). El piloto
-  queda clavado a ese SHA candidato: un merge de `main` del repo central no
-  cambia lo que ejecutan los consumidores instalados.
+  en `ACTION_SHA` (checkout con `repository` y `ref` explícitos). Cada repo
+  instalado queda clavado a ese SHA: un merge de `main` del repo central no
+  cambia lo que ejecuta hasta que se reinstala.
 - Si la rama cambió durante la instalación, el instalador reintenta sobre la
   punta nueva sin forzar; si no logra en tres intentos, falla con error.
 - El conjunto lee los mismos secrets que el escritor que el retorno repone:
   `AI_REVIEW_API_KEY` (opencode-go, principal) y `DEEPSEEK_API_KEY`
   (respaldo). No hace falta crear secrets nuevos para instalarlo.
 
-El modo actual (`scripts/install.sh gon0801/mi-repo`) no cambia: instala
-`ai-review.yml` y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de
-`@main`. Consumidores sin configuración nueva se comportan igual que antes.
+El modo actual (`scripts/install.sh gon0801/mi-repo`) instala `ai-review.yml`
+y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de `@main`. En los dos
+modos, si `chore/ai-review` ya existe, el instalador primero fusiona en ella la
+rama por defecto sin forzar (#87); si esa fusión tiene conflicto sale con error
+sin publicar. Consumidores sin configuración nueva se comportan igual que antes.
 
 ## Corte: de la revisión actual al coordinador
 
@@ -56,9 +60,9 @@ El modo actual (`scripts/install.sh gon0801/mi-repo`) no cambia: instala
    (schema 3, generación actual, descartes y solicitudes pendientes
    presentes). `review.py reconcile` sobre un evento sin admisión es el
    verificador: publica sin trabajo nuevo o falla alto.
-4. **Activar el coordinador.** Fusiona el PR del conjunto. El piloto corre
-   sobre el SHA candidato: prueba primero revisiones fijas en el repo central
-   antes de fusionar en un consumidor.
+4. **Activar el coordinador.** Fusiona el PR del conjunto. En un consumidor,
+   solo con la activación aprobada por el operador y con un SHA que ya corre
+   en el repo central.
 
 ## Retorno: del coordinador al escritor compatible
 
@@ -97,17 +101,17 @@ completo desde el paso 1.
 
 # Piloto de T16: orden, avance y medición
 
-Estado: la medición terminó (63 corridas, $110.6439) y la decisión de D0 se
-ejecutó en el PR #65. Ronda 1 del piloto (`docs/evidence/reviewer/T16-piloto.md`):
-la cadena funciona tras seis arreglos pero sin capa visible; volvió a current
+Estado: cerrado. La medición terminó (63 corridas, $110.6439) y la decisión de
+D0 se ejecutó en el PR #65. Ronda 1 (`docs/evidence/reviewer/T16-piloto.md`):
+la cadena funcionó tras seis arreglos pero sin capa visible y volvió a current
 (#77). Ronda 2 (`docs/evidence/reviewer/T16-piloto-2.md`): con capa visible
-(#79, #83) el publicador perdía 5 de 6 hallazgos por revisión; el central
-volvió al revisor directo (#86). Ronda 3 (mismo documento): con #87, #88 y #89
-el central reactivó el coordinado (#90) y pasaron los casos 1 a 5; con #94 la
-resolución quedó vista en el central (revisión coordinada del #93) y el piloto
-se cerró. Sigue activo en el central. Los consumidores (summonaikit-claude,
-goncloud-openclaw, goncloud-Orbit) quedan a decisión del operador. El corte y
-el retorno mecánicos son los que describe el procedimiento de T11 de arriba.
+(#79, #83) el publicador perdía hallazgos y el central volvió temporalmente al
+revisor directo (#86). Ronda 3 y 3b (mismo documento): con #87 a #89 el central
+reactivó el coordinado (#90); con #92, #94 y #95 pasaron los casos 1 a 5, la
+resolución quedó vista en el central (revisión coordinada del #93) y el worker
+ya no truena con base desfasada. El central sigue en modo coordinado (#96).
+Los consumidores quedan a decisión del operador. Las secciones siguientes son
+el diseño y la medición históricos del piloto.
 
 ## Qué hay congelado hoy
 
@@ -183,7 +187,7 @@ general exige, por opción y por escrito: activar, mantener en piloto o volver a
 `current`, con el SHA del código, la configuración, la muestra y los criterios
 satisfechos identificados; cada opción conserva el esquema y el presupuesto
 necesarios para desactivarla. La medición viva y la activación requieren encargo
-posterior y revisión cruzada previa.
+posterior del operador.
 
 ## Diseño original de la corrida de costo unitario
 

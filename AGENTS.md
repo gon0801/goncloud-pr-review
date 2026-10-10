@@ -17,11 +17,11 @@ Reglas de hierro:
 2. Cada bug arreglado incluye, en el mismo cambio, una prueba que lo habria atrapado.
 8. CI: la bateria completa corre en jobs paralelos cuya union es la bateria (con candado); si un job pasa de ~10 min se shardea (bash: `SAIKIT_SHARD=i/N`; pytest: `-n auto`; jest/vitest: `--shard`), nunca se recorta.
    Carril por clasificacion de ARCHIVOS (nunca por titulo ni etiqueta): docs/chore/cierre = fast solo si TODO el cambio esta en la allowlist versionada de documentos de planificacion/evidencia/cierre (bots + lead); codigo/config y cualquier ruta no clasificada = gate con bateria completa; mixto = bateria completa + checks documentales. Fallo, cancelacion o clasificacion ausente JAMAS pasan como fast.
-   Checks de docs/ledger en un job propio de segundos. Medicion/release = +cross-review. Cierres de ledger de un bloque = un PR.
+   Checks de docs/ledger en un job propio de segundos. Cierres de ledger de un bloque = un PR.
 
 Flujo de verificacion:
 - Durante la implementacion, corre solo las pruebas focalizadas del comportamiento modificado.
-- Agrupa los hallazgos de revision y corrigelos en una sola ronda por bloque. Solo un hallazgo bloqueante (seguridad, datos, regla innegociable, comportamiento pedido roto o prueba que no discrimina), con el comando que lo reproduce, abre otra ronda; cada ronda siguiente revisa solo el diff de los arreglos (cross-review -Con <otro revisor> -Desde <sha>). Se repite mientras salga un bloqueante y para en la primera ronda sin ninguno; si el mismo bloqueante vuelve en dos rondas seguidas, decide el operador.
+- Agrupa los hallazgos de revision y corrigelos en una sola ronda por bloque. Solo un hallazgo bloqueante (seguridad, datos, regla innegociable, comportamiento pedido roto o prueba que no discrimina), con el comando que lo reproduce, reabre el ciclo; si el mismo bloqueante vuelve en dos rondas seguidas, decide el operador.
 - Ejecuta Ruff y las pruebas focalizadas despues del ultimo cambio del bloque.
 - Ejecuta la bateria completa una sola vez, por SHA final del bloque de CODIGO, preferentemente en CI mediante PR; los bloques exclusivamente fast pagan los checks documentales.
 - Si commit, push o CI ya validaron tests, Ruff o pre-commit sobre ese SHA, no los repitas manualmente.

@@ -359,9 +359,6 @@ class InstaladorTest(unittest.TestCase):
                 "PATH": f"{self.bin}:{env['PATH']}",
                 "GH_STATE": self.estado_ruta,
                 "GH_LOG": self.registro_ruta,
-                # las pruebas del modo coordinado son de piloto; la negativa
-                # sin la bandera tiene su propia prueba
-                "AI_REVIEW_PILOTO": "1",
             }
         )
         env.update(extra or {})
@@ -614,24 +611,28 @@ class RamaPropiaVieja(InstaladorTest):
                 self.assertEqual(repo["prs"], [])
 
 
-class CoordinadoSoloPiloto(InstaladorTest):
-    """F3 de #86: el coordinado no se despliega en consumidores hasta pasar el
-    piloto 2; sin la bandera explícita el instalador se niega sin tocar nada."""
+class CoordinadoSinBandera(InstaladorTest):
+    """Tras el piloto T16 el coordinado es un modo soportado: instala sin
+    bandera y AI_REVIEW_PILOTO, si viene, se ignora sin error."""
 
-    def test_sin_la_bandera_de_piloto_no_instala_el_coordinado(self):
-        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
-        for bandera in ("", "0", "si"):
+    def test_el_coordinado_instala_sin_bandera_de_piloto(self):
+        for i, bandera in enumerate((None, "", "0", "1")):
             with self.subTest(bandera=bandera):
-                resultado = self._correr(
-                    "--coordinado",
-                    "o/r",
-                    extra={"ACTION_SHA": "a" * 40, "AI_REVIEW_PILOTO": bandera},
+                nombre = f"o/r{i}"
+                self._repo(nombre, {".github/workflows/ai-review.yml": "viejo\n"})
+                extra = {"ACTION_SHA": "a" * 40}
+                if bandera is not None:
+                    extra["AI_REVIEW_PILOTO"] = bandera
+                resultado = self._correr("--coordinado", nombre, extra=extra)
+                self.assertEqual(resultado.returncode, 0, resultado.stderr)
+                repo = self._repo_final(nombre)
+                self.assertEqual(
+                    sorted(self._archivos_de(repo, "chore/ai-review")),
+                    [
+                        ".github/workflows/ai-review-publish.yml",
+                        ".github/workflows/ai-review-worker.yml",
+                    ],
                 )
-                self.assertEqual(resultado.returncode, 2)
-                self.assertIn("AI_REVIEW_PILOTO=1", resultado.stderr)
-                repo = self._repo_final("o/r")
-                self.assertNotIn("chore/ai-review", repo["branches"])
-                self.assertEqual(repo["prs"], [])
 
     def test_el_retorno_al_modo_actual_no_necesita_la_bandera(self):
         self._repo(
@@ -641,15 +642,24 @@ class CoordinadoSoloPiloto(InstaladorTest):
                 ".github/workflows/ai-review-worker.yml": "worker\n",
             },
         )
-        resultado = self._correr(
-            "o/r", extra={"ACTION_SHA": "c" * 40, "AI_REVIEW_PILOTO": ""}
-        )
+        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         self.assertEqual(
             sorted(self._archivos_de(repo, "chore/ai-review")),
             [".github/workflows/ai-review.yml"],
         )
+
+
+class CoordinadoSinActionSha(InstaladorTest):
+    def test_el_coordinado_sin_action_sha_sale_sin_tocar_nada(self):
+        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": ""})
+        self.assertEqual(resultado.returncode, 2)
+        self.assertIn("requiere ACTION_SHA", resultado.stderr)
+        repo = self._repo_final("o/r")
+        self.assertNotIn("chore/ai-review", repo["branches"])
+        self.assertEqual(repo["prs"], [])
 
 
 class CompatibleRollback(InstaladorTest):
