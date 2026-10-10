@@ -85,3 +85,57 @@ el del #87 corrieron durante la ventana activa y no se suman al piloto.
 El modo coordinado no se despliega. La ronda 3 exige los arreglos de
 T16-piloto-2 en `main` (pérdida, gate, identidad, memoria del worker,
 instalador) y repetir los seis casos completos.
+
+---
+
+# Ronda 3 (2026-10-10)
+
+Con los arreglos de la ronda 2 en `main` (#87 instalador, #88 pérdida e
+identidad, #89 memoria del worker), el operador reactivó el modo coordinado en
+el repo central con el #90 (merge `20d4c29`, CLI fijado a
+`fb52b385411e025ddb980e79fd2d15f1b48e96d8`). PR de prueba: #91
+(`piloto/t16-ronda-3`), con el mismo `piloto/caso_t16.py`. El #85 se cerró con
+un comentario que apunta a esta ronda.
+
+## Casos
+
+| Caso | Resultado | Evidencia |
+|---|---|---|
+| 1. Push normal | **Pasa.** El visible trae veredicto, hallazgos, cobertura y SHA; el bloque de memoria va antes del visible; el resultado lleva el costo. **6 observaciones del modelo → 6 hallazgos** (F1..F6), contados en el `result.json` real y en el JSON de la memoria. | Push `ef5f6e3`; worker 38022908715 ($0.1794, 14 turnos, opencode-go); publicador 38022963019; comentario 6093596224 |
+| 2. Segundo push con un defecto nuevo | **Pasa.** El modelo recibió la memoria y repitió F1..F6; `dividir_todo` entró como **F7**; 7 observaciones → 7 hallazgos y `next_id=8`. El log ya no dice `no-prev`: dice `full/incomplete-prev` por el defecto menor 1 (abajo). | Push `8015d43`; worker 38023035641 ($0.1582, 11 turnos) |
+| 3. Descarte concurrente | **Pasa.** `ai-review: descartar F2` (comentario 6093645422) mientras corría el worker 38023259921. Estado final consistente: F2 descartado con recibo, `command_cursor=6093645422`, sin solicitudes pendientes, re-render con «Descartados (1)». Ese worker no entregó bloque ni `COVERAGE` (`model_ok=False`): el SHA quedó `partial` con aviso visible y se conservaron los hallazgos. Que F2 no reaparece con otro id lo prueba el caso 5, con un bloque real. | Push `37aa4c5`; worker 38023259921 ($0.1609); publicadores 38023244131, 38023276276, 38023320788 |
+| 4. Explicar | **Pasa en estado.** `ai-review: explicar F7` (comentario 6093661355) aparece como «## Explicación de F7» sin acreditar SHA: `sha=37aa4c5`/`partial`, generación 4 y hallazgos sin cambio, recibo «solicitud de explicación 4 para F7». **Defecto menor 2:** el contenido fue una revisión completa, no una explicación de F7. | Worker 38023408868 ($0.1745); publicador 38023481871 |
+| 5. Otra revisión del mismo SHA | **Pasa.** Re-run del publicador del push `37aa4c5` (38023244131, intento 2): el worker 38023648131 corrió `full/same-sha`, el modelo repitió los 6 ids vivos y **no reportó F2**; sin duplicados (`next_id=8`), cursor intacto, cobertura `complete`. El «Re-run jobs» del worker de una solicitud ya terminada (38023259921, intento 2) no revisa: `execute-request` sale con «la solicitud '3' no está pendiente» y la memoria no cambia; el publicador que avisa queda en rojo (38023567020) sin efecto en el estado. | Worker 38023648131 ($0.1022, 10 turnos); publicador 38023702582 |
+| 6. T05 representativos | **Parcial.** Un solo comentario con el marcador en todo el PR; bloque de 2320 bytes (perfil de 8000) con UTF-8 no ASCII que cierra con `-->`; solicitudes simultáneas (revisión 3 y comando) sin ids duplicados. **Incremental:** no alcanzable, el segundo push se fuerza a completo desde #65. **Full forzado:** no se observó por el defecto menor 1; la corrida fue completa con delta igual. **Falla del proveedor:** no ejercida; simularla exige tocar secrets o variables del repo; la cubren las pruebas de #81. | — |
+
+## Defectos menores (PR #92, sin mergear)
+
+1. **Cabecera del sticky fuera de orden.** Al admitir una solicitud, el
+   checkpoint sin visible escribía `MARKER`, bloque, `sha=`, `completion=`
+   (historial de ediciones del comentario 6093596224, 04:08:49).
+   `reviewed_completion` exige `sha=`/`completion=` justo tras el marcador:
+   el worker leía la revisión previa como incompleta (`incomplete-prev` en
+   vez de `forced-full-t16`). El efecto fue de etiqueta: los dos caminos
+   revisan completo con delta. Lo mismo en el aviso de fallo.
+2. **La explicación corría una revisión completa.** El prompt del worker no
+   leía el tipo de solicitud del paquete.
+
+Sin arreglo, registrados en Plans.md:
+- El «Re-run jobs» del worker de una solicitud terminada deja en rojo al
+  publicador que avisa (rojo benigno, sin efecto en la memoria).
+- Una vez el modelo omitió el bloque y `COVERAGE` (caso 3); el sistema degradó
+  bien: `partial`, aviso visible y hallazgos conservados.
+
+## Costo de la ronda 3
+
+Cinco corridas del worker con modelo, todas con opencode-go: $0.1794 + $0.1582
++ $0.1609 + $0.1745 + $0.1022 = **$0.7752**. El re-run de la solicitud
+terminada no llegó al modelo.
+
+## Decisión de la ronda 3
+
+Los casos 1 a 5 pasan: el modo coordinado publica completo, conserva ids,
+respeta descartes, explica sin acreditar y re-revisa el mismo SHA sin
+duplicar. Queda activo en el repo central. Los consumidores
+(summonaikit-claude, goncloud-openclaw, goncloud-Orbit) siguen siendo una
+decisión del operador, después del #92.

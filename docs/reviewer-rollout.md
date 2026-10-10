@@ -7,13 +7,12 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
-> **El modo coordinado NO se despliega.** Ni en consumidores ni en el repo
-> central fuera de un piloto: la ronda 2 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
-> encontró pérdida de hallazgos y el central volvió al revisor directo (#86).
-> Se despliega solo cuando estén mergeados los arreglos de T16-piloto-2 en
-> `Plans.md` (pérdida, memoria del worker, instalador) y una ronda 3 pase
-> completa. Hasta entonces `install.sh --coordinado` se niega sin
-> `AI_REVIEW_PILOTO=1`.
+> **Estado del modo coordinado.** Activo solo en el repo central (#90). La
+> ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`) pasó los casos
+> 1 a 5 después de que la ronda 2 encontrara pérdida de hallazgos. Los
+> consumidores no se despliegan sin decisión del operador, que va después de
+> los defectos menores de la ronda 3 (#92). Hasta que se quite esa barrera,
+> `install.sh --coordinado` se niega sin `AI_REVIEW_PILOTO=1`.
 
 ## Qué instala el modo coordinado
 
