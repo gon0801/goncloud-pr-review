@@ -1704,19 +1704,32 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     for campo in ("total_cost_usd", "num_turns"):
         if isinstance(rep.get(campo), (int, float)):
             result[campo] = (result.get(campo) or 0) + rep[campo]
+    # El «costo aprox» visible sale de usage: también suma la reparación.
+    if isinstance(rep.get("usage"), dict):
+        usage = dict(result.get("usage") or {})
+        for campo, valor in rep["usage"].items():
+            if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+                usage[campo] = (usage.get(campo) or 0) + valor
+        result["usage"] = usage
     texto_rep = (rep.get("result") or "") if falla is None else ""
     bloque = find_model_findings_block(texto_rep)
     _, cobertura, detalle = split_coverage(texto_rep)
-    if bloque is None or cobertura is None:
+    reparado = None
+    if bloque is not None and cobertura is not None:
+        if result.get("subtype") == "error_max_turns":
+            cobertura = "partial"  # la revisión no terminó, aunque el bloque llegue
+        prosa = strip_model_findings_block(split_coverage(texto)[0])
+        linea = f"COVERAGE: {cobertura}" + (f" | {detalle}" if detalle else "")
+        reparado = f"{prosa}\n\n{texto_rep[bloque[0] : bloque[1]]}\n{linea}"
+    # Mismo criterio que el disparo: el bloque reparado tiene que leerse como bloque.
+    if reparado is None or falta_bloque(reparado):
         print(
             "ai-review: la reparación tampoco entregó el bloque y COVERAGE; queda parcial",
             file=sys.stderr,
         )
         result["block_repair"] = "failed"
     else:
-        prosa = strip_model_findings_block(split_coverage(texto)[0])
-        linea = f"COVERAGE: {cobertura}" + (f" | {detalle}" if detalle else "")
-        result["result"] = f"{prosa}\n\n{texto_rep[bloque[0] : bloque[1]]}\n{linea}"
+        result["result"] = reparado
         result["block_repair"] = "ok"
     result_path.write_text(json.dumps(result))
 

@@ -1359,6 +1359,46 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(result["block_repair"], "failed")
         self.assertAlmostEqual(result["total_cost_usd"], 0.22)
 
+    def test_la_reparacion_suma_usage_y_respeta_el_tope_de_turnos(self):
+        """#113: ai-review F1 (usage sin la reparación) y CodeRabbit (una
+        revisión que se quedó sin turnos no puede quedar complete)."""
+        sin_turnos = dict(
+            self.SIN_BLOQUE,
+            subtype="error_max_turns",
+            usage={"input_tokens": 1000, "output_tokens": 200},
+        )
+        reparada = {
+            "result": f"{self.BLOQUE}\nCOVERAGE: complete",
+            "subtype": "success",
+            "usage": {"input_tokens": 50, "output_tokens": 10},
+        }
+        _, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([sin_turnos, reparada]),
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["usage"], {"input_tokens": 1050, "output_tokens": 210})
+        self.assertEqual(review.split_coverage(result["result"])[1], "partial")
+        self.assertEqual(result["block_repair"], "ok")
+
+    def test_un_bloque_reparado_ilegible_no_cuenta(self):
+        """#113 ai-review F2: aceptar con el mismo criterio que dispara."""
+        ilegible = {
+            # JSON completo (lo encuentra el buscador) que el dominio no lee: schema futuro.
+            "result": '<!-- ai-review:findings={"schema":99,"findings":[]} -->\n'
+            "COVERAGE: complete",
+            "subtype": "success",
+        }
+        _, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([self.SIN_BLOQUE, ilegible]),
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
+        self.assertEqual(result["block_repair"], "failed")
+
     def test_sin_tiempo_no_se_intenta_la_reparacion(self):
         proc, calls, result, _, _ = self.run_agent(
             self.SIN_BLOQUE, provider="deepseek", REVIEW_BUDGET_SECONDS="100"
