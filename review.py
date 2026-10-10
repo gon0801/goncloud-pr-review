@@ -952,6 +952,19 @@ def sticky_from_comments(comments, login):
     return found[-1] if found else None
 
 
+def prev_de_memoria(body):
+    """El prev.json que lee prepare, desde el cuerpo del sticky. Lo escriben gate
+    (ruta directa) y execute-request (worker): sin él el modelo revisa sin los
+    hallazgos previos. También entiende la memoria v2/v3 del coordinador."""
+    if body is None:
+        return {"sha": None, "state": None, "completion": None}
+    return {
+        "sha": reviewed_sha(body),
+        "state": review_domain.estado_legado_de_memoria(body),
+        "completion": reviewed_completion(body),
+    }
+
+
 def cmd_gate(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
@@ -960,25 +973,18 @@ def cmd_gate(args):
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    # También la memoria v2/v3 del coordinador: tras un retorno el modelo no
-    # puede revisar sin los hallazgos previos.
-    state = review_domain.estado_legado_de_memoria(sticky["body"]) if sticky else None
-    if state:
+    prev = prev_de_memoria(sticky["body"] if sticky else None)
+    if prev["state"]:
         try:
             dismiss_ids, dismiss_all, _ = collect_dismissals(
-                repo, pr, login, comments, state.get("seen", 0)
+                repo, pr, login, comments, prev["state"].get("seen", 0)
             )
-            state = apply_dismissals(state, dismiss_ids, dismiss_all)
+            prev["state"] = apply_dismissals(prev["state"], dismiss_ids, dismiss_all)
         except Exception as exc:
             print(
                 f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar",
                 file=sys.stderr,
             )
-    prev = {
-        "sha": reviewed_sha(sticky["body"]) if sticky else None,
-        "state": state,
-        "completion": reviewed_completion(sticky["body"]) if sticky else None,
-    }
     (work / "prev.json").write_text(json.dumps(prev))
     if sticky and prev["sha"] == head and not rerun:
         print(
@@ -3011,8 +3017,14 @@ def cmd_execute_request(args):
     }
     if plan_fallback:
         paquete["plan_fallback"] = plan_fallback
-    destino = Path(args.work) / "request-package.json"
+    work = Path(args.work)
+    work.mkdir(parents=True, exist_ok=True)
+    destino = work / "request-package.json"
     destino.write_text(json.dumps(paquete))
+    # La misma memoria autenticada que autorizó la solicitud; los comandos ya
+    # los aplicó el coordinador hasta su cursor.
+    previo = prev_de_memoria(sticky["body"] if sticky else None)
+    (work / "prev.json").write_text(json.dumps(previo))
     print(
         f"ai-review: paquete de la solicitud {solicitud.id} preparado "
         f"(run {paquete['run_id']} attempt {paquete['attempt']})"
