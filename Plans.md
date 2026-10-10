@@ -153,9 +153,9 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | S0-r5 LISTO | hallazgos legacy con id None pendientes | abierta |
 | S0-r5 LISTO | aviso corto review.py:2050 | abierta |
 | S0-r5 LISTO | N1-N7 de r1, N1-N2 de r3 y F1-F5 del sticky 7a1e2b1 arrastrados (siguen abiertos) | abierta |
-| S1-r3 LISTO | fallback B2 no aplica en rama con budget del camino generico de compose (budget + reviewed=[] + prosa vacia publica texto por defecto); resolver antes de activar perfil en T16 | abierta |
-| S1-r3 LISTO | con presupuestos custom cuyo margen restante es menor que el aviso (~53 unidades) la salida excede hasta ~52 unidades; CodeRabbit 4197481797 misma familia; resolver antes de activar perfil en T16 | abierta |
-| S1-r3 LISTO | en compose_with_findings el guard de presupuesto valida solo el bloque, no el fijo completo; con fijos inflados el cuerpo excede el budget; resolver antes de activar perfil en T16 | abierta |
+| S1-r3 LISTO | fallback B2 no aplica en rama con budget del camino generico de compose (budget + reviewed=[] + prosa vacia publica texto por defecto); resolver antes de activar perfil en T16 | cerrada (#83: el mensaje B2 se decide antes del presupuesto; con y sin budget sale idéntico) |
+| S1-r3 LISTO | con presupuestos custom cuyo margen restante es menor que el aviso (~53 unidades) la salida excede hasta ~52 unidades; CodeRabbit 4197481797 misma familia; resolver antes de activar perfil en T16 | cerrada (#83: prosa_en_presupuesto recorta sin aviso cuando el aviso no cabe; probado margen 0-119 en ambos caminos) |
+| S1-r3 LISTO | en compose_with_findings el guard de presupuesto valida solo el bloque, no el fijo completo; con fijos inflados el cuerpo excede el budget; resolver antes de activar perfil en T16 | cerrada (#83: el guard mide el cuerpo fijo completo, bloque incluido; si no cabe, topes actuales) |
 | S1-r3 LISTO | slice [:GITHUB_COMMENT_MAX] cuenta caracteres, no bytes (pre-existente en la base, heredado por N1) | abierta |
 | S1-r3 revisor N2 | docs/evidence/reviewer/S1.md:46 dice ai-review 0 hallazgos sobre 5e55715; el sticky tiene F1 Medium y F2 Low resueltos; errata historica | abierta |
 | S1-r3 revisor N3 | guarda del checkpoint en compose_with_findings sin prueba que la discrimine; la propiedad el checkpoint nunca se recorta se sostiene igual | abierta |

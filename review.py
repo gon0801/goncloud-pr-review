@@ -622,6 +622,28 @@ def _marcador_cobertura(warnings, findings):
     return "partial" if warnings else "complete"
 
 
+AVISO_DE_PRESUPUESTO = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
+
+
+def prosa_en_presupuesto(armar, prosa, budget):
+    """La prosa recortada para que armar(prosa), el comentario entero, quepa en
+    el presupuesto por caracteres y por bytes; None si ni el cuerpo sin prosa
+    cabe (el presupuesto se rechaza y mandan los topes actuales). armar une la
+    prosa como un elemento más, así que el cuerpo mide fijo + prosa."""
+    fijo = armar("")
+    chars = budget.comment_max_chars - len(fijo)
+    octetos = budget.comment_max_bytes - len(fijo.encode("utf-8"))
+    if chars < 0 or octetos < 0:
+        return None
+    if len(prosa) <= chars and len(prosa.encode("utf-8")) <= octetos:
+        return prosa
+    aviso = AVISO_DE_PRESUPUESTO
+    if len(aviso) > chars or len(aviso.encode("utf-8")) > octetos:
+        aviso = ""  # margen menor que el aviso: se recorta sin él
+    recorte = prosa[: chars - len(aviso)]
+    return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
+
+
 def compose(result, manifest, *, sha, provider, findings=None, budget=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
@@ -687,35 +709,26 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         "",
         "</details>",
     ]
-    if budget is not None:
-        fijo = "\n".join(parts + ["", ""] + scope) + "\n"
-        disponible_bytes = budget.comment_max_bytes - len(fijo.encode("utf-8"))
-        disponible_chars = budget.comment_max_chars - len(fijo)
-        if disponible_bytes < 0 or disponible_chars < 0:
-            budget = None
-    if budget is not None:
-        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
-        prose = review or "_El revisor no devolvió texto._"
-        if len(prose) > disponible_chars:
-            prose = prose[: max(0, disponible_chars - len(aviso))] + aviso
-        if len(prose.encode("utf-8")) > disponible_bytes:
-            prose = trim_utf8(prose, disponible_bytes, aviso)
-        parts.append(prose)
-        parts += scope
-        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
     if not manifest["reviewed"]:
         review = (
             review
             or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
         )
+    review = review or "_El revisor no devolvió texto._"
+
+    def armar(prosa):
+        return "\n".join(parts + [prosa, ""] + scope)
+
+    if budget is not None:
+        prosa = prosa_en_presupuesto(armar, review, budget)
+        if prosa is not None:
+            return armar(prosa)[:GITHUB_COMMENT_MAX]
     if len(review) > COMMENT_LIMIT:
         review = (
             review[:COMMENT_LIMIT]
             + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
         )
-    parts += [review or "_El revisor no devolvió texto._", ""]
-    parts += scope
-    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    return armar(review)[:GITHUB_COMMENT_MAX]
 
 
 def compose_with_findings(
@@ -757,16 +770,6 @@ def compose_with_findings(
             )
         partes[3] = review or "_El revisor no devolvió texto._"
         return "\n".join(partes)
-    # El checkpoint confirmado jamás se recorta: si no cabe en el
-    # presupuesto, se rechaza y se publican los topes actuales.
-    if budget is not None and len(block.encode("utf-8")) > budget.comment_max_bytes:
-        budget = None
-    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
-    if budget is None and len(review) > budget_prosa:
-        review = (
-            review[:budget_prosa]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
@@ -793,7 +796,9 @@ def compose_with_findings(
             review = "Sin hallazgos nuevos en este push."
         else:
             review = "_El revisor no devolvió texto._"
-    parts += ["", "## Detalle del revisor", "", review, ""]
+    parts += ["", "## Detalle del revisor", ""]
+    i_prosa = len(parts)
+    parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         scope.insert(
@@ -808,22 +813,23 @@ def compose_with_findings(
         "",
         "</details>",
     ]
-    if budget is not None:
-        i_prosa = parts.index("## Detalle del revisor") + 2
-        sin_prosa = "\n".join(parts[:i_prosa] + parts[i_prosa + 1 :])
-        disponible_bytes = max(
-            0, budget.comment_max_bytes - len(sin_prosa.encode("utf-8")) - 1
-        )
-        disponible_chars = max(0, budget.comment_max_chars - len(sin_prosa) - 1)
-        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
-        if len(review) > disponible_chars:
-            review = review[: max(0, disponible_chars - len(aviso))] + aviso
-        if len(review.encode("utf-8")) > disponible_bytes:
-            review = trim_utf8(review, disponible_bytes, aviso)
-        parts[i_prosa] = review
-        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
-    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    def armar(prosa):
+        return "\n".join(parts[:i_prosa] + [prosa] + parts[i_prosa + 1 :])
+
+    # El checkpoint confirmado jamás se recorta: va en el fijo, y si el fijo no
+    # cabe en el presupuesto se rechaza y se publican los topes actuales.
+    if budget is not None:
+        prosa = prosa_en_presupuesto(armar, review, budget)
+        if prosa is not None:
+            return armar(prosa)[:GITHUB_COMMENT_MAX]
+    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
+    if len(review) > budget_prosa:
+        review = (
+            review[:budget_prosa]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
+    return armar(review)[:GITHUB_COMMENT_MAX]
 
 
 CAUTION_MARK = "> [!CAUTION]"

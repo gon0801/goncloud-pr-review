@@ -2824,6 +2824,148 @@ class CheckpointCapacity(unittest.TestCase):
                 )
                 self.assertEqual(out, dorada, "byte-idéntico a la base")
 
+    def test_sin_revisables_con_presupuesto_publica_el_mismo_mensaje(self):
+        manifest = {
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": [],
+            "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
+        }
+        sin = review.compose(
+            {"result": ""}, manifest, sha="e" * 40, provider="opencode-go"
+        )
+        con = review.compose(
+            {"result": ""},
+            manifest,
+            sha="e" * 40,
+            provider="opencode-go",
+            budget=domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
+        )
+        self.assertEqual(con, sin)
+        self.assertIn(
+            "No hay archivos revisables en este PR (todo quedó excluido por filtro).",
+            con,
+        )
+
+    def _hallazgos_chicos(self, titulo="t", cuantos=1):
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=cuantos + 1,
+            completion=domain.PARTIAL,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title="t",
+                    severity="Low",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                )
+            ],
+            command_cursor=0,
+        )
+        merged = [
+            {
+                "id": f"F{i}",
+                "file": "a.py",
+                "line": i,
+                "severity": "Low",
+                "title": titulo,
+                "state": "open",
+            }
+            for i in range(1, cuantos + 1)
+        ]
+        return {
+            "merged": merged,
+            "new_ids": [],
+            "block": domain.encode_snapshot(snapshot),
+            "model_ok": True,
+        }
+
+    def test_margen_menor_que_el_aviso_no_excede_el_presupuesto(self):
+        manifest = {
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": ["a.py"],
+            "excluded": [],
+        }
+        resultado = {"result": "COVERAGE: complete\n" + "x" * 5000}
+        for camino, findings in (
+            ("genérico", None),
+            ("hallazgos", self._hallazgos_chicos()),
+        ):
+            sin = review.compose(
+                resultado,
+                manifest,
+                sha="e" * 40,
+                provider="opencode-go",
+                findings=findings,
+            )
+            vacio = review.compose(
+                {"result": "COVERAGE: complete\n"},
+                manifest,
+                sha="e" * 40,
+                provider="opencode-go",
+                findings=findings,
+                budget=domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
+            )
+            for margen in range(0, 120):
+                tope = len(vacio) + margen
+                presupuesto = domain.StorageBudget(
+                    max_bytes=domain.STATE_BYTES_PROPOSED,
+                    comment_max_bytes=tope,
+                    comment_max_chars=tope,
+                )
+                with self.subTest(camino=camino, margen=margen):
+                    out = review.compose(
+                        resultado,
+                        manifest,
+                        sha="e" * 40,
+                        provider="opencode-go",
+                        findings=findings,
+                        budget=presupuesto,
+                    )
+                    if out == sin:
+                        continue  # el fijo no cabe: presupuesto rechazado, topes actuales
+                    self.assertLessEqual(len(out), tope)
+                    self.assertLessEqual(len(out.encode("utf-8")), tope)
+
+    def test_fijo_inflado_rechaza_el_presupuesto_en_camino_con_hallazgos(self):
+        # 200 títulos largos: las secciones (fijas) pasan el presupuesto aunque
+        # el bloque de memoria quepa de sobra.
+        findings = self._hallazgos_chicos(titulo="t" * 150, cuantos=200)
+        manifest = {
+            "mode": "full",
+            "reason": "no-prev",
+            "reviewed": ["a.py"],
+            "excluded": [],
+        }
+        resultado = {"result": "COVERAGE: complete\n" + "x" * 5000}
+        presupuesto = domain.StorageBudget(
+            max_bytes=domain.STATE_BYTES_PROPOSED,
+            comment_max_bytes=20000,
+            comment_max_chars=20000,
+        )
+        self.assertLess(len(findings["block"]), 20000)
+        out = review.compose(
+            resultado,
+            manifest,
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+            budget=presupuesto,
+        )
+        sin = review.compose(
+            resultado, manifest, sha="e" * 40, provider="opencode-go", findings=findings
+        )
+        self.assertGreater(len(sin), 20000)
+        self.assertEqual(
+            out, sin, "el presupuesto no cabe: se publican los topes actuales"
+        )
+
     def test_mensaje_sin_revisables_con_findings_vacios(self):
         findings = {"merged": [], "new_ids": [], "block": "", "model_ok": True}
         out = review.compose(
