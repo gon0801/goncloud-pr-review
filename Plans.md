@@ -233,7 +233,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | E2-r4 veredicto N1 | generador ciego v2 exige set(particion)==casos observaciones.json; con 26 casos, recoleccion sin los 6 push-casos sale exit 2; decirlo en README v2 junto a recoleccion D0 | abierta |
 | E2-r4 veredicto N2 | pairing.json recongelado en r4 es legitimo sin salidas v2 observadas; tras recoleccion, recongelar se declara desvio | abierta |
 | E2-r4 review F8 | conteo documental pendiente en E2 (Low, no bloqueante) | abierta |
-| D0-r1 veredicto N1 (ai-review F2) | reordenar templates/ai-review-worker.yml: fetch + worktree antes de execute-request, con working-directory pr; si no, D0 siempre fallback en worker real; resolver antes de T16 | abierta |
+| D0-r1 veredicto N1 (ai-review F2) | reordenar templates/ai-review-worker.yml: fetch + worktree antes de execute-request, con working-directory pr; si no, D0 siempre fallback en worker real; resolver antes de T16 | cerrada (#83: el worker trae el PR antes de execute-request y lo corre en pr) |
 | D0-r1 veredicto N2 | ReviewPolicy nueva cambia digest_de_politica de toda politica existente; fuerza una revision completa por PR y rechaza artifacts en vuelo; anotar en runbook de activacion | abierta |
 | D0-r1 veredicto N3 | digest con diff_max_bytes de entorno vs politica_de_revision del coordinador; si difieren, rechaza todos los resultados; derivar de una sola fuente | abierta |
 | D0-r1 veredicto N4 | cobertura COMPLETE_CLAIM con omisiones budget del modo historico; T16 no debe tomarla tal cual | abierta |

@@ -2254,6 +2254,29 @@ class Workflows(unittest.TestCase):
         self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
         self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
 
+    def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        pasos = (
+            worker.split("jobs:")[1].split("\n  avisar:")[0].split("\n      - name: ")
+        )
+        nombres = [p.split("\n")[0] for p in pasos[1:]]
+        paso = {p.split("\n")[0]: p for p in pasos[1:]}
+        self.assertEqual(
+            nombres[:4],
+            [
+                "checkout del código confiable del worker",
+                "validar entradas",
+                "traer el PR como datos",
+                "preparar solicitud y paquete",
+            ],
+        )
+        # prepare_review lee HEAD_SHA y BASE_SHA con git: en la raíz del checkout
+        # confiable esos objetos no existen y la solicitud caía siempre al plan full.
+        self.assertIn("working-directory: pr", paso["preparar solicitud y paquete"])
+        self.assertIn(
+            'review.py" execute-request', paso["preparar solicitud y paquete"]
+        )
+
     def test_el_cierre_del_worker_conoce_proveedor_y_secretos_a_redactar(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
