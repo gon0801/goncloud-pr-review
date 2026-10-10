@@ -133,7 +133,7 @@ Cinco corridas del worker con modelo, todas con opencode-go: $0.1794 + $0.1582
 + $0.1609 + $0.1745 + $0.1022 = **$0.7752**. El re-run de la solicitud
 terminada no llegó al modelo.
 
-## Decisión de la ronda 3
+## Decisión de la ronda 3 (histórica; la sustituye la ronda 3b, abajo)
 
 Los casos 1 a 5 pasan en lo que ejercieron: el modo coordinado publica
 completo, conserva ids, respeta descartes, explica sin acreditar y re-revisa

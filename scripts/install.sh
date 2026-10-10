@@ -20,7 +20,7 @@ if [ "${1:-}" = "--coordinado" ]; then
   shift
 fi
 if [ "$modo" = "coordinado" ] && [ "${AI_REVIEW_PILOTO:-}" != "1" ]; then
-  echo "instalador: el modo coordinado no se despliega en consumidores sin decisión del operador (piloto de T16 abierto); solo para un piloto con AI_REVIEW_PILOTO=1" >&2
+  echo "instalador: el modo coordinado no se despliega en consumidores sin decisión del operador (activo solo en el repo central); solo para un piloto con AI_REVIEW_PILOTO=1" >&2
   exit 2
 fi
 if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then
