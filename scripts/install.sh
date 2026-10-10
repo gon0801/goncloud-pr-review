@@ -22,6 +22,21 @@ if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then
   exit 2
 fi
 
+# Fusiona main en la rama propia (sin forzar) y deja su punta en $punta; igual
+# que al_dia_con_main del modo coordinado, también en cada reintento.
+al_dia_con_main() {
+  local error
+  if ! error="$(gh api "repos/$repo/merges" -f base="$branch" -f head="$default" 2>&1 >/dev/null)"; then
+    if [[ "$error" == *"HTTP 409"* ]]; then
+      echo "instalador: $repo: la rama $branch tiene conflicto con main; resuélvelo en la rama ($error)" >&2
+    else
+      echo "instalador: $repo: no pude poner la rama $branch al día con main; no se publica nada ($error)" >&2
+    fi
+    exit 1
+  fi
+  punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+}
+
 for repo in "$@"; do
   if [ "$modo" = "coordinado" ]; then
     REPO="$repo" BRANCH="$branch" ACTION_SHA="$ACTION_SHA" HERE="$here" python3 <<'PY'
@@ -90,16 +105,10 @@ default = consulta(f"repos/{repo}", expr=".default_branch")
 if not default:
     fail("no pude leer el repositorio")
 
-punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-if not punta:
-    raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
-    creado = api(f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{rama}", "-f", f"sha={raiz}")
-    if creado.returncode != 0:
-        fail(f"no pude crear la rama ({creado.stderr.strip()})")
-    punta = raiz
-else:
-    # Tras un squash merge la rama propia queda divergente: sin la punta de
-    # main, el PR revertiría o chocaría con lo que ya se mergeó.
+def al_dia_con_main():
+    """Fusiona main en la rama propia (sin forzar) y devuelve su punta. Tras un
+    squash merge, o si main avanza entre intentos, sin esto el PR revertiría o
+    chocaría con lo que ya se mergeó."""
     fusion = api(f"repos/{repo}/merges", "-f", f"base={rama}", "-f", f"head={default}")
     if fusion.returncode != 0:
         # Solo el 409 es un conflicto; permisos, historial lineal o un 5xx no
@@ -108,20 +117,31 @@ else:
         if "HTTP 409" in causa:
             fail(f"la rama {rama} tiene conflicto con main; resuélvelo en la rama ({causa})")
         fail(f"no pude poner la rama {rama} al día con main; no se publica nada ({causa})")
-    punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-    if not punta:
+    nueva = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+    if not nueva:
         fail("no pude releer la rama tras ponerla al día con main")
+    return nueva
+
+
+punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+if not punta:
+    raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
+    creado = api(f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{rama}", "-f", f"sha={raiz}")
+    if creado.returncode != 0:
+        fail(f"no pude crear la rama ({creado.stderr.strip()})")
+    punta = raiz
+else:
+    punta = al_dia_con_main()
 
 contenido_publicador = plantilla("ai-review-publish.yml")
 contenido_worker = plantilla("ai-review-worker.yml")
 
-rutas = consulta(
-    f"repos/{repo}/git/trees/{punta}?recursive=1", expr=".tree[].path"
-)
-if rutas is None:
-    fail("no pude leer el árbol de la punta; no se publica nada")
-
 for intento in range(1, INTENTOS + 1):
+    rutas = consulta(
+        f"repos/{repo}/git/trees/{punta}?recursive=1", expr=".tree[].path"
+    )
+    if rutas is None:
+        fail("no pude leer el árbol de la punta; no se publica nada")
     arbol_base = consulta(f"repos/{repo}/git/commits/{punta}", expr=".tree.sha")
     if not arbol_base:
         fail("no pude leer el árbol de la punta; no se publica nada")
@@ -197,12 +217,10 @@ for intento in range(1, INTENTOS + 1):
         fail("la rama cambió durante la instalación y no se puede forzar")
     print(
         f"instalador: {repo}: la rama cambió durante la instalación; "
-        "reintento sobre la punta nueva (sin forzar)",
+        "reintento sobre la punta nueva al día con main (sin forzar)",
         file=sys.stderr,
     )
-    punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-    if not punta:
-        fail("no pude releer la punta para el reintento")
+    punta = al_dia_con_main()
 
 titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
 cuerpo_pr = (
@@ -295,16 +313,8 @@ PY
       punta="$(gh api "repos/$repo/git/ref/heads/$default" --jq .object.sha)"
       gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$punta" >/dev/null
     else
-      # Misma puesta al día que el modo coordinado (rama vieja tras un squash merge).
-      if ! error="$(gh api "repos/$repo/merges" -f base="$branch" -f head="$default" 2>&1 >/dev/null)"; then
-        if [[ "$error" == *"HTTP 409"* ]]; then
-          echo "instalador: $repo: la rama $branch tiene conflicto con main; resuélvelo en la rama ($error)" >&2
-        else
-          echo "instalador: $repo: no pude poner la rama $branch al día con main; no se publica nada ($error)" >&2
-        fi
-        exit 1
-      fi
-      punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+      # Rama vieja tras un squash merge.
+      al_dia_con_main
     fi
     rutas="$(gh api "repos/$repo/git/trees/$punta?recursive=1" --jq '.tree[].path')" || {
       echo "instalador: $repo: no pude leer el árbol; no se publica nada" >&2
@@ -334,7 +344,7 @@ PY
           echo "instalador: $repo: la rama cambió durante el retorno y no se puede forzar" >&2
           exit 1
         fi
-        punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+        al_dia_con_main
       done
     else
       path=".github/workflows/ai-review.yml"
