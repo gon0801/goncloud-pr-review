@@ -61,6 +61,7 @@ FAKE_GH = textwrap.dedent(
     args = sys.argv[1:]
     registrar(args)
     expr = "."
+    metodo = "GET"
     if "-X" in args:
         metodo = args[args.index("-X") + 1]
         args = [a for a in args if a != "-X" and a != metodo]
@@ -145,6 +146,20 @@ FAKE_GH = textwrap.dedent(
         guardar()
         sys.exit(0)
 
+    if resto[0] == "contents" and metodo == "GET" and not banderas:
+        consulta = dict(
+            par.split("=", 1) for par in ruta.partition("?")[2].split("&") if "=" in par
+        )
+        rama_leida = consulta.get("ref", r["default"])
+        punta_leida = r["branches"].get(rama_leida)
+        arbol_leido = r["trees"][r["commits"][punta_leida]["tree"]] if punta_leida else {}
+        archivo = "/".join(resto[1:])
+        if archivo not in arbol_leido:
+            fallar(1, "Not Found (HTTP 404)")
+        emitir({"content": r["blobs"][arbol_leido[archivo]], "sha": arbol_leido[archivo]})
+        guardar()
+        sys.exit(0)
+
     if resto[:2] == ["git", "ref"]:
         rama = "/".join(resto[3:])
         punta = r["branches"].get(rama)
@@ -185,6 +200,24 @@ FAKE_GH = textwrap.dedent(
                 "message": "ajeno",
             }
             r["branches"][rama] = commit_sha
+            if estado.get("main_avanza", {}).get(repo):
+                # main también avanza mientras el instalador reintenta.
+                base_main = r["branches"][r["default"]]
+                nuevo = "nuevo en main"
+                blob_main = base64.b64encode(nuevo.encode()).decode()
+                sha_main = sha_de(blob_main)
+                r["blobs"][sha_main] = blob_main
+                arbol_main = dict(r["trees"][r["commits"][base_main]["tree"]])
+                arbol_main["main.txt"] = sha_main
+                arbol_main_sha = "t" + sha_de(json.dumps(arbol_main, sort_keys=True))
+                r["trees"][arbol_main_sha] = arbol_main
+                commit_main = "c" + sha_de(arbol_main_sha + base_main + "main")
+                r["commits"][commit_main] = {
+                    "tree": arbol_main_sha,
+                    "parents": [base_main],
+                    "message": "main avanza",
+                }
+                r["branches"][r["default"]] = commit_main
             guardar()
         nueva = banderas["sha"][0]
         punta = r["branches"][rama]
@@ -347,11 +380,15 @@ class InstaladorTest(unittest.TestCase):
     def _guardar(self):
         json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
 
-    def _correr(self, *argumentos, raza=None, extra=None, fallos=None):
+    def _correr(
+        self, *argumentos, raza=None, extra=None, fallos=None, main_avanza=None
+    ):
         if fallos:
             self.estado["fallos"] = dict(fallos)
         if raza:
             self.estado["razas"] = dict(raza)
+        if main_avanza:
+            self.estado["main_avanza"] = dict(main_avanza)
         self._guardar()
         env = dict(os.environ)
         env.update(
@@ -466,6 +503,107 @@ class AtomicInstall(InstaladorTest):
         )
         registro = open(self.registro_ruta).read()
         self.assertNotIn("force-prohibido", registro, "nunca fuerza la referencia")
+
+
+class ReintentoAlDiaConMain(InstaladorTest):
+    """Low de #87: si main avanza entre el intento 1 y el 2, el reintento vuelve
+    a poner la rama propia al día; el PR sale sobre la punta nueva de main."""
+
+    def _assert_sobre_main_nuevo(self, resultado, esperados):
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        archivos = self._archivos_de(repo, "chore/ai-review")
+        self.assertIn("main.txt", archivos, "el reintento trae lo que entró a main")
+        for ruta in esperados:
+            self.assertIn(ruta, archivos)
+        self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+
+    def test_coordinado(self):
+        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
+        resultado = self._correr(
+            "--coordinado",
+            "o/r",
+            extra={"ACTION_SHA": "b" * 40},
+            raza={"o/r": 1},
+            main_avanza={"o/r": True},
+        )
+        self._assert_sobre_main_nuevo(
+            resultado,
+            [
+                ".github/workflows/ai-review-publish.yml",
+                ".github/workflows/ai-review-worker.yml",
+            ],
+        )
+
+    def test_retorno_al_modo_actual(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+            },
+        )
+        resultado = self._correr(
+            "o/r",
+            extra={"ACTION_SHA": "c" * 40},
+            raza={"o/r": 1},
+            main_avanza={"o/r": True},
+        )
+        self._assert_sobre_main_nuevo(resultado, [".github/workflows/ai-review.yml"])
+
+
+class RefijadoDelCoordinado(InstaladorTest):
+    """F1/F2 de goncloud-Orbit #417: un repo que ya tiene el conjunto solo
+    cambia de pin; el PR lo dice y enlaza la procedencia del pin nuevo."""
+
+    WORKER_FIJADO = (
+        "      - name: checkout del CLI confiable del repo central\n"
+        "        uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          repository: gon0801/goncloud-pr-review\n"
+        "          ref: " + "a" * 40 + "\n"
+    )
+
+    def test_el_refijado_dice_de_que_pin_a_que_pin(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": self.WORKER_FIJADO,
+            },
+        )
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        (pr,) = repo["prs"]
+        self.assertEqual(
+            pr["title"], "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb"
+        )
+        enlace = (
+            "https://github.com/gon0801/goncloud-pr-review/compare/"
+            + "a" * 40
+            + "..."
+            + "b" * 40
+        )
+        self.assertIn(enlace, pr["body"])
+        self.assertNotIn("retira el escritor anterior", pr["body"])
+        commit = repo["commits"][repo["branches"]["chore/ai-review"]]
+        self.assertTrue(
+            commit["message"].startswith(
+                "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb\n"
+            )
+        )
+        self.assertIn(enlace, commit["message"])
+
+    def test_la_primera_instalacion_conserva_su_texto(self):
+        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        (pr,) = self._repo_final("o/r")["prs"]
+        self.assertEqual(
+            pr["title"], "ci: revisión coordinada de PRs con IA (coordinador + worker)"
+        )
+        self.assertIn("retira el escritor anterior", pr["body"])
 
 
 class RamaPropiaVieja(InstaladorTest):

@@ -22,6 +22,21 @@ if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then
   exit 2
 fi
 
+# Fusiona main en la rama propia (sin forzar) y deja su punta en $punta; igual
+# que al_dia_con_main del modo coordinado, también en cada reintento.
+al_dia_con_main() {
+  local error
+  if ! error="$(gh api "repos/$repo/merges" -f base="$branch" -f head="$default" 2>&1 >/dev/null)"; then
+    if [[ "$error" == *"HTTP 409"* ]]; then
+      echo "instalador: $repo: la rama $branch tiene conflicto con main; resuélvelo en la rama ($error)" >&2
+    else
+      echo "instalador: $repo: no pude poner la rama $branch al día con main; no se publica nada ($error)" >&2
+    fi
+    exit 1
+  fi
+  punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+}
+
 for repo in "$@"; do
   if [ "$modo" = "coordinado" ]; then
     REPO="$repo" BRANCH="$branch" ACTION_SHA="$ACTION_SHA" HERE="$here" python3 <<'PY'
@@ -29,6 +44,7 @@ import base64
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -90,16 +106,10 @@ default = consulta(f"repos/{repo}", expr=".default_branch")
 if not default:
     fail("no pude leer el repositorio")
 
-punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-if not punta:
-    raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
-    creado = api(f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{rama}", "-f", f"sha={raiz}")
-    if creado.returncode != 0:
-        fail(f"no pude crear la rama ({creado.stderr.strip()})")
-    punta = raiz
-else:
-    # Tras un squash merge la rama propia queda divergente: sin la punta de
-    # main, el PR revertiría o chocaría con lo que ya se mergeó.
+def al_dia_con_main():
+    """Fusiona main en la rama propia (sin forzar) y devuelve su punta. Tras un
+    squash merge, o si main avanza entre intentos, sin esto el PR revertiría o
+    chocaría con lo que ya se mergeó."""
     fusion = api(f"repos/{repo}/merges", "-f", f"base={rama}", "-f", f"head={default}")
     if fusion.returncode != 0:
         # Solo el 409 es un conflicto; permisos, historial lineal o un 5xx no
@@ -108,20 +118,87 @@ else:
         if "HTTP 409" in causa:
             fail(f"la rama {rama} tiene conflicto con main; resuélvelo en la rama ({causa})")
         fail(f"no pude poner la rama {rama} al día con main; no se publica nada ({causa})")
-    punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-    if not punta:
+    nueva = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+    if not nueva:
         fail("no pude releer la rama tras ponerla al día con main")
+    return nueva
+
+
+def pin_vigente():
+    """El SHA confiable al que está fijado hoy el worker de la rama por defecto,
+    o None si el repo todavía no tiene el conjunto coordinado."""
+    contenido = consulta(
+        f"repos/{repo}/contents/.github/workflows/ai-review-worker.yml?ref={default}",
+        expr=".content",
+    )
+    if not contenido:
+        return None
+    try:
+        texto = base64.b64decode(contenido).decode()
+    except ValueError:
+        return None
+    hallado = re.search(
+        rf"repository: {re.escape(central)}\n\s+ref: ([0-9a-f]{{40}})", texto
+    )
+    return hallado.group(1) if hallado else None
+
+
+punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+if not punta:
+    raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
+    creado = api(f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{rama}", "-f", f"sha={raiz}")
+    if creado.returncode != 0:
+        fail(f"no pude crear la rama ({creado.stderr.strip()})")
+    punta = raiz
+else:
+    punta = al_dia_con_main()
 
 contenido_publicador = plantilla("ai-review-publish.yml")
 contenido_worker = plantilla("ai-review-worker.yml")
 
-rutas = consulta(
-    f"repos/{repo}/git/trees/{punta}?recursive=1", expr=".tree[].path"
-)
-if rutas is None:
-    fail("no pude leer el árbol de la punta; no se publica nada")
+# Un repo que ya tiene el conjunto solo cambia de pin: el commit y el PR lo dicen,
+# con la procedencia del pin nuevo (el compare del repo central).
+viejo = pin_vigente()
+refijado = viejo is not None and viejo != action_sha
+if refijado:
+    titulo = f"ci: re-fija el revisor de PRs de {viejo[:7]} a {action_sha[:7]}"
+    procedencia = f"https://github.com/{central}/compare/{viejo}...{action_sha}"
+    mensaje = (
+        f"{titulo}\n\n"
+        f"Re-fija ai-review-publish.yml y ai-review-worker.yml al SHA confiable\n"
+        f"{action_sha} de {central} (antes {viejo}).\n"
+        f"Cambios: {procedencia}"
+    )
+    cuerpo_pr = (
+        f"Re-fija el revisor coordinado (publicador + worker) de `{viejo[:7]}` a\n"
+        f"`{action_sha[:7]}`, SHA confiable de {central}.\n\n"
+        f"Qué cambió entre los dos: {procedencia}\n\n"
+        "Solo cambia el pin del CLI confiable; los secrets `AI_REVIEW_API_KEY` y\n"
+        "`DEEPSEEK_API_KEY` de este repo siguen igual."
+    )
+else:
+    titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
+    mensaje = (
+        f"{titulo}\n\n"
+        f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
+        f"confiable {action_sha} de {central} y retira ai-review.yml.\n"
+        "Usa los secrets AI_REVIEW_API_KEY (opencode-go) y DEEPSEEK_API_KEY (respaldo) de este repo."
+    )
+    cuerpo_pr = (
+        f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
+        f"confiable `{action_sha}` de {central} y retira el escritor anterior\n"
+        "ai-review.yml en un único commit.\n\n"
+        "Usa los secrets `AI_REVIEW_API_KEY` (opencode-go) y `DEEPSEEK_API_KEY` (respaldo) de este repo.\n"
+        "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
+        "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
+    )
 
 for intento in range(1, INTENTOS + 1):
+    rutas = consulta(
+        f"repos/{repo}/git/trees/{punta}?recursive=1", expr=".tree[].path"
+    )
+    if rutas is None:
+        fail("no pude leer el árbol de la punta; no se publica nada")
     arbol_base = consulta(f"repos/{repo}/git/commits/{punta}", expr=".tree.sha")
     if not arbol_base:
         fail("no pude leer el árbol de la punta; no se publica nada")
@@ -165,12 +242,6 @@ for intento in range(1, INTENTOS + 1):
     if arbol.returncode != 0:
         fail(f"no pude crear el árbol ({arbol.stderr.strip()})")
     arbol_sha = json.loads(arbol.stdout)["sha"]
-    mensaje = (
-        "ci: revisión coordinada de PRs con IA (coordinador + worker)\n\n"
-        f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
-        f"confiable {action_sha} de {central} y retira ai-review.yml.\n"
-        "Usa los secrets AI_REVIEW_API_KEY (opencode-go) y DEEPSEEK_API_KEY (respaldo) de este repo."
-    )
     hecho = api(
         f"repos/{repo}/git/commits",
         "-f",
@@ -197,22 +268,11 @@ for intento in range(1, INTENTOS + 1):
         fail("la rama cambió durante la instalación y no se puede forzar")
     print(
         f"instalador: {repo}: la rama cambió durante la instalación; "
-        "reintento sobre la punta nueva (sin forzar)",
+        "reintento sobre la punta nueva al día con main (sin forzar)",
         file=sys.stderr,
     )
-    punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
-    if not punta:
-        fail("no pude releer la punta para el reintento")
+    punta = al_dia_con_main()
 
-titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
-cuerpo_pr = (
-    f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
-    f"confiable `{action_sha}` de {central} y retira el escritor anterior\n"
-    "ai-review.yml en un único commit.\n\n"
-    "Usa los secrets `AI_REVIEW_API_KEY` (opencode-go) y `DEEPSEEK_API_KEY` (respaldo) de este repo.\n"
-    "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
-    "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
-)
 abiertos = subprocess.run(
     [
         "gh",
@@ -295,16 +355,8 @@ PY
       punta="$(gh api "repos/$repo/git/ref/heads/$default" --jq .object.sha)"
       gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$punta" >/dev/null
     else
-      # Misma puesta al día que el modo coordinado (rama vieja tras un squash merge).
-      if ! error="$(gh api "repos/$repo/merges" -f base="$branch" -f head="$default" 2>&1 >/dev/null)"; then
-        if [[ "$error" == *"HTTP 409"* ]]; then
-          echo "instalador: $repo: la rama $branch tiene conflicto con main; resuélvelo en la rama ($error)" >&2
-        else
-          echo "instalador: $repo: no pude poner la rama $branch al día con main; no se publica nada ($error)" >&2
-        fi
-        exit 1
-      fi
-      punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+      # Rama vieja tras un squash merge.
+      al_dia_con_main
     fi
     rutas="$(gh api "repos/$repo/git/trees/$punta?recursive=1" --jq '.tree[].path')" || {
       echo "instalador: $repo: no pude leer el árbol; no se publica nada" >&2
@@ -334,7 +386,7 @@ PY
           echo "instalador: $repo: la rama cambió durante el retorno y no se puede forzar" >&2
           exit 1
         fi
-        punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
+        al_dia_con_main
       done
     else
       path=".github/workflows/ai-review.yml"
