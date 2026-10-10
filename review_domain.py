@@ -359,22 +359,60 @@ def find_findings_block(text, *, last=False):
     the model quotes from the PR earlier in its text never wins.
     """
     text = text or ""
+    starts = _block_starts(text)
+    for start in reversed(starts) if last else starts:
+        found = _closed_block_at(text, start)
+        if found is not None:
+            return (start, *found)
+    return None
+
+
+def find_model_findings_block(text):
+    """The MODEL's block: (start, end, data, closed) or None.
+
+    Like find_findings_block(last=True), but tolerates a model that closes the
+    JSON and then drops ` -->` or puts it on another line (T16-f11: 7 of 24
+    incremental runs). The JSON must be complete; a truncated one is rejected.
+    The sticky never goes through here: the reviewer writes that block and it
+    keeps requiring the closer.
+    """
+    text = text or ""
+    for start in reversed(_block_starts(text)):
+        found = _closed_block_at(text, start)
+        if found is not None:
+            return (start, *found, True)
+        # raw_decode no salta espacios iniciales; json.loads del camino cerrado sí.
+        body = re.compile(r"\s*").match(text, start + len(FINDINGS_PREFIX)).end()
+        try:
+            data, end = json.JSONDecoder().raw_decode(text, body)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("findings"), list):
+            closer = re.match(r"\s*-->", text[end:])
+            return start, end + (closer.end() if closer else 0), data, False
+    return None
+
+
+def _block_starts(text):
     starts, pos = [], text.find(FINDINGS_PREFIX)
     while pos >= 0:
         starts.append(pos)
         pos = text.find(FINDINGS_PREFIX, pos + 1)
-    for start in reversed(starts) if last else starts:
-        body = start + len(FINDINGS_PREFIX)
-        end = text.find(FINDINGS_SUFFIX, body)
-        while end >= 0:
-            try:
-                data = json.loads(text[body:end])
-            except ValueError:
-                end = text.find(FINDINGS_SUFFIX, end + 1)
-                continue
-            if isinstance(data, dict) and isinstance(data.get("findings"), list):
-                return start, end + len(FINDINGS_SUFFIX), data
-            break
+    return starts
+
+
+def _closed_block_at(text, start):
+    body = start + len(FINDINGS_PREFIX)
+    end = text.find(FINDINGS_SUFFIX, body)
+    while end >= 0:
+        try:
+            data = json.loads(text[body:end])
+        except ValueError:
+            end = text.find(FINDINGS_SUFFIX, end + 1)
+            continue
+        if isinstance(data, dict) and isinstance(data.get("findings"), list):
+            return end + len(FINDINGS_SUFFIX), data
+        break
     return None
 
 
@@ -444,7 +482,11 @@ def same_issue(a, b):
 
 def parse_model_findings(text, *, conservar_anclas=False):
     """Parse the block the model emitted. The model may never dismiss; only users do."""
-    load = read_snapshot(text, last=True, conservar_anclas=conservar_anclas)
+    found = find_model_findings_block(text)
+    if found is None:
+        return None
+    start, end, data, _ = found
+    load = _classify_block(data, text[start:end], conservar_anclas)
     if not isinstance(load, Legacy):
         return None
     state = load.raw
@@ -460,6 +502,22 @@ def strip_findings_block(text, *, last=False):
         return text or ""
     start, end, _ = found
     return (text[:start] + text[end:]).strip()
+
+
+def strip_model_findings_block(text):
+    """The model's prose without its block, closed or not."""
+    text = text or ""
+    if FINDINGS_PREFIX not in text:
+        return text
+    found = find_model_findings_block(text)
+    if found is not None:
+        start, end, _, _ = found
+        text = text[:start] + text[end:]
+    last = text.rfind(FINDINGS_PREFIX)
+    if last >= 0 and "-->" not in text[last:]:
+        # Unreadable block: an open `<!--` would hide the rest of the comment on GitHub.
+        text = text[:last]
+    return text.strip()
 
 
 # Lectura compatible (legado + esquema 2) y migración.
@@ -871,8 +929,10 @@ def read_snapshot(body, *, last=False, conservar_anclas=False):
             return Invalid("bloque de hallazgos corrupto: JSON o cierre ausentes")
         return Missing()
     start, end, data = found
-    found_block = body[start:end]
-    data = found[2]
+    return _classify_block(data, body[start:end], conservar_anclas)
+
+
+def _classify_block(data, found_block, conservar_anclas):
     if "schema" in data:
         schema = data["schema"]
         if schema == 2:

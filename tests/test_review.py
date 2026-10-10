@@ -5884,7 +5884,185 @@ class BlockingFixes(unittest.TestCase):
         self.assertNotIn("<!--", line)
 
 
+# Recortes de corridas reales de la medición T16 (evaluation/reviewer/v2/
+# medicion-t16/textos.jsonl): el modelo cierra el JSON y omite ` -->`
+# (37878698057) o lo pone tras un salto de línea (37884726453).
+BLOQUE_SIN_CIERRE = (
+    "Detalle del cambio.\n\n"
+    '<!-- ai-review:findings={"findings":[{"id":"F1","file":"review.py","line":121,'
+    '"files":["tests/test_review.py","README.md"],"severity":"Medium",'
+    '"title":"El tope de tamaño ya no cubre el comentario completo","state":"open"},'
+    '{"id":"F-new","file":"README.md","line":12,"files":["review.py"],"severity":"Low",'
+    '"title":"README promete reintento pero los errores permanentes ya no se reintentan",'
+    '"state":"open"}],"next":5}\n\nCOVERAGE: complete'
+)
+BLOQUE_CIERRE_EN_OTRA_LINEA = (
+    "Detalle del cambio.\n\n"
+    '<!-- ai-review:findings={"findings":[{"id":"F1","file":"review.py","line":121,'
+    '"files":["tests/test_review.py"],"severity":"Medium",'
+    '"title":"El tope de tamaño ya no cubre el comentario completo","state":"open"},'
+    '{"id":"F-new","file":"README.md","line":12,"files":["review.py"],"severity":"Low",'
+    '"title":"El README dice que reintenta una vez, pero los errores permanentes ya no '
+    'se reintentan","state":"open"}],"next":5}\n-->\n\nCOVERAGE: complete'
+)
+
+
+class BloqueDelModeloSinCierre(unittest.TestCase):
+    """T16-f11: 7 de 24 corridas incrementales perdían el bloque del modelo."""
+
+    def test_bloque_sin_cierre_conserva_los_hallazgos(self):
+        state = review.parse_model_findings(review.split_coverage(BLOQUE_SIN_CIERRE)[0])
+        self.assertEqual(
+            [(f["id"], f["severity"], f["state"]) for f in state["findings"]],
+            [("F1", "Medium", "open"), (None, "Low", "open")],
+        )
+        self.assertEqual(state["next"], 5)
+
+    def test_cierre_tras_salto_de_linea_conserva_los_hallazgos(self):
+        state = review.parse_model_findings(
+            review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+        )
+        self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
+
+    def test_espacio_tras_el_prefijo_y_sin_cierre_conserva_los_hallazgos(self):
+        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        for espacio in (" ", "\n"):
+            with self.subTest(espacio=repr(espacio)):
+                texto = prosa.replace(
+                    review.FINDINGS_PREFIX, review.FINDINGS_PREFIX + espacio
+                )
+                state = review.parse_model_findings(texto)
+                self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
+                self.assertEqual(
+                    review.strip_model_findings_block(texto), "Detalle del cambio."
+                )
+
+    def test_json_truncado_no_se_acepta(self):
+        truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
+        self.assertIsNone(review.parse_model_findings(truncado))
+
+    def test_el_texto_visible_no_arrastra_el_bloque_sin_cerrar(self):
+        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        self.assertEqual(
+            review.strip_model_findings_block(prosa), "Detalle del cambio."
+        )
+        otra = review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+        self.assertEqual(review.strip_model_findings_block(otra), "Detalle del cambio.")
+
+    def test_un_bloque_ilegible_no_deja_un_comentario_html_abierto(self):
+        truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
+        self.assertEqual(
+            review.strip_model_findings_block(truncado), "Detalle del cambio."
+        )
+
+    def test_un_bloque_ilegible_tras_uno_valido_no_queda_abierto(self):
+        citado = block_of(make_finding("F9", title="Citado del PR"))
+        truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
+        self.assertEqual(
+            review.strip_model_findings_block(f"Antes.\n{citado}\n{truncado}"),
+            "Antes.\n\nDetalle del cambio.",
+        )
+
+    def test_el_ultimo_bloque_sin_cierre_gana_a_uno_citado_antes(self):
+        citado = block_of(make_finding("F9", title="Citado del PR"))
+        texto = f"{citado}\ntexto\n" + review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        state = review.parse_model_findings(texto)
+        self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
+
+    def test_el_parser_del_sticky_sigue_exigiendo_el_cierre(self):
+        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        self.assertIsNone(review.parse_findings_block(prosa))
+        import review_domain as domain
+
+        self.assertIsInstance(domain.read_snapshot(prosa), domain.Invalid)
+
+    def test_publish_publica_los_hallazgos_de_un_bloque_sin_cierre(self):
+        prev_block = block_of(
+            make_finding(
+                "F1",
+                file="review.py",
+                line=121,
+                severity="Medium",
+                title="El tope de tamaño ya no cubre el comentario completo",
+            ),
+            next=5,
+        )
+        comments = [
+            {
+                "id": 99,
+                "user": "github-actions[bot]",
+                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "gh").write_text(FAKE_GH_WRITER)
+            (bindir / "gh").chmod(0o755)
+            (tmp / "comments.json").write_text(json.dumps(comments))
+            work = tmp / "work"
+            work.mkdir()
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    dict(MANIFEST, mode="full", reviewed=["review.py", "README.md"])
+                )
+            )
+            (work / "result.json").write_text(
+                json.dumps({"result": f"**Veredicto:** x\n\n{BLOQUE_SIN_CIERRE}"})
+            )
+            env = dict(
+                os.environ,
+                PATH=f"{bindir}:{os.environ['PATH']}",
+                FAKE_GH_LOG=str(tmp / "log"),
+                FAKE_GH_COMMENTS=str(tmp / "comments.json"),
+                GITHUB_OUTPUT=str(tmp / "out"),
+                REPO="o/r",
+                PR_NUMBER="7",
+                HEAD_SHA=SHA,
+                RUN_ATTEMPT="1",
+            )
+            env.pop("GITHUB_STEP_SUMMARY", None)
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "review.py"),
+                    "publish",
+                    "--work",
+                    str(work),
+                ],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            body = json.loads((work / "comment.json").read_text())["body"]
+        state = review.parse_findings_block(body)
+        self.assertEqual(
+            [(f["id"], f["severity"]) for f in state["findings"]],
+            [("F1", "Medium"), ("F5", "Low")],
+        )
+        self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
+        self.assertNotIn("no entregó su bloque", body)
+        self.assertIn(
+            "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
+            "tras el JSON",
+            proc.stdout,
+        )
+
+
 class PromptFindings(unittest.TestCase):
+    def test_el_prompt_incremental_repite_la_forma_exacta_del_bloque(self):
+        manifest = dict(
+            MANIFEST, mode="incremental", prev_sha="a" * 40, reviewed=["x.py"]
+        )
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
+            prompt = review.build_prompt(manifest, Path("/w"), 10)
+        self.assertIn(
+            "as one line that starts with `<!-- ai-review:findings=` and ends with ` -->`",
+            prompt,
+        )
+
     def test_incremental_prompt_asks_to_describe_only_new_findings(self):
         prompt = (ROOT / "prompt.md").read_text()
         self.assertIn("describe in detail only NEW findings", prompt)
@@ -5899,6 +6077,7 @@ class PromptFindings(unittest.TestCase):
             "prev_findings.md",
             "Incremental review",
             "counts only `open`",
+            "the block ends with ` -->` right after the final `}`",
         ):
             self.assertIn(token, prompt)
 

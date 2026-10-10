@@ -86,6 +86,7 @@ Rules:
 - `state` is `open` or `resolved`. Never emit `dismissed`: only a human discards.
 - Previous findings (see `prev_findings.md` when it exists) keep their same `id` for the same issue in the same file. New findings use `"id": "F-new"` (the publisher numbers them).
 - Never write `-->` inside any string of the block (titles, paths). Keep the block on as few lines as possible. The verdict counts only `open` findings.
+- Always close the comment: the block ends with ` -->` right after the final `}`, on the same line. This holds in incremental reviews too, where the block carries every previous finding.
 
 ## Incremental review (push 2 and later)
 
