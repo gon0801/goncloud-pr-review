@@ -657,10 +657,17 @@ class CoordinadorComandos(unittest.TestCase):
         estados = [domain.replace(snapshot_base(), command_cursor=n) for n in range(4)]
         falso = self._falso(self._visible_previo(estados[0]), [])
 
+        completion_previa = review.reviewed_completion(falso.leer()[0]["body"])
+        self.assertIsNotNone(completion_previa)
+
         def publicar(snapshot, visible):
             observado = falso.leer()[0]
             review.publish_checkpoint(
                 domain.Commit(snapshot=snapshot), observado, falso, visible=visible
+            )
+            # #92 F1: ningún re-render deja la cabecera ilegible para el worker.
+            self.assertEqual(
+                review.reviewed_completion(falso.leer()[0]["body"]), completion_previa
             )
 
         publicar(
@@ -680,6 +687,26 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertEqual(cuerpo.count("> [!CAUTION]"), 1)
         self.assertIn("motivo dos", cuerpo)
         self.assertNotIn("motivo uno", cuerpo)
+
+    def test_explicacion_y_cuerpo_sin_revision_conservan_la_cabecera(self):
+        estado = snapshot_base()
+        previo = self._visible_previo(estado)
+        bloque = domain.encode_snapshot(estado).block
+        resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
+        con_explicacion = review.estado_visible(estado, ("F1", "Causa real."))(
+            bloque, resto
+        )
+        self.assertEqual(
+            review.reviewed_completion(con_explicacion),
+            review.reviewed_completion(previo),
+        )
+        sin_forma = review.estado_visible(estado)(
+            bloque,
+            f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+            f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n\ntexto libre",
+        )
+        self.assertEqual(review.reviewed_completion(sin_forma), "complete")
+        self.assertTrue(sin_forma.endswith("texto libre"))
 
     def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
         cuerpo = review.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
