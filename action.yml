@@ -36,6 +36,11 @@ inputs:
     description: Identity mode for F0, current (default) or anchors (requires state v2; activation at cierre)
     default: current
 
+outputs:
+  reviewed:
+    description: "true si este run revisó el head; false si terminó sin revisión (fail-soft en verde); vacío si el gate lo saltó"
+    value: ${{ steps.publish.outputs.reviewed }}
+
 runs:
   using: composite
   steps:
@@ -119,6 +124,7 @@ runs:
       run: python3 "$GITHUB_ACTION_PATH/review.py" run
 
     - name: Publish sticky comment
+      id: publish
       if: steps.check.outputs.skip != 'true' && steps.gate.outputs.skip != 'true'
       shell: bash
       env:
