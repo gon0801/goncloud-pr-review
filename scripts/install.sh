@@ -44,6 +44,7 @@ import base64
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -123,6 +124,25 @@ def al_dia_con_main():
     return nueva
 
 
+def pin_vigente():
+    """El SHA confiable al que está fijado hoy el worker de la rama por defecto,
+    o None si el repo todavía no tiene el conjunto coordinado."""
+    contenido = consulta(
+        f"repos/{repo}/contents/.github/workflows/ai-review-worker.yml?ref={default}",
+        expr=".content",
+    )
+    if not contenido:
+        return None
+    try:
+        texto = base64.b64decode(contenido).decode()
+    except ValueError:
+        return None
+    hallado = re.search(
+        rf"repository: {re.escape(central)}\n\s+ref: ([0-9a-f]{{40}})", texto
+    )
+    return hallado.group(1) if hallado else None
+
+
 punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
 if not punta:
     raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
@@ -135,6 +155,43 @@ else:
 
 contenido_publicador = plantilla("ai-review-publish.yml")
 contenido_worker = plantilla("ai-review-worker.yml")
+
+# Un repo que ya tiene el conjunto solo cambia de pin: el commit y el PR lo dicen,
+# con la procedencia del pin nuevo (el compare del repo central).
+viejo = pin_vigente()
+refijado = viejo is not None and viejo != action_sha
+if refijado:
+    titulo = f"ci: re-fija el revisor de PRs de {viejo[:7]} a {action_sha[:7]}"
+    procedencia = f"https://github.com/{central}/compare/{viejo}...{action_sha}"
+    mensaje = (
+        f"{titulo}\n\n"
+        f"Re-fija ai-review-publish.yml y ai-review-worker.yml al SHA confiable\n"
+        f"{action_sha} de {central} (antes {viejo}).\n"
+        f"Cambios: {procedencia}"
+    )
+    cuerpo_pr = (
+        f"Re-fija el revisor coordinado (publicador + worker) de `{viejo[:7]}` a\n"
+        f"`{action_sha[:7]}`, SHA confiable de {central}.\n\n"
+        f"Qué cambió entre los dos: {procedencia}\n\n"
+        "Solo cambia el pin del CLI confiable; los secrets `AI_REVIEW_API_KEY` y\n"
+        "`DEEPSEEK_API_KEY` de este repo siguen igual."
+    )
+else:
+    titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
+    mensaje = (
+        f"{titulo}\n\n"
+        f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
+        f"confiable {action_sha} de {central} y retira ai-review.yml.\n"
+        "Usa los secrets AI_REVIEW_API_KEY (opencode-go) y DEEPSEEK_API_KEY (respaldo) de este repo."
+    )
+    cuerpo_pr = (
+        f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
+        f"confiable `{action_sha}` de {central} y retira el escritor anterior\n"
+        "ai-review.yml en un único commit.\n\n"
+        "Usa los secrets `AI_REVIEW_API_KEY` (opencode-go) y `DEEPSEEK_API_KEY` (respaldo) de este repo.\n"
+        "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
+        "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
+    )
 
 for intento in range(1, INTENTOS + 1):
     rutas = consulta(
@@ -185,12 +242,6 @@ for intento in range(1, INTENTOS + 1):
     if arbol.returncode != 0:
         fail(f"no pude crear el árbol ({arbol.stderr.strip()})")
     arbol_sha = json.loads(arbol.stdout)["sha"]
-    mensaje = (
-        "ci: revisión coordinada de PRs con IA (coordinador + worker)\n\n"
-        f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
-        f"confiable {action_sha} de {central} y retira ai-review.yml.\n"
-        "Usa los secrets AI_REVIEW_API_KEY (opencode-go) y DEEPSEEK_API_KEY (respaldo) de este repo."
-    )
     hecho = api(
         f"repos/{repo}/git/commits",
         "-f",
@@ -222,15 +273,6 @@ for intento in range(1, INTENTOS + 1):
     )
     punta = al_dia_con_main()
 
-titulo = "ci: revisión coordinada de PRs con IA (coordinador + worker)"
-cuerpo_pr = (
-    f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
-    f"confiable `{action_sha}` de {central} y retira el escritor anterior\n"
-    "ai-review.yml en un único commit.\n\n"
-    "Usa los secrets `AI_REVIEW_API_KEY` (opencode-go) y `DEEPSEEK_API_KEY` (respaldo) de este repo.\n"
-    "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
-    "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
-)
 abiertos = subprocess.run(
     [
         "gh",

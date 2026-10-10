@@ -61,6 +61,7 @@ FAKE_GH = textwrap.dedent(
     args = sys.argv[1:]
     registrar(args)
     expr = "."
+    metodo = "GET"
     if "-X" in args:
         metodo = args[args.index("-X") + 1]
         args = [a for a in args if a != "-X" and a != metodo]
@@ -142,6 +143,20 @@ FAKE_GH = textwrap.dedent(
 
     if not resto:
         emitir({'default_branch': r['default']})
+        guardar()
+        sys.exit(0)
+
+    if resto[0] == "contents" and metodo == "GET" and not banderas:
+        consulta = dict(
+            par.split("=", 1) for par in ruta.partition("?")[2].split("&") if "=" in par
+        )
+        rama_leida = consulta.get("ref", r["default"])
+        punta_leida = r["branches"].get(rama_leida)
+        arbol_leido = r["trees"][r["commits"][punta_leida]["tree"]] if punta_leida else {}
+        archivo = "/".join(resto[1:])
+        if archivo not in arbol_leido:
+            fallar(1, "Not Found (HTTP 404)")
+        emitir({"content": r["blobs"][arbol_leido[archivo]], "sha": arbol_leido[archivo]})
         guardar()
         sys.exit(0)
 
@@ -535,6 +550,60 @@ class ReintentoAlDiaConMain(InstaladorTest):
             main_avanza={"o/r": True},
         )
         self._assert_sobre_main_nuevo(resultado, [".github/workflows/ai-review.yml"])
+
+
+class RefijadoDelCoordinado(InstaladorTest):
+    """F1/F2 de goncloud-Orbit #417: un repo que ya tiene el conjunto solo
+    cambia de pin; el PR lo dice y enlaza la procedencia del pin nuevo."""
+
+    WORKER_FIJADO = (
+        "      - name: checkout del CLI confiable del repo central\n"
+        "        uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          repository: gon0801/goncloud-pr-review\n"
+        "          ref: " + "a" * 40 + "\n"
+    )
+
+    def test_el_refijado_dice_de_que_pin_a_que_pin(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": self.WORKER_FIJADO,
+            },
+        )
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        (pr,) = repo["prs"]
+        self.assertEqual(
+            pr["title"], "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb"
+        )
+        enlace = (
+            "https://github.com/gon0801/goncloud-pr-review/compare/"
+            + "a" * 40
+            + "..."
+            + "b" * 40
+        )
+        self.assertIn(enlace, pr["body"])
+        self.assertNotIn("retira el escritor anterior", pr["body"])
+        commit = repo["commits"][repo["branches"]["chore/ai-review"]]
+        self.assertTrue(
+            commit["message"].startswith(
+                "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb\n"
+            )
+        )
+        self.assertIn(enlace, commit["message"])
+
+    def test_la_primera_instalacion_conserva_su_texto(self):
+        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        (pr,) = self._repo_final("o/r")["prs"]
+        self.assertEqual(
+            pr["title"], "ci: revisión coordinada de PRs con IA (coordinador + worker)"
+        )
+        self.assertIn("retira el escritor anterior", pr["body"])
 
 
 class RamaPropiaVieja(InstaladorTest):
