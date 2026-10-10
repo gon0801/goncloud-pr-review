@@ -10,9 +10,9 @@ repo central.
 > **Estado del modo coordinado.** Activo solo en el repo central (#96, CLI
 > `dff2ad3`). La ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
 > pasó los casos 1 a 5 después de que la ronda 2 encontrara pérdida de
-> hallazgos. La resolución sigue sin verse en el central: el coordinador ya la
-> verifica (#94), pero en la ronda 3b el modelo respondió sin bloque en las
-> revisiones con memoria (#98). Los consumidores no se despliegan sin decisión
+> hallazgos, y la resolución ya se ve en el central (revisión coordinada del #93,
+> con #94). Pendiente: con memoria, el modelo a veces responde sin bloque y ese
+> push no resuelve nada (#98). Los consumidores no se despliegan sin decisión
 > del operador. Hasta que se quite esa barrera, `install.sh --coordinado` se
 > niega sin `AI_REVIEW_PILOTO=1`.
 

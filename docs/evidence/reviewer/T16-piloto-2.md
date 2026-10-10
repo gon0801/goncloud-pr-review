@@ -109,7 +109,7 @@ un comentario que apunta a esta ronda.
 | 5. Otra revisión del mismo SHA | **Pasa.** Re-run del publicador del push `37aa4c5` (38023244131, intento 2): el worker 38023648131 corrió `full/same-sha`, el modelo repitió los 6 ids vivos y **no reportó F2**; sin duplicados (`next_id=8`), cursor intacto, cobertura `complete`. El «Re-run jobs» del worker de una solicitud ya terminada (38023259921, intento 2) no revisa: `execute-request` sale con «la solicitud '3' no está pendiente» y la memoria no cambia; el publicador que avisa queda en rojo (38023567020) sin efecto en el estado. | Worker 38023648131 ($0.1022, 10 turnos); publicador 38023702582 |
 | 6. T05 representativos | **Parcial.** Un solo comentario con el marcador en todo el PR; bloque de 2320 bytes (perfil de 8000) con UTF-8 no ASCII que cierra con `-->`; solicitudes simultáneas (revisión 3 y comando) sin ids duplicados. **Incremental:** no alcanzable, el segundo push se fuerza a completo desde #65. **Full forzado:** no se observó por el defecto menor 1; la corrida fue completa con delta igual. **Falla del proveedor:** no ejercida; simularla exige tocar secrets o variables del repo; la cubren las pruebas de #81. | — |
 
-## Defectos menores (PR #92, sin mergear)
+## Defectos menores (PR #92, mergeado después)
 
 1. **Cabecera del sticky fuera de orden.** Al admitir una solicitud, el
    checkpoint sin visible escribía `MARKER`, bloque, `sha=`, `completion=`
@@ -184,8 +184,24 @@ subir resultado): es benigna. El #94 está mergeado y no emite
 `workflow_dispatch` manual con `pr_number=94`, o un comando nuevo en ese PR, la
 reemplazaría por una revisión del head mergeado.
 
+## Resolución vista en el central (#93)
+
+La resolución sí quedó ejercida en el central, en la revisión coordinada de
+este mismo PR de evidencia (#93). Con el push `b32492f`, que arreglaba hallazgos
+de la revisión anterior, el worker 38029582041 corrió `full/forced-full-t16`
+($1.8152, 20 turnos, 4 archivos, 31926 bytes de diff) y entregó su bloque. El
+publicador 38029986375 tomó el delta del worker sin el aviso «sin delta
+verificable». En la memoria (generación 5), F1, F2, F4, F5, F7 y F8 quedaron
+`resolved` con `at_sha=b32492f`, y F3, F6 y F9 siguieron abiertos con sus ids.
+El visible muestra «Resueltos (6)» y el veredicto «1 Medium, 2 Low abiertos (6
+resueltos)». Es el caso que faltaba: un push que arregla, sus hallazgos
+resueltos y los demás abiertos con sus ids.
+
 ## Decisión de la ronda 3b
 
-«T16 piloto» sigue abierta hasta ver un `StatusResolved` en el central con #98
-instalado. El coordinado sigue activo en el central, y su degradación ante un
-modelo sin bloque es honesta: `partial`, aviso y hallazgos conservados.
+«T16 piloto» se cierra: las rondas 3 y 3b ejercieron en el central los casos 1
+a 5 y la resolución. Queda abierta la fila «T16 ronda 3b bloque con memoria»
+(#98): con memoria, el modelo a veces responde sin bloque, y entonces el sistema
+degrada honestamente (`partial`, aviso, hallazgos conservados), pero ese push no
+resuelve nada. El coordinado sigue activo en el central. Los consumidores son
+decisión del operador.
