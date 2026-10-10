@@ -528,7 +528,8 @@ def finding_line(finding):
         if not finding["line"]
         else f"{finding['file']}:{finding['line']}"
     )
-    where = where.replace("`", "'")
+    # La ruta de un ancla legada sale del modelo: no puede imitar un marcador.
+    where = neutralizar_marcadores(where.replace("`", "'"))
     title = html.escape(finding["title"], quote=False)
     return (
         f"- {SEVERITY_EMOJI[finding['severity']]} {finding['severity']} · `{where}` · "
@@ -3385,7 +3386,13 @@ def estado_visible(snapshot, explicacion=None):
                 :GITHUB_COMMENT_MAX
             ]
         marcas = (SHA_PREFIX, COMPLETION_PREFIX)
-        previo = [linea for linea in lineas[:titulo] if not linea.startswith(marcas)]
+        # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
+        # modelo publicados antes de neutralizarse.
+        previo = [
+            neutralizar_marcadores(linea)
+            for linea in lineas[:titulo]
+            if not linea.startswith(marcas)
+        ]
         while previo and not previo[0]:
             previo.pop(0)
         while previo and not previo[-1]:
@@ -3421,7 +3428,10 @@ def estado_visible(snapshot, explicacion=None):
         cuerpo = [
             *cabecera,
             lineas[titulo],
-            *lineas[titulo + 1 : veredicto],
+            *(
+                neutralizar_marcadores(linea)
+                for linea in lineas[titulo + 1 : veredicto]
+            ),
             verdict_for(merged),
             "",
             *sections_for(merged, nuevos),
@@ -3437,11 +3447,29 @@ def estado_visible(snapshot, explicacion=None):
             (i for i in range(detalle, len(lineas)) if lineas[i] == ALCANCE_INICIO),
             default=len(lineas),
         )
+        # Dentro del Alcance las rutas salen del PR: solo su <details> de apertura
+        # y su </details> de cierre quedan vivos.
+        cierre = max(
+            (i for i in range(alcance, len(lineas)) if lineas[i] == "</details>"),
+            default=None,
+        )
+        if alcance < len(lineas) and cierre is not None:
+            cola = [
+                lineas[alcance],
+                *(
+                    neutralizar_marcadores(linea)
+                    for linea in lineas[alcance + 1 : cierre]
+                ),
+                lineas[cierre],
+                *(neutralizar_marcadores(linea) for linea in lineas[cierre + 1 :]),
+            ]
+        else:
+            cola = [neutralizar_marcadores(linea) for linea in lineas[alcance:]]
         cuerpo += [
             "",
             lineas[detalle],
             *(neutralizar_marcadores(linea) for linea in lineas[detalle + 1 : alcance]),
-            *lineas[alcance:],
+            *cola,
         ]
         return "\n".join(cuerpo)[:GITHUB_COMMENT_MAX]
 
