@@ -1,4 +1,4 @@
-# T16: rondas 2 y 3 del piloto coordinado
+# T16: rondas 2, 3 y 3b del piloto coordinado
 
 Fecha: 2026-10-10. Continúa `T16-piloto.md`. La ronda 2 se detuvo por pérdida
 de hallazgos; la ronda 3 (abajo) la repitió con los arreglos. La ronda 1 dejó el modo
@@ -18,6 +18,10 @@ y los pendientes de activación (#83).
   de la ronda 1 (división por cero, índice fuera de rango y `eval`).
 
 ## Casos
+
+Las secciones de la ronda 2 conservan el estado al detenerse: los defectos
+marcados como abiertos se cerraron en la ronda 3 (#88, #89, #92, #94, #95) y
+los casos no ejercidos se ejercieron allí.
 
 | Caso | Resultado | Evidencia |
 |---|---|---|
