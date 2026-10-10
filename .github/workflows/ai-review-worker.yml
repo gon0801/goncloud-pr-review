@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gon0801/goncloud-pr-review
-          ref: dff2ad3cf02ad64baddb1205984bd2f744187e9f
+          ref: 59d31da60737d76c404a8396b1a08d02e1614b5f
           path: ai-review-code
           persist-credentials: false
       - name: validar entradas
