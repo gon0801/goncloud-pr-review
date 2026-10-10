@@ -418,10 +418,16 @@ class AtomicInstall(InstaladorTest):
             self.assertIn("ref: " + "a" * 40, instalado)
             self.assertIn("path: ai-review-code", instalado)
             self.assertIn("$GITHUB_WORKSPACE/ai-review-code/review.py", instalado)
-        self.assertIn(
-            "uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
-            worker,
-            "el checkout del consumidor queda para traer el PR como datos",
+        # El checkout del consumidor queda (con historia completa) para traer el PR
+        # como datos, y el del CLI central va justo después, como paso propio.
+        consumidor = worker.split("- name: checkout del código confiable del worker")[1]
+        consumidor, siguiente = consumidor.split("\n      - name: ", 1)
+        self.assertIn("uses: actions/checkout@v4", consumidor)
+        self.assertIn("fetch-depth: 0", consumidor)
+        self.assertIn("persist-credentials: false", consumidor)
+        self.assertNotIn("ai-review-code", consumidor)
+        self.assertTrue(
+            siguiente.startswith("checkout del CLI confiable del repo central\n")
         )
         self.assertEqual(commit["parents"], [punta_previa])
         self.assertEqual(len(repo["commits"]), 2)
