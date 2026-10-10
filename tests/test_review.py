@@ -2292,6 +2292,8 @@ class Workflows(unittest.TestCase):
         profundidad = (
             int(profundidad.group(1)) if profundidad else 1
         )  # default de checkout
+        # Cualquier profundidad finita falla si main avanzó más commits que ella.
+        self.assertEqual(profundidad, 0, "el worker necesita la historia completa")
 
         with tempfile.TemporaryDirectory() as tmp:
             origen = Path(tmp) / "origen"
