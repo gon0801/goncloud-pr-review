@@ -594,7 +594,11 @@ def scope_lines(result, manifest, provider):
     if manifest["excluded"]:
         shown = manifest["excluded"][:40]
         scope.append(f"- Excluidos: {len(manifest['excluded'])}")
-        scope += [f"  - `{e['path'][:200]}` ({e['reason']})" for e in shown]
+        # La ruta sale del PR: tampoco puede abrir un comentario HTML.
+        scope += [
+            f"  - `{neutralizar_marcadores(e['path'][:200])}` ({e['reason']})"
+            for e in shown
+        ]
         if len(manifest["excluded"]) > len(shown):
             scope.append(f"  - … y {len(manifest['excluded']) - len(shown)} más")
     usage = (result or {}).get("usage") or {}
@@ -658,7 +662,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
         warnings.append(
-            "el revisor no alcanzó a revisar todo" + (f": {detail}" if detail else "")
+            "el revisor no alcanzó a revisar todo"
+            + (f": {neutralizar_marcadores(detail)}" if detail else "")
         )
     if budget_cut:
         warnings.append(
@@ -3313,10 +3318,11 @@ def estado_visible(snapshot, explicacion=None):
                 e = e[:-1]
             cuerpo += ["", *e]
         # La prosa del detalle de un cuerpo publicado antes de neutralizarse
-        # tampoco puede llevar marcadores vivos al cuerpo nuevo.
-        alcance = next(
+        # tampoco puede llevar marcadores vivos al cuerpo nuevo. El alcance real
+        # es el último: la prosa vieja puede traer una línea idéntica.
+        alcance = max(
             (i for i in range(detalle, len(lineas)) if lineas[i] == ALCANCE_INICIO),
-            len(lineas),
+            default=len(lineas),
         )
         cuerpo += [
             "",

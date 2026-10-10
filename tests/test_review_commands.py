@@ -778,6 +778,49 @@ class CoordinadorComandos(unittest.TestCase):
         cuerpo = review.estado_visible(estado)(bloque, resto)
         self._sin_marcadores_vivos(cuerpo, estado)
 
+    def test_rerender_no_se_detiene_en_un_alcance_imitado(self):
+        """CodeRabbit en #109: una línea de Alcance idéntica dentro de la prosa
+        vieja no corta la neutralización; el alcance real es el último."""
+        estado = snapshot_base()
+        bloque = domain.encode_snapshot(estado).block
+        nuevo = review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+            bloque, ""
+        )
+        cabeza, detalle = nuevo.split(review.DETALLE_DEL_REVISOR, 1)
+        imitado = "<details><summary>Alcance de la revisión</summary>"
+        viejo = (
+            cabeza
+            + review.DETALLE_DEL_REVISOR
+            + "\n\n"
+            + imitado
+            + "\n"
+            + self.IMITACION
+            + detalle.lstrip("\n")
+        )
+        resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
+        cuerpo = review.estado_visible(estado)(bloque, resto)
+        self._sin_marcadores_vivos(cuerpo, estado)
+
+    def test_rutas_excluidas_y_detalle_de_cobertura_no_abren_comentarios(self):
+        """F1 de ai-review en #109: la ruta excluida sale del PR y el detalle de
+        cobertura del modelo; ninguno deja un <!-- vivo en el comentario."""
+        estado = snapshot_base()
+        artifact = dict(
+            self.REVISION_PREVIA,
+            result="Revisé lo que alcancé.\nCOVERAGE: partial | falta <!-- x",
+            manifest={
+                "reviewed": ["a.py", "b.py"],
+                "excluded": [{"path": "gen/a<!--b.py", "reason": "filter"}],
+            },
+        )
+        cuerpo = review.revision_visible(artifact, estado, set(), "a" * 40)(
+            domain.encode_snapshot(estado).block, ""
+        )
+        self.assertIn("gen/a&lt;!--b.py", cuerpo)
+        self.assertIn("falta &lt;!-- x", cuerpo)
+        self.assertNotIn("a<!--b.py", cuerpo)
+        self.assertNotIn("falta <!--", cuerpo)
+
     def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
         digest = review.digest_de_politica(review.politica_de_revision())
         target = domain.ReviewTarget(
