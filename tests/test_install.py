@@ -553,31 +553,56 @@ class RamaPropiaVieja(InstaladorTest):
             ],
         )
 
-    def test_una_rama_propia_en_conflicto_con_main_sale_alto_sin_publicar(self):
+    def _rama_en_conflicto(self):
         self._repo(
-            "o/r", {".github/workflows/ai-review.yml": "v0\n", "README.md": "a\n"}
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+                "README.md": "a\n",
+            },
         )
         repo = self.estado["repos"]["o/r"]
         base = repo["branches"]["main"]
+        coordinado = {
+            ".github/workflows/ai-review-publish.yml": "publish\n",
+            ".github/workflows/ai-review-worker.yml": "worker\n",
+        }
         repo["branches"]["chore/ai-review"] = self._commit(
-            repo,
-            [base],
-            {".github/workflows/ai-review.yml": "v0\n", "README.md": "rama\n"},
-            "rama",
+            repo, [base], {**coordinado, "README.md": "rama\n"}, "rama"
         )
         repo["branches"]["main"] = self._commit(
-            repo,
-            [base],
-            {".github/workflows/ai-review.yml": "v0\n", "README.md": "main\n"},
-            "main",
+            repo, [base], {**coordinado, "README.md": "main\n"}, "main"
         )
-        punta_previa = repo["branches"]["chore/ai-review"]
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "a" * 40})
-        self.assertNotEqual(resultado.returncode, 0)
-        self.assertIn("conflicto con main", resultado.stderr)
-        repo = self._repo_final("o/r")
-        self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
-        self.assertEqual(repo["prs"], [])
+        return repo["branches"]["chore/ai-review"]
+
+    def test_una_rama_propia_en_conflicto_con_main_sale_alto_sin_publicar(self):
+        for modo in (("--coordinado", "o/r"), ("o/r",)):
+            with self.subTest(modo=modo[0]):
+                punta_previa = self._rama_en_conflicto()
+                resultado = self._correr(*modo, extra={"ACTION_SHA": "a" * 40})
+                self.assertNotEqual(resultado.returncode, 0)
+                self.assertIn("tiene conflicto con main", resultado.stderr)
+                self.assertNotIn("bórrala", resultado.stderr)
+                repo = self._repo_final("o/r")
+                self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
+                self.assertEqual(repo["prs"], [])
+
+    def test_un_fallo_que_no_es_conflicto_no_se_reporta_como_conflicto(self):
+        for modo in (("--coordinado", "o/r"), ("o/r",)):
+            with self.subTest(modo=modo[0]):
+                punta_previa = self._rama_en_conflicto()
+                resultado = self._correr(
+                    *modo, extra={"ACTION_SHA": "a" * 40}, fallos={"merges": 1}
+                )
+                self.assertNotEqual(resultado.returncode, 0)
+                self.assertIn(
+                    "no pude poner la rama chore/ai-review al día", resultado.stderr
+                )
+                self.assertNotIn("conflicto", resultado.stderr)
+                repo = self._repo_final("o/r")
+                self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
+                self.assertEqual(repo["prs"], [])
 
 
 class CompatibleRollback(InstaladorTest):

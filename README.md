@@ -43,6 +43,11 @@ El modo coordinado fija ambos workflows al SHA candidato del repo central
 (obligatorio) y abre el PR del conjunto en `chore/ai-review`; si la rama
 cambió durante la instalación reintenta sobre la punta nueva sin forzar.
 
+En los dos modos, si `chore/ai-review` ya existe (por ejemplo tras un squash
+merge), el instalador primero fusiona la rama por defecto en ella sin forzar.
+Si esa fusión tiene conflicto (HTTP 409) o falla por otra causa, sale con
+error sin publicar nada.
+
 `AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración, `DEEPSEEK_API_KEY` guarda la llave de la API directa de DeepSeek y la plantilla la pasa como respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal, hay que sustituir también `fallback_api_key` por `${{ secrets.OPENCODE_GO_API_KEY }}` y guardar allí una llave de OpenCode Go.
 
 ## Operación
