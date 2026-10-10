@@ -620,6 +620,67 @@ def decision_con_trabajo(estado):
     return creada
 
 
+class CheckpointConservaLaCabecera(unittest.TestCase):
+    """Ronda 3 del piloto (#91): el checkpoint de admisión escribía el bloque
+    antes de sha=/completion=; reviewed_completion exige esas líneas tras el
+    marcador y el worker leía la revisión previa como incompleta."""
+
+    HEAD = "e" * 40
+
+    def _con_revision(self, estado):
+        return (
+            f"{review.MARKER}\n{review.SHA_PREFIX}{self.HEAD} -->\n"
+            f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->\n"
+            f"{domain.encode_snapshot(estado).block}\n\n"
+            "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee"
+        )
+
+    def test_la_admision_conserva_sha_y_completion_tras_el_marcador(self):
+        estado = snapshot_base(generation=1)
+        falso = _ComentarioFalso([{"id": 7, "body": self._con_revision(estado)}])
+        decision = decision_con_trabajo(estado)
+        recibo = review.publish_checkpoint(decision, falso.leer()[0], falso)
+        self.assertIsInstance(recibo, review.PublishReceipt)
+        cuerpo = falso.patches[-1][1]
+        self.assertEqual(
+            cuerpo.split("\n")[:3],
+            [
+                review.MARKER,
+                f"{review.SHA_PREFIX}{self.HEAD} -->",
+                f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->",
+            ],
+        )
+        self.assertEqual(
+            review.prev_de_memoria(cuerpo)["completion"],
+            "complete",
+            "el worker del siguiente push no ve la revisión previa como incompleta",
+        )
+        recarga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(recarga, domain.Valid)
+        self.assertEqual(recarga.snapshot.generation, decision.snapshot.generation)
+        self.assertTrue(cuerpo.endswith("OpenCode Go · eeeeeee"))
+
+    def test_el_aviso_de_fallo_conserva_sha_y_completion_tras_el_marcador(self):
+        estado = snapshot_base(generation=1)
+        bloque = domain.encode_snapshot(estado).block
+        resto = self._con_revision(estado).split("\n", 1)[1]
+        resto = review.strip_findings_block(resto, last=False).strip()
+        cuerpo = review.revision_visible(
+            {review.ERROR_KEY: "el proveedor no respondió"}, estado, set(), "f" * 40
+        )(bloque, resto)
+        self.assertEqual(
+            cuerpo.split("\n")[:4],
+            [
+                review.MARKER,
+                f"{review.SHA_PREFIX}{self.HEAD} -->",
+                f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->",
+                bloque,
+            ],
+        )
+        self.assertIn("No se pudo revisar el commit fffffff", cuerpo)
+        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
+
+
 class CheckpointRecovery(unittest.TestCase):
     """T08: recuperar escrituras inciertas sin repetir efectos."""
 
