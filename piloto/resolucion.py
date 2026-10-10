@@ -1,4 +1,7 @@
-"""Archivo de prueba del piloto T16 (caso de resolución): errores a propósito."""
+"""Archivo de prueba del piloto T16 (caso de resolución): errores a propósito.
+
+`ultimo` ya se arregló; `promedio` y `es_par` siguen con su defecto.
+"""
 
 
 def promedio(valores):
