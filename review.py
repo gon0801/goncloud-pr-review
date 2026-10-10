@@ -594,7 +594,11 @@ def scope_lines(result, manifest, provider):
     if manifest["excluded"]:
         shown = manifest["excluded"][:40]
         scope.append(f"- Excluidos: {len(manifest['excluded'])}")
-        scope += [f"  - `{e['path'][:200]}` ({e['reason']})" for e in shown]
+        # La ruta sale del PR: tampoco puede abrir un comentario HTML.
+        scope += [
+            f"  - `{neutralizar_marcadores(e['path'][:200])}` ({e['reason']})"
+            for e in shown
+        ]
         if len(manifest["excluded"]) > len(shown):
             scope.append(f"  - … y {len(manifest['excluded']) - len(shown)} más")
     usage = (result or {}).get("usage") or {}
@@ -658,7 +662,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
         warnings.append(
-            "el revisor no alcanzó a revisar todo" + (f": {detail}" if detail else "")
+            "el revisor no alcanzó a revisar todo"
+            + (f": {neutralizar_marcadores(detail)}" if detail else "")
         )
     if budget_cut:
         warnings.append(
@@ -687,7 +692,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         )
 
     if findings is not None:
-        review = strip_model_findings_block(review)
+        review = neutralizar_marcadores(strip_model_findings_block(review))
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
@@ -703,7 +708,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
             "",
         ]
     scope = [
-        "<details><summary>Alcance de la revisión</summary>",
+        ALCANCE_INICIO,
         "",
         *scope_lines(result, manifest, provider),
         "",
@@ -739,7 +744,9 @@ def compose_with_findings(
         findings.get("new_ids", []),
         findings["block"],
     )
-    review = strip_model_verdict(strip_model_findings_block(review))
+    review = neutralizar_marcadores(
+        strip_model_verdict(strip_model_findings_block(review))
+    )
     sections = sections_for(merged, new_ids)
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
@@ -755,7 +762,7 @@ def compose_with_findings(
             "",
             "",
             "",
-            "<details><summary>Alcance de la revisión</summary>",
+            ALCANCE_INICIO,
             "",
             *scope_lines(result, manifest, provider),
             "",
@@ -807,7 +814,7 @@ def compose_with_findings(
             f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
         )
     parts += [
-        "<details><summary>Alcance de la revisión</summary>",
+        ALCANCE_INICIO,
         "",
         *scope,
         "",
@@ -1836,11 +1843,9 @@ def politica_de_identidad():
 
 
 def politica_de_revision(manifest=None, identidad=None):
-    """La identidad externa `current` se adapta al valor interno antiguo
-    `titles` en la frontera de compatibilidad."""
-    externa = identidad or politica_de_identidad()
+    """ReviewPolicy normaliza la identidad externa (`current` → `titles`)."""
     return review_domain.ReviewPolicy(
-        finding_identity="anchors" if externa == "anchors" else "titles",
+        finding_identity=identidad or politica_de_identidad(),
         diff_mode=(manifest or {}).get("mode", "full"),
     )
 
@@ -1896,7 +1901,7 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
     con identidad `anchors`. Las rutas del delta real van también: una cita
     sobre un archivo cambiado ausente del manifiesto no debe degradar a
     coincidencia por título."""
-    if policy.finding_identity != "anchors":
+    if policy.finding_identity != review_domain.IDENTIDAD_ANCLAS:
         return {}
     rutas = sorted(
         set(manifest.get("reviewed", []) or [])
@@ -1958,7 +1963,7 @@ def actualizar_memoria_valida(
     snapshot = load.snapshot
     model = parse_model_findings(
         (result or {}).get("result") or "",
-        conservar_anclas=policy.finding_identity == "anchors",
+        conservar_anclas=policy.finding_identity == review_domain.IDENTIDAD_ANCLAS,
     )
     try:
         dismiss_ids, dismiss_all, seen = collect_dismissals(
@@ -3194,21 +3199,28 @@ def revision_visible(artifact, snapshot, previos, head):
 
 TITULO_DE_REVISION = "### Revisión automática · "
 DETALLE_DEL_REVISOR = "## Detalle del revisor"
+ALCANCE_INICIO = "<details><summary>Alcance de la revisión</summary>"
 EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
 
 
+def neutralizar_marcadores(texto):
+    """Prosa del modelo (sale del contenido del PR) dentro del comentario: no
+    puede imitar los marcadores ai-review:* ni dejar un comentario HTML abierto
+    (todo <!-- se escapa), ni abrir o cerrar un <details>. Idempotente."""
+    texto = texto.replace("<!--", "&lt;!--")
+    return re.sub(r"<(/?details)", r"&lt;\1", texto, flags=re.I)
+
+
 def texto_de_explicacion(artifact):
     """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
-    La prosa sale del contenido del PR: no puede imitar las secciones que el
-    re-render busca (encabezados bajan a ####, también con sangría), ni los
-    marcadores ai-review:* (todo <!-- se escapa), ni cerrar un <details>."""
+    Además de neutralizar_marcadores, no puede imitar las secciones que el
+    re-render busca (encabezados bajan a ####, también con sangría)."""
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
-    texto = texto.replace("<!--", "&lt;!--")
-    texto = re.sub(r"<(/?details)", r"&lt;\1", texto, flags=re.I)
+    texto = neutralizar_marcadores(texto)
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
     return texto or "_El revisor no devolvió texto._"
@@ -3305,7 +3317,19 @@ def estado_visible(snapshot, explicacion=None):
             while e and not e[-1]:
                 e = e[:-1]
             cuerpo += ["", *e]
-        cuerpo += ["", *lineas[detalle:]]
+        # La prosa del detalle de un cuerpo publicado antes de neutralizarse
+        # tampoco puede llevar marcadores vivos al cuerpo nuevo. El alcance real
+        # es el último: la prosa vieja puede traer una línea idéntica.
+        alcance = max(
+            (i for i in range(detalle, len(lineas)) if lineas[i] == ALCANCE_INICIO),
+            default=len(lineas),
+        )
+        cuerpo += [
+            "",
+            lineas[detalle],
+            *(neutralizar_marcadores(linea) for linea in lineas[detalle + 1 : alcance]),
+            *lineas[alcance:],
+        ]
         return "\n".join(cuerpo)[:GITHUB_COMMENT_MAX]
 
     return armar

@@ -2450,14 +2450,18 @@ class Schema3Compatibility(unittest.TestCase):
                 "diff_mode": "incremental",
             }
         )
-        self.assertEqual(p.finding_identity, "current")
+        self.assertEqual(p.finding_identity, "titles")
         self.assertEqual(p.findings_max_count, 25)
         self.assertEqual(p.findings_max_bytes, 9000)
         self.assertEqual(p.rules_digest, "abc")
         self.assertEqual(p.exclude_patterns, ("dist/**",))
         self.assertEqual(p.schema_version, 3)
         self.assertEqual(p.diff_mode, "incremental")
-        self.assertEqual(domain.normalize_policy({}).finding_identity, "current")
+        self.assertEqual(domain.normalize_policy({}).finding_identity, "titles")
+        self.assertEqual(
+            domain.normalize_policy({"finding_identity": "current"}).finding_identity,
+            "titles",
+        )
         self.assertEqual(
             domain.normalize_policy({"exclude_patterns": None}).exclude_patterns, ()
         )
@@ -3507,6 +3511,30 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
             [f.id for f in segundo.findings],
             ["F1", "F2", "F3", "F4", "F5", "F6", "F7"],
         )
+
+    def test_current_y_titles_son_la_misma_politica(self):
+        """F2 de #89: el alias externo `current` se normaliza una vez en
+        ReviewPolicy; misma política, mismo digest y mismo resultado que
+        `titles`, en la ruta coordinada y en la directa."""
+        current = domain.ReviewPolicy(finding_identity="current")
+        self.assertEqual(current, self.TITLES)
+        self.assertEqual(
+            review.digest_de_politica(current), review.digest_de_politica(self.TITLES)
+        )
+        self.assertEqual(
+            review.politica_de_revision(identidad="current"),
+            review.politica_de_revision(identidad="titles"),
+        )
+        primero = self._aceptar(self._vacio(), "38017166195")
+        por_politica = {
+            nombre: self._aceptar_entradas(
+                primero, self._segundo_push_con_ids(), policy=politica
+            )
+            for nombre, politica in (("current", current), ("titles", self.TITLES))
+        }
+        self.assertEqual(por_politica["current"], por_politica["titles"])
+        with self.assertRaises(ValueError):
+            domain.ReviewPolicy(finding_identity="bogus")
 
     def test_con_anchors_el_id_del_modelo_no_decide(self):
         primero = self._aceptar(self._vacio(), "38017166195")

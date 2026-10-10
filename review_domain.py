@@ -1066,15 +1066,10 @@ def snapshot_a_v3(snapshot):
 def normalize_policy(boot):
     """Normaliza la política confiable una vez.
 
-    Identidad externa current/anchors; el valor interno antiguo `titles` se
-    adapta aquí, en la frontera de compatibilidad. Valida modos, versión de
-    schema, reglas, exclusiones y presupuestos.
+    La identidad se normaliza en ReviewPolicy (ver identidad_interna). Valida
+    modos, versión de schema, reglas, exclusiones y presupuestos.
     """
-    identity = boot.get("finding_identity", "titles")
-    if identity == "titles":
-        identity = "current"
-    if identity not in ("current", "anchors"):
-        raise ValueError(f"finding_identity inválida: {identity!r}")
+    identity = identidad_interna(boot.get("finding_identity", IDENTIDAD_TITULOS))
     mode = boot.get("diff_mode", "full")
     if mode not in ("full", "incremental"):
         raise ValueError(f"diff_mode inválido: {mode!r}")
@@ -1362,15 +1357,30 @@ class RepositoryFacts:
     historical_paths: tuple = ()
 
 
+IDENTIDAD_TITULOS = "titles"
+IDENTIDAD_ANCLAS = "anchors"
+# `current` es el nombre externo (FINDING_IDENTITY, paquete del worker) de la
+# identidad por títulos; dentro del dominio solo existe `titles`, que además es
+# el valor que entra en digest_de_politica de las memorias ya publicadas.
+_ALIAS_DE_IDENTIDAD = {"current": IDENTIDAD_TITULOS}
+
+
+def identidad_interna(valor):
+    interna = _ALIAS_DE_IDENTIDAD.get(valor, valor)
+    if interna not in (IDENTIDAD_TITULOS, IDENTIDAD_ANCLAS):
+        raise ValueError(f"finding_identity inválida: {valor!r}")
+    return interna
+
+
 @dataclass
 class ReviewPolicy:
     """Filtros, presupuestos, digest de reglas y controles de activación.
 
-    `finding_identity` interno: `titles` (coincidencia compatible) o
-    `anchors` (identidad F0).
+    `finding_identity`: `titles` (coincidencia compatible) o `anchors`
+    (identidad F0); el alias externo `current` se normaliza al construir.
     """
 
-    finding_identity: str = "titles"
+    finding_identity: str = IDENTIDAD_TITULOS
     findings_max_count: int = FINDINGS_MAX_COUNT
     findings_max_bytes: int = FINDINGS_MAX_BYTES
     rules_digest: str = ""
@@ -1380,6 +1390,9 @@ class ReviewPolicy:
     diff_mode: str = "full"
     strict_budget: bool = False
     diff_max_bytes: int = 1_500_000
+
+    def __post_init__(self):
+        self.finding_identity = identidad_interna(self.finding_identity)
 
 
 @dataclass
@@ -1823,10 +1836,8 @@ def accept_report(current, plan, report):
     previos = tuple(current.findings)
     findings = list(previos)
     por_id = {f.id: f for f in previos if f.id}
-    # `titles` (interno) o `current` (externo, normalize_policy): la del coordinador.
-    honra_ids = plan.policy is not None and plan.policy.finding_identity in (
-        "titles",
-        "current",
+    honra_ids = (
+        plan.policy is not None and plan.policy.finding_identity == IDENTIDAD_TITULOS
     )
     tocados, next_id = set(), current.next_id
     for obs in report.observations:
