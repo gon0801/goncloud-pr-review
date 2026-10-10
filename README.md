@@ -33,15 +33,14 @@ ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado
 ```
 
 Modo coordinado (coordinador + worker con el escritor anterior retirado, en
-un único commit atómico; ver `docs/reviewer-rollout.md` para el corte). Todavía
-no se despliega: solo para un piloto, y el instalador se niega sin
-`AI_REVIEW_PILOTO=1`:
+un único commit atómico; ver `docs/reviewer-rollout.md` para el corte y el
+retorno). Pasó el piloto T16 y es el modo del repo central:
 
 ```bash
-AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
 ```
 
-El modo coordinado fija ambos workflows al SHA candidato del repo central
+El modo coordinado fija ambos workflows al SHA confiable del repo central
 (obligatorio) y abre el PR del conjunto en `chore/ai-review`; si la rama
 cambió durante la instalación reintenta sobre la punta nueva sin forzar.
 

@@ -13,13 +13,12 @@ repo central.
 > hallazgos, y la resolución ya se ve en el central (revisión coordinada del #93,
 > con #94). Pendiente: con memoria, el modelo a veces responde sin bloque y ese
 > push no resuelve nada (#98). Los consumidores no se despliegan sin decisión
-> del operador. Hasta que se quite esa barrera, `install.sh --coordinado` se
-> niega sin `AI_REVIEW_PILOTO=1`.
+> del operador.
 
 ## Qué instala el modo coordinado
 
 ```bash
-AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
 ```
 
 - Un único commit en `chore/ai-review` que agrega

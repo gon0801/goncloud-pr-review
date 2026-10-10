@@ -6,8 +6,6 @@
 #                 único commit atómico por la API Git de árboles y commits.
 #   ACTION_SHA    SHA confiable del repo central. En el modo actual fija
 #                 `uses:` (si no, queda @main); en el coordinado es obligatorio.
-#   AI_REVIEW_PILOTO=1  único permiso para --coordinado: el modo coordinado no
-#                 se despliega en consumidores sin decisión del operador (Plans.md).
 #   EXCLUDE       exclusiones extra por repo (solo modo actual):
 #                 EXCLUDE=$'data/**\nout/**' scripts/install.sh owner/repo
 set -euo pipefail
@@ -19,12 +17,8 @@ if [ "${1:-}" = "--coordinado" ]; then
   modo="coordinado"
   shift
 fi
-if [ "$modo" = "coordinado" ] && [ "${AI_REVIEW_PILOTO:-}" != "1" ]; then
-  echo "instalador: el modo coordinado no se despliega en consumidores sin decisión del operador (activo solo en el repo central); solo para un piloto con AI_REVIEW_PILOTO=1" >&2
-  exit 2
-fi
 if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then
-  echo "instalador: el modo coordinado requiere ACTION_SHA (SHA candidato del piloto)" >&2
+  echo "instalador: el modo coordinado requiere ACTION_SHA (SHA confiable del repo central)" >&2
   exit 2
 fi
 
