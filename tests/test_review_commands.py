@@ -821,6 +821,61 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertNotIn("a<!--b.py", cuerpo)
         self.assertNotIn("falta <!--", cuerpo)
 
+    def test_rerender_neutraliza_avisos_y_alcance_de_un_cuerpo_viejo(self):
+        """Low tardíos de #109: el re-render de un cuerpo publicado antes de
+        neutralizar no revive el <!-- del aviso ni el de la ruta del Alcance."""
+        estado = snapshot_base()
+        artifact = dict(
+            self.REVISION_PREVIA,
+            result="Revisé lo que alcancé.\nCOVERAGE: partial | falta <!-- x",
+            manifest={
+                "reviewed": ["a.py", "b.py"],
+                "excluded": [{"path": "gen/a<!--b.py", "reason": "filter"}],
+            },
+        )
+        bloque = domain.encode_snapshot(estado).block
+        nuevo = review.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
+        viejo = nuevo.replace("&lt;!--", "<!--")
+        resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
+        cuerpo = review.estado_visible(estado)(bloque, resto)
+        self.assertNotIn("a<!--b.py", cuerpo)
+        self.assertNotIn("falta <!--", cuerpo)
+        self.assertIn("gen/a&lt;!--b.py", cuerpo)
+        self.assertIn(review.ALCANCE_INICIO, cuerpo)
+        self.assertTrue(cuerpo.rstrip().endswith("</details>"))
+        self.assertEqual(
+            review.reviewed_completion(cuerpo), review.reviewed_completion(nuevo)
+        )
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(carga.snapshot, estado)
+
+    def test_rerender_neutraliza_el_aviso_de_fallo_de_un_cuerpo_viejo(self):
+        estado = snapshot_base()
+        bloque = domain.encode_snapshot(estado).block
+        nuevo = review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+            bloque, ""
+        )
+        resto = review.strip_findings_block(nuevo.split("\n", 1)[1]).strip()
+        aviso = review.caution_banner("motivo <!-- y", "c" * 40, has_previous=True)
+        viejo = review.insert_caution_banner(resto, aviso)
+        cuerpo = review.estado_visible(estado)(bloque, viejo)
+        self.assertNotIn("motivo <!--", cuerpo)
+        self.assertIn("motivo &lt;!-- y", cuerpo)
+
+    def test_la_ruta_del_ancla_no_imita_un_marcador(self):
+        linea = review.finding_line(
+            {
+                "file": "a<!-- ai-review:sha=" + "9" * 40 + " -->.py",
+                "line": 3,
+                "severity": "Low",
+                "title": "t",
+                "id": "F1",
+            }
+        )
+        self.assertNotIn("<!--", linea)
+        self.assertIn("&lt;!-- ai-review:sha=", linea)
+
     def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
         digest = review.digest_de_politica(review.politica_de_revision())
         target = domain.ReviewTarget(
