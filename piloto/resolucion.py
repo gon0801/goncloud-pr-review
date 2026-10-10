@@ -6,7 +6,7 @@ def promedio(valores):
 
 
 def ultimo(lista):
-    return lista[len(lista)]
+    return lista[-1]
 
 
 def es_par(numero):
