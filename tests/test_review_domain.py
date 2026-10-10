@@ -3294,3 +3294,278 @@ class ReportBoundary(unittest.TestCase):
         transicion = domain.accept_report(self._snapshot_v2([otro]), plan, report)
         f2 = {f.id: f for f in transicion.snapshot.findings}["F2"]
         self.assertIsInstance(f2.status, domain.StatusResolved)
+
+
+OBSERVACIONES_PILOTO2 = json.loads(
+    (ROOT / "tests" / "fixtures" / "t16_piloto2_observaciones.json").read_text()
+)
+
+
+class ReporteDelPilotoSinPerdidas(unittest.TestCase):
+    """T16-piloto-2: con anclas legadas en un solo archivo, accept_report tiraba
+    toda observación después de la primera (6 -> 1 en el run 38017166195)."""
+
+    REVISION = domain.Revision(
+        base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+    )
+
+    def _vacio(self):
+        return domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=self.REVISION,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+
+    # La política del coordinador en producción (identidad externa `current`).
+    TITLES = domain.ReviewPolicy(finding_identity="titles")
+    ANCHORS = domain.ReviewPolicy(finding_identity="anchors")
+
+    def _aceptar(self, snapshot, run, policy=TITLES):
+        return self._aceptar_entradas(snapshot, OBSERVACIONES_PILOTO2[run], policy)
+
+    def _resumen(self, snapshot):
+        return [(f.id, f.severity, f.title) for f in snapshot.findings]
+
+    def test_las_seis_observaciones_del_primer_push_entran(self):
+        estado = self._aceptar(self._vacio(), "38017166195")
+        self.assertEqual(
+            self._resumen(estado),
+            [
+                (
+                    "F1",
+                    "Critical",
+                    "Ejecución arbitraria de código: eval sobre el contenido del archivo",
+                ),
+                ("F2", "High", "ultimo siempre lanza IndexError (off-by-one)"),
+                (
+                    "F3",
+                    "Medium",
+                    "mediana no es la mediana para listas de tamaño par (y falla con lista vacía)",
+                ),
+                ("F4", "Medium", "promedio lanza ZeroDivisionError con lista vacía"),
+                ("F5", "Low", "El archivo abierto en leer_config nunca se cierra"),
+                ("F6", "Low", "El módulo no tiene ninguna prueba"),
+            ],
+        )
+        self.assertEqual(estado.next_id, 7)
+
+    def test_el_mismo_reporte_en_el_segundo_push_conserva_los_ids(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar(primero, "38017166195")
+        self.assertEqual(self._resumen(segundo), self._resumen(primero))
+        self.assertEqual(segundo.next_id, 7, "ninguna observación entra duplicada")
+
+    def test_el_segundo_push_real_no_pierde_observaciones(self):
+        for policy in (self.TITLES, self.ANCHORS):
+            with self.subTest(identidad=policy.finding_identity):
+                estado = self._aceptar(self._vacio(), "38017336748", policy)
+                self.assertEqual(
+                    [f.id for f in estado.findings],
+                    ["F1", "F2", "F3", "F4", "F5", "F6"],
+                )
+
+    def test_el_segundo_push_sin_ids_sobre_el_primero_las_registra_todas(self):
+        """El reporte real del #85 se emitió sin memoria (sin ids y con títulos
+        reescritos). Con `anchors`, sin ancla verificada, cada título reescrito
+        entra como posible duplicado; nunca se tira."""
+        primero = self._aceptar(self._vacio(), "38017166195", self.ANCHORS)
+        segundo = self._aceptar(primero, "38017336748", self.ANCHORS)
+        nuevos = segundo.findings[len(primero.findings) :]
+        self.assertEqual(
+            [f.id for f in nuevos], ["F7", "F8", "F9", "F10", "F11", "F12"]
+        )
+        self.assertEqual(
+            {f.cause_hint for f in nuevos},
+            {"posible duplicado de F1, F2, F3, F4, F5, F6"},
+        )
+        self.assertEqual(self._resumen(segundo)[:6], self._resumen(primero))
+
+    # Con prev_findings.md el modelo repite el id de cada previo aunque reescriba
+    # el título (prompt: "repítelos con su mismo id"): las 5 viejas del segundo
+    # push real con el id del primero, por línea; dividir_todo es nueva.
+    IDS_DEL_MODELO = {15: "F1", 9: "F2", 20: "F3", 5: "F4", 12: "F5"}
+
+    def _segundo_push_con_ids(self):
+        return [
+            {**e, "id": self.IDS_DEL_MODELO.get(e["line"], "F-new")}
+            for e in OBSERVACIONES_PILOTO2["38017336748"]
+        ]
+
+    def _aceptar_entradas(self, snapshot, entradas, policy=TITLES):
+        observaciones = [domain.observation_de_entrada(e) for e in entradas]
+        plan = domain.ReviewPlan(
+            revision=self.REVISION,
+            changed_paths=("piloto/caso_t16.py",),
+            policy=policy,
+        )
+        report = domain.validar_reporte(
+            observaciones, domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        return domain.accept_report(snapshot, plan, report).snapshot
+
+    def test_el_id_que_repite_el_modelo_conserva_la_identidad(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar_entradas(primero, self._segundo_push_con_ids())
+        self.assertEqual(
+            self._resumen(segundo),
+            [
+                (
+                    "F1",
+                    "Critical",
+                    "eval sobre el contenido de un archivo (ejecución arbitraria de código)",
+                ),
+                ("F2", "High", "ultimo siempre lanza IndexError"),
+                (
+                    "F3",
+                    "Medium",
+                    "mediana devuelve el elemento central superior en listas de longitud par",
+                ),
+                ("F4", "Low", "promedio lanza ZeroDivisionError con entrada vacía"),
+                ("F5", "Low", "leer_config no cierra el archivo abierto"),
+                ("F6", "Low", "El módulo no tiene ninguna prueba"),
+                ("F7", "High", "Condición invertida en dividir_todo: divide por cero"),
+            ],
+        )
+        self.assertEqual(
+            {f.cause_hint for f in segundo.findings}, {None}, "sin duplicados"
+        )
+
+    def test_el_id_de_un_descartado_no_lo_revive(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        descartado = domain.aplicar_descartes(primero, ["F1"], comment_id=1)
+        segundo = self._aceptar_entradas(descartado, self._segundo_push_con_ids())
+        por_id = {f.id: f for f in segundo.findings}
+        self.assertIsInstance(por_id["F1"].status, domain.StatusDismissed)
+        self.assertEqual(
+            [f.id for f in segundo.findings],
+            ["F1", "F2", "F3", "F4", "F5", "F6", "F7"],
+            "el eval descartado no vuelve con otro id",
+        )
+
+    def test_un_id_de_otro_archivo_no_se_adopta(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        entrada = {
+            **OBSERVACIONES_PILOTO2["38017336748"][2],
+            "id": "F2",
+            "file": "otro.py",
+        }
+        segundo = self._aceptar_entradas(primero, [entrada])
+        self.assertEqual(
+            [(f.id, f.title) for f in segundo.findings[6:]],
+            [("F7", "Condición invertida en dividir_todo: divide por cero")],
+        )
+
+    def test_el_titulo_igual_prefiere_el_vivo_sobre_el_descartado(self):
+        """F1 de ai-review en af981c7: con un descartado y un vivo del mismo
+        título en el archivo, la observación iba al descartado y se perdía."""
+        ancla = domain.AnchorLegacy(path="piloto/caso_t16.py", line=9)
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="ultimo siempre lanza IndexError",
+                severity="High",
+                status=domain.StatusDismissed(command_id=1),
+                primary_anchor=ancla,
+            ),
+            domain.Finding(
+                id="F2",
+                title="ultimo siempre lanza IndexError",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=ancla,
+            ),
+        ]
+        estado = replace(self._vacio(), findings=previos, next_id=3)
+        entrada = {
+            "id": None,
+            "file": "piloto/caso_t16.py",
+            "line": 9,
+            "severity": "Critical",
+            "title": "ultimo siempre lanza IndexError",
+            "state": "open",
+        }
+        segundo = self._aceptar_entradas(estado, [entrada])
+        self.assertEqual(
+            [(f.id, f.severity, type(f.status).__name__) for f in segundo.findings],
+            [("F1", "High", "StatusDismissed"), ("F2", "Critical", "StatusOpen")],
+        )
+
+    def test_la_identidad_externa_current_tambien_honra_los_ids(self):
+        """F2 de ai-review en af981c7: normalize_policy usa el vocabulario
+        externo; `current` no debe apagar la identidad de la ruta directa."""
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar_entradas(
+            primero,
+            self._segundo_push_con_ids(),
+            policy=domain.ReviewPolicy(finding_identity="current"),
+        )
+        self.assertEqual(
+            [f.id for f in segundo.findings],
+            ["F1", "F2", "F3", "F4", "F5", "F6", "F7"],
+        )
+
+    def test_con_anchors_el_id_del_modelo_no_decide(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar_entradas(
+            primero,
+            self._segundo_push_con_ids(),
+            policy=self.ANCHORS,
+        )
+        self.assertEqual(len(segundo.findings), 12, "el programa asigna los ids")
+
+    def test_el_mismo_reporte_con_ids_equivale_a_la_ruta_directa(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        coordinada = self._aceptar_entradas(primero, self._segundo_push_con_ids())
+        previo_directo, _ = review.merge_findings(
+            None,
+            {"findings": OBSERVACIONES_PILOTO2["38017166195"]},
+            changed_files=["piloto/caso_t16.py"],
+            reverted_files=[],
+            dismiss_ids=[],
+            dismiss_all=False,
+        )
+        directa, _ = review.merge_findings(
+            previo_directo,
+            {"findings": self._segundo_push_con_ids()},
+            changed_files=["piloto/caso_t16.py"],
+            reverted_files=[],
+            dismiss_ids=[],
+            dismiss_all=False,
+        )
+        self.assertEqual(
+            [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
+            self._resumen(coordinada),
+        )
+
+    def test_una_coincidencia_sin_previo_entra_como_nueva(self):
+        original = domain.match_finding
+
+        def coincide_con_un_id_ajeno(previos, obs, facts):
+            if obs.title.startswith("ultimo"):
+                return domain.MatchExisting(id="F99")
+            return original(previos, obs, facts)
+
+        with mock.patch.object(domain, "match_finding", coincide_con_un_id_ajeno):
+            estado = self._aceptar(self._vacio(), "38017166195", self.ANCHORS)
+        self.assertEqual(len(estado.findings), 6, "nada se descarta en silencio")
+
+    def test_la_ruta_directa_y_la_coordinada_dejan_los_mismos_hallazgos(self):
+        for run in ("38017166195", "38017336748"):
+            with self.subTest(run=run):
+                coordinada = self._aceptar(self._vacio(), run)
+                directa, _ = review.merge_findings(
+                    None,
+                    {"findings": OBSERVACIONES_PILOTO2[run]},
+                    changed_files=["piloto/caso_t16.py"],
+                    reverted_files=[],
+                    dismiss_ids=[],
+                    dismiss_all=False,
+                )
+                self.assertEqual(
+                    [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
+                    self._resumen(coordinada),
+                )

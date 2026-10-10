@@ -22,6 +22,11 @@ on:
         description: Run del coordinador que despachó
         required: true
         type: string
+      finding_identity:
+        description: Identidad de hallazgos del coordinador (current o anchors)
+        required: false
+        default: current
+        type: string
 
 permissions:
   contents: read
@@ -38,6 +43,9 @@ run-name: ${{ inputs.pr_number }}
 jobs:
   execute:
     runs-on: ubuntu-latest
+    # El worker parsea con la misma identidad que usa el coordinador al aceptar.
+    env:
+      FINDING_IDENTITY: ${{ inputs.finding_identity }}
     steps:
       - name: checkout del código confiable del worker
         uses: actions/checkout@v4
@@ -56,6 +64,7 @@ jobs:
           for sha in "$HEAD_SHA" "$BASE_SHA"; do
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ai-review: SHA inválido" >&2; exit 1; }
           done
+          [[ "$FINDING_IDENTITY" =~ ^(current|anchors)$ ]] || { echo "ai-review: identidad de hallazgos inválida" >&2; exit 1; }
       - name: traer el PR como datos
         env:
           HEAD_SHA: ${{ inputs.head_sha }}

@@ -952,6 +952,19 @@ def sticky_from_comments(comments, login):
     return found[-1] if found else None
 
 
+def prev_de_memoria(body):
+    """El prev.json que lee prepare, desde el cuerpo del sticky. Lo escriben gate
+    (ruta directa) y execute-request (worker): sin él el modelo revisa sin los
+    hallazgos previos. También entiende la memoria v2/v3 del coordinador."""
+    if body is None:
+        return {"sha": None, "state": None, "completion": None}
+    return {
+        "sha": reviewed_sha(body),
+        "state": review_domain.estado_legado_de_memoria(body),
+        "completion": reviewed_completion(body),
+    }
+
+
 def cmd_gate(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
@@ -960,23 +973,18 @@ def cmd_gate(args):
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    state = parse_findings_block(sticky["body"]) if sticky else None
-    if state:
+    prev = prev_de_memoria(sticky["body"] if sticky else None)
+    if prev["state"]:
         try:
             dismiss_ids, dismiss_all, _ = collect_dismissals(
-                repo, pr, login, comments, state.get("seen", 0)
+                repo, pr, login, comments, prev["state"].get("seen", 0)
             )
-            state = apply_dismissals(state, dismiss_ids, dismiss_all)
+            prev["state"] = apply_dismissals(prev["state"], dismiss_ids, dismiss_all)
         except Exception as exc:
             print(
                 f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar",
                 file=sys.stderr,
             )
-    prev = {
-        "sha": reviewed_sha(sticky["body"]) if sticky else None,
-        "state": state,
-        "completion": reviewed_completion(sticky["body"]) if sticky else None,
-    }
     (work / "prev.json").write_text(json.dumps(prev))
     if sticky and prev["sha"] == head and not rerun:
         print(
@@ -2546,6 +2554,8 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
         f"base_sha={solicitud.target.get('base_sha', '')}",
         "-f",
         f"coordinator_run_id={run_id}",
+        "-f",
+        f"finding_identity={politica_de_identidad()}",
     )
 
 
@@ -2999,6 +3009,7 @@ def cmd_execute_request(args):
         "pr_head_sha": head,
         "base_sha": base,
         "policy_digest": digest_de_politica(policy),
+        "finding_identity": politica_de_identidad(),
         "plan": plan,
         "target": dict(solicitud.target),
         "observaciones": [],
@@ -3006,8 +3017,14 @@ def cmd_execute_request(args):
     }
     if plan_fallback:
         paquete["plan_fallback"] = plan_fallback
-    destino = Path(args.work) / "request-package.json"
+    work = Path(args.work)
+    work.mkdir(parents=True, exist_ok=True)
+    destino = work / "request-package.json"
     destino.write_text(json.dumps(paquete))
+    # La misma memoria autenticada que autorizó la solicitud; los comandos ya
+    # los aplicó el coordinador hasta su cursor.
+    previo = prev_de_memoria(sticky["body"] if sticky else None)
+    (work / "prev.json").write_text(json.dumps(previo))
     print(
         f"ai-review: paquete de la solicitud {solicitud.id} preparado "
         f"(run {paquete['run_id']} attempt {paquete['attempt']})"
@@ -3024,9 +3041,11 @@ def cmd_close_result(args):
     ]
     texto = redact(resultado.get("result") or "", secretos)
     avisar_bloque_sin_cierre(texto)
-    modelo = parse_model_findings(
-        texto, conservar_anclas=politica_de_identidad() == "anchors"
-    )
+    # La identidad viaja en el paquete desde la solicitud del coordinador.
+    identidad = paquete.get("finding_identity") or politica_de_identidad()
+    if identidad not in IDENTIDADES:
+        sys.exit(f"ai-review: identidad de hallazgos '{identidad}' no admitida")
+    modelo = parse_model_findings(texto, conservar_anclas=identidad == "anchors")
     paquete.update(
         {
             "result": texto,

@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -2164,6 +2165,7 @@ class Workflows(unittest.TestCase):
                 "PR_NUMBER": "12",
                 "HEAD_SHA": "a" * 40,
                 "BASE_SHA": "b" * 40,
+                "FINDING_IDENTITY": "current",
             }
             base.update(entradas)
             return subprocess.run(
@@ -2173,11 +2175,14 @@ class Workflows(unittest.TestCase):
             ).returncode
 
         self.assertEqual(correr(), 0)
+        self.assertEqual(correr(FINDING_IDENTITY="anchors"), 0)
         for campo, valor in (
             ("REQUEST_ID", "1\nX=1"),
             ("PR_NUMBER", '12"; touch pwn; "'),
             ("HEAD_SHA", "a" * 40 + "\nX=1"),
             ("BASE_SHA", "no-es-sha"),
+            ("FINDING_IDENTITY", "anchors\nX=1"),
+            ("FINDING_IDENTITY", "titles"),
         ):
             with self.subTest(campo=campo):
                 self.assertNotEqual(correr(**{campo: valor}), 0)
@@ -3136,6 +3141,89 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(salida, esperado)
                 self.assertEqual(fallo is None, esperado == "reviewed=true\n")
 
+    def _cerrar_con_identidad(self, en_paquete, en_entorno):
+        ancla = {
+            "path": "a.py",
+            "blob_sha": "e" * 40,
+            "range": [3, 4],
+            "excerpt_digest": "f" * 64,
+        }
+        bloque = json.dumps(
+            {
+                "findings": [
+                    {
+                        "id": "F-new",
+                        "file": "a.py",
+                        "line": 3,
+                        "severity": "High",
+                        "title": "bug",
+                        "state": "open",
+                        "anchor": ancla,
+                    }
+                ]
+            }
+        )
+        with tempfile.TemporaryDirectory() as work:
+            (Path(work) / "request-package.json").write_text(
+                json.dumps({"request_id": 1, "finding_identity": en_paquete})
+            )
+            (Path(work) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "result": f"<!-- ai-review:findings={bloque} -->\nCOVERAGE: complete",
+                        "subtype": "success",
+                    }
+                )
+            )
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": en_entorno}):
+                review.cmd_close_result(argparse.Namespace(work=work))
+            return json.loads((Path(work) / "result.json").read_text())
+
+    def test_close_result_parsea_con_la_identidad_del_coordinador(self):
+        """UW-r6 N3: el worker parseaba con su propio entorno aunque el
+        coordinador operara en anchors y las anclas se perdían."""
+        con_anclas = self._cerrar_con_identidad("anchors", "current")
+        self.assertEqual(
+            con_anclas["observaciones"][0]["anchor"],
+            {
+                "path": "a.py",
+                "blob_sha": "e" * 40,
+                "range": [3, 4],
+                "excerpt_digest": "f" * 64,
+            },
+        )
+        sin_anclas = self._cerrar_con_identidad("current", "anchors")
+        self.assertNotIn("anchor", sin_anclas["observaciones"][0])
+
+    def test_el_despacho_pasa_la_identidad_del_coordinador(self):
+        capturado = []
+
+        def sh_falso(*args, **kw):
+            capturado.append(args)
+            return mock.Mock(returncode=0, stdout="")
+
+        solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
+        with mock.patch.object(review, "sh", sh_falso):
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+                review.despachar_worker(
+                    solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
+                )
+        self.assertIn("finding_identity=anchors", capturado[0])
+
+    def test_el_worker_recibe_y_valida_la_identidad(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn(
+            "      finding_identity:\n"
+            "        description: Identidad de hallazgos del coordinador (current o anchors)\n"
+            "        required: false\n"
+            "        default: current\n",
+            worker,
+        )
+        trabajo = worker.split("  execute:\n")[1].split("    steps:")[0]
+        self.assertIn("FINDING_IDENTITY: ${{ inputs.finding_identity }}", trabajo)
+        validar = worker.split("- name: validar entradas")[1].split("- name:")[0]
+        self.assertIn('[[ "$FINDING_IDENTITY" =~ ^(current|anchors)$ ]]', validar)
+
     def test_close_result_conserva_costo_y_alcance(self):
         with tempfile.TemporaryDirectory() as work:
             (Path(work) / "request-package.json").write_text(
@@ -3710,6 +3798,32 @@ class Workflows(unittest.TestCase):
             paquete["policy_digest"],
             review.digest_de_politica(review.politica_de_revision()),
             "el digest sale de la política normalizada, no del checkpoint",
+        )
+        self.assertEqual(paquete["finding_identity"], "current")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "BOT_LOGIN": "bot",
+                    "FINDING_IDENTITY": "anchors",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=tmp, request_id="1")
+                    )
+            paquete = json.loads((Path(tmp) / "request-package.json").read_text())
+        self.assertEqual(
+            paquete["finding_identity"],
+            "anchors",
+            "la identidad del coordinador viaja hasta close-result",
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -4589,6 +4703,162 @@ class IncrementalPrepare(unittest.TestCase):
             )
 
 
+class WorkerConMemoriaPrevia(unittest.TestCase):
+    """T16-piloto-2 memoria del worker: el worker revisaba sin prev.json (lo
+    escribe gate, que no corre en el worker) y el log decía full/no-prev."""
+
+    STICKY_PUSH1 = (
+        ROOT / "tests" / "fixtures" / "t16_piloto2_sticky_push1.md"
+    ).read_text()
+    SHA_PUSH1 = "2527b1254cccf91bdb8a4495318db4b4a41eba17"
+
+    def _sticky_del_segundo_push(self, prev, base, head):
+        """La memoria real del #85 tras el primer push, con el SHA revisado
+        apuntando al commit previo del repo de prueba y la solicitud del
+        segundo push admitida por el coordinador."""
+        import review_domain as domain
+
+        cuerpo = self.STICKY_PUSH1.replace(self.SHA_PUSH1, prev)
+        load = domain.read_snapshot(cuerpo)
+        estado = load.snapshot
+        solicitud = domain.WorkRequest(
+            id=2,
+            kind="review",
+            origin="push",
+            basis_generation=estado.generation,
+            state="pending",
+            target=domain.ReviewTarget(
+                repository="o/r",
+                pr_number=85,
+                head_sha=head,
+                base_sha=base,
+                policy_digest="d" * 64,
+            ).json(),
+            solicitante="",
+        )
+        nuevo = domain.encode_snapshot(
+            replace(estado, pending_requests=[solicitud], request_count=2)
+        ).block
+        inicio = cuerpo.index(review.FINDINGS_PREFIX)
+        fin = cuerpo.index(" -->", inicio) + len(" -->")
+        return cuerpo[:inicio] + nuevo + cuerpo[fin:]
+
+    def _execute_request(self, repo, work, cuerpo, head, base):
+        falso = mock.Mock()
+        falso.leer = lambda: [{"id": 9, "body": cuerpo, "user": "github-actions[bot]"}]
+        anterior = os.getcwd()
+        os.chdir(repo)
+        try:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "REPO": "o/r",
+                        "PR_NUMBER": "85",
+                        "HEAD_SHA": head,
+                        "BASE_SHA": base,
+                        "GITHUB_RUN_ID": "55",
+                        "GITHUB_RUN_ATTEMPT": "1",
+                    },
+                ),
+                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                review.cmd_execute_request(
+                    argparse.Namespace(work=str(work), request_id="2")
+                )
+        finally:
+            os.chdir(anterior)
+
+    def _prepare(self, repo, work, base, head):
+        event = work / "event.json"
+        event.write_text(json.dumps({"pull_request": {"title": "t", "body": None}}))
+        subprocess.run(
+            [sys.executable, str(ROOT / "review.py"), "prepare", "--work", str(work)],
+            cwd=repo,
+            env=dict(
+                os.environ,
+                HEAD_SHA=head,
+                BASE_SHA=base,
+                EXTRA_EXCLUDES="",
+                MAX_DIFF_BYTES="1500000",
+                GITHUB_EVENT_PATH=str(event),
+            ),
+            check=True,
+            capture_output=True,
+        )
+        return json.loads((work / "manifest.json").read_text())
+
+    def test_el_worker_del_segundo_push_revisa_con_los_hallazgos_previos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = IncrementalPrepare().make_repo(tmp)
+            work.mkdir()
+            cuerpo = self._sticky_del_segundo_push(prev, base, head)
+            self._execute_request(repo, work, cuerpo, head, base)
+            previo = json.loads((work / "prev.json").read_text())
+            manifest = self._prepare(repo, work, base, head)
+            previos_md = (work / "prev_findings.md").read_text()
+            with mock.patch.dict(os.environ, {"PR_NUMBER": "85", "REPO": "o/r"}):
+                prompt = review.build_prompt(manifest, work, 60)
+        self.assertEqual(previo["sha"], prev)
+        self.assertEqual(previo["completion"], "complete")
+        self.assertEqual(
+            previo["state"]["findings"],
+            [
+                {
+                    "id": "F1",
+                    "file": "piloto/caso_t16.py",
+                    "line": 15,
+                    "severity": "Critical",
+                    "title": "Ejecución arbitraria de código: eval sobre el contenido del archivo",
+                    "state": "open",
+                }
+            ],
+        )
+        self.assertEqual(
+            (manifest["mode"], manifest["reason"], manifest["prev_sha"]),
+            ("full", "forced-full-t16", prev),
+            "deja de ser full/no-prev",
+        )
+        self.assertTrue(manifest["has_prev_findings"])
+        self.assertIn(
+            "- F1 Critical · `piloto/caso_t16.py:15` · Ejecución arbitraria de código: "
+            "eval sobre el contenido del archivo",
+            previos_md,
+        )
+        self.assertIn(f"{work}/prev_findings.md", prompt)
+
+    def test_el_prev_json_del_worker_es_el_que_escribe_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = IncrementalPrepare().make_repo(tmp)
+            work.mkdir()
+            cuerpo = self._sticky_del_segundo_push(prev, base, head)
+            self._execute_request(repo, work, cuerpo, head, base)
+            del_worker = json.loads((work / "prev.json").read_text())
+            directo = Path(tmp, "directo")
+            directo.mkdir()
+            comentarios = [{"id": 9, "user": "github-actions[bot]", "body": cuerpo}]
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "REPO": "o/r",
+                        "PR_NUMBER": "85",
+                        "HEAD_SHA": head,
+                        "RUN_ATTEMPT": "1",
+                    },
+                ),
+                mock.patch.object(
+                    review, "fetch_all_comments", return_value=comentarios
+                ),
+                mock.patch.object(review, "set_output"),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                review.cmd_gate(argparse.Namespace(work=str(directo)))
+            del_gate = json.loads((directo / "prev.json").read_text())
+        self.assertEqual(del_worker, del_gate)
+
+
 class ReviewContinuity(unittest.TestCase):
     def publish(self, work, head, manifest, result, body=None, repo=None):
         work.mkdir(parents=True, exist_ok=True)
@@ -4639,6 +4909,74 @@ class ReviewContinuity(unittest.TestCase):
         ):
             review.cmd_gate(argparse.Namespace(work=str(work)))
         return json.loads((work / "prev.json").read_text()), output.call_args.args
+
+    def test_el_gate_lee_la_memoria_schema3_del_coordinador(self):
+        """F2 de #86: tras el retorno, el gate no entendía la memoria v3 y el
+        modelo revisaba sin los hallazgos previos ("Sin hallazgos previos")."""
+        import review_domain as domain
+
+        estado = domain.Snapshot(
+            schema=3,
+            generation=3,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.COMPLETE_CLAIM,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title="eval sobre el contenido del archivo",
+                    severity="Critical",
+                    status=domain.StatusDismissed(command_id=7),
+                    primary_anchor=domain.AnchorLegacy(path="piloto/caso.py", line=15),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="ultimo siempre lanza IndexError",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="piloto/caso.py", line=9),
+                ),
+            ],
+            command_cursor=7,
+        )
+        cuerpo = (
+            f"{review.MARKER}\n{review.SHA_PREFIX}{'c' * 40} -->\n"
+            f"{domain.encode_snapshot(estado)}\n### Revisión"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            prev, _ = self.gate(Path(tmp), "e" * 40, cuerpo)
+        self.assertEqual(prev["sha"], "c" * 40)
+        self.assertEqual(
+            prev["state"],
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": "piloto/caso.py",
+                        "line": 15,
+                        "severity": "Critical",
+                        "title": "eval sobre el contenido del archivo",
+                        "state": "dismissed",
+                    },
+                    {
+                        "id": "F2",
+                        "file": "piloto/caso.py",
+                        "line": 9,
+                        "severity": "High",
+                        "title": "ultimo siempre lanza IndexError",
+                        "state": "open",
+                    },
+                ],
+                "next": 3,
+                "seen": 7,
+            },
+        )
+        self.assertIn(
+            "ultimo siempre lanza IndexError",
+            review.prev_findings_markdown(prev["state"]),
+        )
 
     def test_partial_publish_recovers_full_scope_then_stays_full_by_decision(self):
         fixture = IncrementalPrepare()

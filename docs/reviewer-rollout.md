@@ -7,10 +7,18 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
+> **El modo coordinado NO se despliega.** Ni en consumidores ni en el repo
+> central fuera de un piloto: la ronda 2 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
+> encontró pérdida de hallazgos y el central volvió al revisor directo (#86).
+> Se despliega solo cuando estén mergeados los arreglos de T16-piloto-2 en
+> `Plans.md` (pérdida, memoria del worker, instalador) y una ronda 3 pase
+> completa. Hasta entonces `install.sh --coordinado` se niega sin
+> `AI_REVIEW_PILOTO=1`.
+
 ## Qué instala el modo coordinado
 
 ```bash
-ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
 ```
 
 - Un único commit en `chore/ai-review` que agrega
@@ -59,7 +67,11 @@ compatible probado (modo actual, `ai-review.yml` con `ACTION_SHA` fijado).
 
 1. **Detener y drenar al coordinador.** Congela merges que toquen los
    workflows coordinados y espera a que no queden runs del worker en vuelo
-   ni runs del publicador pendientes de reenvío.
+   ni runs del publicador pendientes de reenvío. Comprueba los dos con
+   `gh run list --workflow ai-review-worker.yml --status in_progress` (y
+   `queued`) justo antes de mergear el retorno: en #86 un worker de otro PR
+   (#87) seguía en vuelo, su aviso dio 422 porque el publicador ya no
+   existía y la solicitud quedó `pending` huérfana en esa memoria.
 2. **Desactivar `anchors` y modos experimentales.** Ninguna plantilla
    instalada activa `FINDING_IDENTITY=anchors` ni D0; verifícalo en el
    entorno del consumidor antes de cambiar de escritor.
@@ -85,12 +97,13 @@ completo desde el paso 1.
 # Piloto de T16: orden, avance y medición
 
 Estado: la medición terminó (63 corridas, $110.6439) y la decisión de D0 se
-ejecutó en el PR #65. El piloto en el repo central se ejecutó: la cadena
-coordinador → worker → publicador funciona tras seis arreglos, pero el
-publicador no muestra los hallazgos, así que el repo central volvió al revisor
-actual (#77). Resultado y decisiones en `docs/evidence/reviewer/T16-piloto.md`.
-Los consumidores quedan para después de la capa visible. El corte y el retorno
-mecánicos son los que describe el procedimiento de T11 de arriba.
+ejecutó en el PR #65. Ronda 1 del piloto (`docs/evidence/reviewer/T16-piloto.md`):
+la cadena funciona tras seis arreglos pero sin capa visible; volvió a current
+(#77). Ronda 2 (`docs/evidence/reviewer/T16-piloto-2.md`): con capa visible
+(#79, #83) el publicador perdía 5 de 6 hallazgos por revisión; el central
+volvió al revisor directo (#86). Los consumidores (summonaikit-claude,
+goncloud-openclaw, goncloud-Orbit) siguen bloqueados por el piloto. El corte y
+el retorno mecánicos son los que describe el procedimiento de T11 de arriba.
 
 ## Qué hay congelado hoy
 
@@ -131,8 +144,8 @@ mecánicos son los que describe el procedimiento de T11 de arriba.
 1. **Repo central** (`goncloud-pr-review`): primero revisiones fijas en el repo
    central, en un PR del propio repo, con el revisor fijado al SHA candidato.
 2. **summonaikit-claude**: primer consumidor, mismo `ACTION_SHA`.
-3. **openclaw**: segundo consumidor.
-4. **Orbit**: tercer consumidor.
+3. **goncloud-openclaw**: segundo consumidor.
+4. **goncloud-Orbit**: tercer consumidor.
 
 En cada consumidor la instalación es el commit/PR atómico del procedimiento de
 arriba, que retira los escritores antiguos antes de activar el coordinador.

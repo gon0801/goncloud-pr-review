@@ -1026,6 +1026,17 @@ def hallazgos_legacy(snapshot):
     return _legacy_raw_of_snapshot(snapshot)["findings"]
 
 
+def estado_legado_de_memoria(body):
+    """El estado legado de cualquier memoria legible: el bloque legado tal cual
+    o la vista legada de una memoria v2/v3 (la que deja el coordinador)."""
+    load = read_snapshot(body)
+    if isinstance(load, Legacy):
+        return load.raw
+    if isinstance(load, Valid):
+        return _legacy_raw_of_snapshot(load.snapshot)
+    return None
+
+
 def snapshot_a_v3(snapshot):
     """Migra un Snapshot legado/v2 a schema 3.
 
@@ -1295,6 +1306,9 @@ class Observation:
     cause_hint: str | None = None
     evidence: list = field(default_factory=list)
     claim: str = OPEN
+    # Id de un previo que el modelo repite (lo ve en prev_findings.md); solo
+    # decide la identidad fuera de `anchors`, como en merge_findings.
+    claimed_id: str | None = None
 
 
 @dataclass
@@ -1718,6 +1732,7 @@ def observation_de_entrada(entry):
         cause_hint=entry.get("cause_hint"),
         evidence=tuple(evidencia),
         claim=claim,
+        claimed_id=entry.get("id") if finding_number(entry.get("id") or "") else None,
     )
 
 
@@ -1760,6 +1775,30 @@ def _cobertura_persistida(report, plan):
     return resultado
 
 
+def _match_como_merge_findings(previos, por_id, obs):
+    """Identidad fuera de `anchors`, la misma de la ruta directa (merge_findings):
+    el id que el modelo repite para un previo del mismo archivo; si no, el mismo
+    título en el mismo archivo, prefiriendo el vivo (un descartado solo gana si
+    es el único, y entonces no reaparece); si no, nuevo.
+    Sin el respaldo por ruta sola: sin título igual no hay identidad que adivinar.
+    """
+    reclamado = por_id.get(obs.claimed_id)
+    if reclamado is not None and _ruta_primaria(reclamado) == _ruta_primaria(obs):
+        return MatchExisting(id=reclamado.id)
+    titulo = obs.title.casefold()
+    iguales = [
+        f
+        for f in previos
+        if f.id
+        and _ruta_primaria(f) == _ruta_primaria(obs)
+        and f.title.casefold() == titulo
+    ]
+    vivos = [f for f in iguales if not isinstance(f.status, StatusDismissed)]
+    if vivos or iguales:
+        return MatchExisting(id=(vivos or iguales)[0].id)
+    return MatchNew()
+
+
 def accept_report(current, plan, report):
     """Acepta el reporte validado y devuelve la Transition del estado.
 
@@ -1779,17 +1818,29 @@ def accept_report(current, plan, report):
     cambiadas = (
         set(facts.changed_paths) if facts.delta_calculado else set(plan.changed_paths)
     ) | revertidas
-    findings = list(current.findings)
-    por_id = {f.id: f for f in findings if f.id}
+    # Las observaciones de un mismo reporte son distintas entre sí: sólo se
+    # comparan contra los previos al entrar, nunca contra las creadas aquí.
+    previos = tuple(current.findings)
+    findings = list(previos)
+    por_id = {f.id: f for f in previos if f.id}
+    # `titles` (interno) o `current` (externo, normalize_policy): la del coordinador.
+    honra_ids = plan.policy is not None and plan.policy.finding_identity in (
+        "titles",
+        "current",
+    )
     tocados, next_id = set(), current.next_id
     for obs in report.observations:
         severidad, marca_severidad = _severidad_de(obs.severity)
-        match = match_finding(findings, obs, facts)
+        match = (
+            _match_como_merge_findings(previos, por_id, obs)
+            if honra_ids
+            else match_finding(previos, obs, facts)
+        )
+        if isinstance(match, MatchExisting) and match.id not in por_id:
+            match = MatchNew()
         if isinstance(match, MatchExisting):
             fid = match.id
-            previo = por_id.get(fid)
-            if previo is None:
-                continue
+            previo = por_id[fid]
             if isinstance(previo.status, StatusDismissed):
                 continue  # un descarte confirmado no reaparece
             severidad, marca_severidad = _severidad_de(obs.severity)
