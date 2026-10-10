@@ -5743,6 +5743,21 @@ class IncrementalRun(unittest.TestCase):
         self.assertNotIn("EXPLAIN", prompt)
         self.assertIn("Report the same issues with their same ids", prompt)
 
+    def test_la_revision_completa_con_memoria_pide_el_bloque_y_la_cobertura(self):
+        """Caso de resolución del piloto (#97): con hallazgos previos en modo
+        completo, el modelo respondió en prosa sin bloque ni COVERAGE en 3 de 5
+        revisiones; el mensaje solo recordaba el formato en incremental."""
+        manifest = dict(self.manifest(mode="full"), has_prev_findings=True)
+        with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "97"}):
+            prompt = review.build_prompt(manifest, Path("/tmp/w"), 60)
+        self.assertIn(
+            "Emit the findings block right before COVERAGE with every previous finding "
+            '(state "open", or "resolved" if this diff fixed it) and the new ones, as one '
+            "line that starts with `<!-- ai-review:findings=` and ends with ` -->`, "
+            "then the COVERAGE line.",
+            prompt,
+        )
+
     def test_full_prompt_has_no_incremental_line(self):
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
             prompt = review.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
