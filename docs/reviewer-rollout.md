@@ -10,13 +10,13 @@ repo central.
 > **Estado del modo coordinado (2026-10-10).** El piloto T16 pasó: rondas 2, 3
 > y 3b en `docs/evidence/reviewer/T16-piloto-2.md` (descarte concurrente,
 > explicación, re-revisión del mismo SHA, resolución vista en el central y
-> worker sin tronar con base desfasada). El repo central corre el modo
-> coordinado instalado por #96 con el CLI fijado a `dff2ad3`; falta
-> reinstalarlo fijado a `59d31da` para que entre #98 (el recordatorio del bloque
-> en la revisión completa con memoria, que se comprueba en revisiones reales).
-> Los consumidores (summonaikit-claude, goncloud-openclaw, goncloud-Orbit)
-> siguen con el revisor directo hasta que el operador apruebe su activación;
-> `install.sh --coordinado` ya no exige bandera de piloto.
+> worker sin tronar con base desfasada). Los cuatro repos corren el modo
+> coordinado: el central con el CLI fijado a `9fa765d` (#107) y los consumidores
+> a `59d31da` (summonaikit-claude #370, goncloud-openclaw #254, goncloud-Orbit
+> #416); el CLI es el mismo entre esos dos commits. En goncloud-Orbit el check
+> requerido `review` de `master` pasó a `reconcile`. El recordatorio del bloque
+> (#98) se comprueba en las revisiones reales. Para instalar o re-fijar otro
+> repo: skill `instalar-revisor` (`install.sh --coordinado`, sin bandera).
 
 ## Qué instala el modo coordinado
 
@@ -109,8 +109,8 @@ la cadena funcionó tras seis arreglos pero sin capa visible y volvió a current
 revisor directo (#86). Ronda 3 y 3b (mismo documento): con #87 a #89 el central
 reactivó el coordinado (#90); con #92, #94 y #95 pasaron los casos 1 a 5, la
 resolución quedó vista en el central (revisión coordinada del #93) y el worker
-ya no truena con base desfasada. El central sigue en modo coordinado (#96).
-Los consumidores quedan a decisión del operador. Las secciones siguientes son
+ya no truena con base desfasada. El central y los tres consumidores quedaron
+en modo coordinado (#106, #107, #370, #254, #416). Las secciones siguientes son
 el diseño y la medición históricos del piloto.
 
 ## Qué hay congelado hoy
