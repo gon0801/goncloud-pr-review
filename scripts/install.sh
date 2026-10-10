@@ -101,6 +101,20 @@ if not punta:
     if creado.returncode != 0:
         fail(f"no pude crear la rama ({creado.stderr.strip()})")
     punta = raiz
+else:
+    # Tras un squash merge la rama propia queda divergente: sin la punta de
+    # main, el PR revertiría o chocaría con lo que ya se mergeó.
+    fusion = api(f"repos/{repo}/merges", "-f", f"base={rama}", "-f", f"head={default}")
+    if fusion.returncode != 0:
+        # Solo el 409 es un conflicto; permisos, historial lineal o un 5xx no
+        # justifican tocar la rama a mano.
+        causa = fusion.stderr.strip()
+        if "HTTP 409" in causa:
+            fail(f"la rama {rama} tiene conflicto con main; resuélvelo en la rama ({causa})")
+        fail(f"no pude poner la rama {rama} al día con main; no se publica nada ({causa})")
+    punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
+    if not punta:
+        fail("no pude releer la rama tras ponerla al día con main")
 
 contenido_publicador = plantilla("ai-review-publish.yml")
 contenido_worker = plantilla("ai-review-worker.yml")
@@ -284,6 +298,17 @@ PY
     if [ -z "$punta" ]; then
       punta="$(gh api "repos/$repo/git/ref/heads/$default" --jq .object.sha)"
       gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$punta" >/dev/null
+    else
+      # Misma puesta al día que el modo coordinado (rama vieja tras un squash merge).
+      if ! error="$(gh api "repos/$repo/merges" -f base="$branch" -f head="$default" 2>&1 >/dev/null)"; then
+        if [[ "$error" == *"HTTP 409"* ]]; then
+          echo "instalador: $repo: la rama $branch tiene conflicto con main; resuélvelo en la rama ($error)" >&2
+        else
+          echo "instalador: $repo: no pude poner la rama $branch al día con main; no se publica nada ($error)" >&2
+        fi
+        exit 1
+      fi
+      punta="$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)"
     fi
     rutas="$(gh api "repos/$repo/git/trees/$punta?recursive=1" --jq '.tree[].path')" || {
       echo "instalador: $repo: no pude leer el árbol; no se publica nada" >&2

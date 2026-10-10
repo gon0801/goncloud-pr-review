@@ -216,6 +216,49 @@ FAKE_GH = textwrap.dedent(
         guardar()
         sys.exit(0)
 
+    def ancestros(commit):
+        vistos, pila = set(), [commit]
+        while pila:
+            actual = pila.pop()
+            if actual in vistos or actual not in r["commits"]:
+                continue
+            vistos.add(actual)
+            pila.extend(r["commits"][actual]["parents"])
+        return vistos
+
+    if resto == ["merges"]:
+        rama, cabeza = banderas["base"][0], banderas["head"][0]
+        punta, otra = r["branches"][rama], r["branches"][cabeza]
+        if otra in ancestros(punta):
+            sys.exit(0)
+        comunes = ancestros(punta) & ancestros(otra)
+        base_merge = next(
+            c for c in comunes if not any(c in r["commits"][o]["parents"] for o in comunes)
+        )
+        arbol_base = r["trees"][r["commits"][base_merge]["tree"]]
+        nuestro = r["trees"][r["commits"][punta]["tree"]]
+        suyo = r["trees"][r["commits"][otra]["tree"]]
+        fusion = {}
+        for ruta_arbol in set(arbol_base) | set(nuestro) | set(suyo):
+            b, n, s = (t.get(ruta_arbol) for t in (arbol_base, nuestro, suyo))
+            elegido = s if n == b else n if s == b or n == s else "conflicto"
+            if elegido == "conflicto":
+                fallar(1, f"Merge conflict (HTTP 409): {ruta_arbol}")
+            if elegido is not None:
+                fusion[ruta_arbol] = elegido
+        arbol_sha = "t" + sha_de(json.dumps(fusion, sort_keys=True))
+        r["trees"][arbol_sha] = fusion
+        commit_sha = "c" + sha_de(arbol_sha + punta + otra)
+        r["commits"][commit_sha] = {
+            "tree": arbol_sha,
+            "parents": [punta, otra],
+            "message": f"Merge {cabeza} into {rama}",
+        }
+        r["branches"][rama] = commit_sha
+        emitir({"sha": commit_sha})
+        guardar()
+        sys.exit(0)
+
     if resto[:2] == ["git", "blobs"]:
         contenido = banderas["content"][0]
         s = sha_de(contenido)
@@ -420,6 +463,149 @@ class AtomicInstall(InstaladorTest):
         )
         registro = open(self.registro_ruta).read()
         self.assertNotIn("force-prohibido", registro, "nunca fuerza la referencia")
+
+
+class RamaPropiaVieja(InstaladorTest):
+    """Tras un squash merge, chore/ai-review queda divergente de main: el PR que
+    salga de ahí tiene que mergear limpio y dejar main con el conjunto pedido."""
+
+    def _commit(self, repo, padres, archivos, mensaje):
+        arbol = {}
+        for ruta, contenido in archivos.items():
+            s = hashlib.sha1(contenido.encode()).hexdigest()
+            repo["blobs"][s] = base64.b64encode(contenido.encode()).decode()
+            arbol[ruta] = s
+        arbol_sha = (
+            "t" + hashlib.sha1(json.dumps(arbol, sort_keys=True).encode()).hexdigest()
+        )
+        repo["trees"][arbol_sha] = arbol
+        commit_sha = "c" + hashlib.sha1((arbol_sha + mensaje).encode()).hexdigest()
+        repo["commits"][commit_sha] = {
+            "tree": arbol_sha,
+            "parents": padres,
+            "message": mensaje,
+        }
+        return commit_sha
+
+    def _squash_mergeado(self, previo, instalado):
+        self._repo("o/r", previo)
+        repo = self.estado["repos"]["o/r"]
+        base = repo["branches"]["main"]
+        rama = self._commit(repo, [base], instalado, "instalación en la rama")
+        squash = self._commit(repo, [base], instalado, "squash del PR")
+        repo["branches"]["chore/ai-review"] = rama
+        repo["branches"]["main"] = squash
+        return squash
+
+    def _ancestros(self, repo, commit):
+        vistos, pila = set(), [commit]
+        while pila:
+            actual = pila.pop()
+            if actual not in vistos:
+                vistos.add(actual)
+                pila.extend(repo["commits"][actual]["parents"])
+        return vistos
+
+    def test_el_retorno_tras_un_squash_merge_parte_de_main(self):
+        coordinado = {
+            ".github/workflows/ai-review-publish.yml": "publish\n",
+            ".github/workflows/ai-review-worker.yml": "worker\n",
+            "README.md": "readme\n",
+        }
+        squash = self._squash_mergeado(
+            {".github/workflows/ai-review.yml": "viejo\n", "README.md": "readme\n"},
+            coordinado,
+        )
+        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        punta = repo["branches"]["chore/ai-review"]
+        self.assertIn(
+            squash,
+            self._ancestros(repo, punta),
+            "el PR de retorno contiene la punta de main: su merge no choca",
+        )
+        self.assertEqual(
+            sorted(self._archivos_de(repo, "chore/ai-review")),
+            [".github/workflows/ai-review.yml", "README.md"],
+        )
+        self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+
+    def test_la_instalacion_coordinada_tras_un_squash_merge_parte_de_main(self):
+        directo = {".github/workflows/ai-review.yml": "directo\n", "README.md": "v1\n"}
+        squash = self._squash_mergeado(
+            {
+                ".github/workflows/ai-review-publish.yml": "publish viejo\n",
+                ".github/workflows/ai-review-worker.yml": "worker viejo\n",
+                "README.md": "v1\n",
+            },
+            directo,
+        )
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "a" * 40})
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        repo = self._repo_final("o/r")
+        self.assertIn(
+            squash, self._ancestros(repo, repo["branches"]["chore/ai-review"])
+        )
+        self.assertEqual(
+            sorted(self._archivos_de(repo, "chore/ai-review")),
+            [
+                ".github/workflows/ai-review-publish.yml",
+                ".github/workflows/ai-review-worker.yml",
+                "README.md",
+            ],
+        )
+
+    def _rama_en_conflicto(self):
+        self._repo(
+            "o/r",
+            {
+                ".github/workflows/ai-review-publish.yml": "publish\n",
+                ".github/workflows/ai-review-worker.yml": "worker\n",
+                "README.md": "a\n",
+            },
+        )
+        repo = self.estado["repos"]["o/r"]
+        base = repo["branches"]["main"]
+        coordinado = {
+            ".github/workflows/ai-review-publish.yml": "publish\n",
+            ".github/workflows/ai-review-worker.yml": "worker\n",
+        }
+        repo["branches"]["chore/ai-review"] = self._commit(
+            repo, [base], {**coordinado, "README.md": "rama\n"}, "rama"
+        )
+        repo["branches"]["main"] = self._commit(
+            repo, [base], {**coordinado, "README.md": "main\n"}, "main"
+        )
+        return repo["branches"]["chore/ai-review"]
+
+    def test_una_rama_propia_en_conflicto_con_main_sale_alto_sin_publicar(self):
+        for modo in (("--coordinado", "o/r"), ("o/r",)):
+            with self.subTest(modo=modo[0]):
+                punta_previa = self._rama_en_conflicto()
+                resultado = self._correr(*modo, extra={"ACTION_SHA": "a" * 40})
+                self.assertNotEqual(resultado.returncode, 0)
+                self.assertIn("tiene conflicto con main", resultado.stderr)
+                self.assertNotIn("bórrala", resultado.stderr)
+                repo = self._repo_final("o/r")
+                self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
+                self.assertEqual(repo["prs"], [])
+
+    def test_un_fallo_que_no_es_conflicto_no_se_reporta_como_conflicto(self):
+        for modo in (("--coordinado", "o/r"), ("o/r",)):
+            with self.subTest(modo=modo[0]):
+                punta_previa = self._rama_en_conflicto()
+                resultado = self._correr(
+                    *modo, extra={"ACTION_SHA": "a" * 40}, fallos={"merges": 1}
+                )
+                self.assertNotEqual(resultado.returncode, 0)
+                self.assertIn(
+                    "no pude poner la rama chore/ai-review al día", resultado.stderr
+                )
+                self.assertNotIn("conflicto", resultado.stderr)
+                repo = self._repo_final("o/r")
+                self.assertEqual(repo["branches"]["chore/ai-review"], punta_previa)
+                self.assertEqual(repo["prs"], [])
 
 
 class CoordinadoSoloPiloto(InstaladorTest):
