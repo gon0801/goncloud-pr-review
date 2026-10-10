@@ -7,7 +7,7 @@
 #   ACTION_SHA    SHA confiable del repo central. En el modo actual fija
 #                 `uses:` (si no, queda @main); en el coordinado es obligatorio.
 #   AI_REVIEW_PILOTO=1  único permiso para --coordinado: el modo coordinado no
-#                 se despliega en consumidores hasta pasar el piloto 2 (Plans.md).
+#                 se despliega en consumidores sin decisión del operador (Plans.md).
 #   EXCLUDE       exclusiones extra por repo (solo modo actual):
 #                 EXCLUDE=$'data/**\nout/**' scripts/install.sh owner/repo
 set -euo pipefail
@@ -20,7 +20,7 @@ if [ "${1:-}" = "--coordinado" ]; then
   shift
 fi
 if [ "$modo" = "coordinado" ] && [ "${AI_REVIEW_PILOTO:-}" != "1" ]; then
-  echo "instalador: el modo coordinado no se despliega todavía (falta pasar el piloto 2 de T16); solo para un piloto con AI_REVIEW_PILOTO=1" >&2
+  echo "instalador: el modo coordinado no se despliega en consumidores sin decisión del operador (piloto de T16 abierto); solo para un piloto con AI_REVIEW_PILOTO=1" >&2
   exit 2
 fi
 if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then

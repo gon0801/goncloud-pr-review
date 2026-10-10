@@ -1,6 +1,7 @@
-# T16: segunda ronda del piloto coordinado (detenida)
+# T16: rondas 2 y 3 del piloto coordinado
 
-Fecha: 2026-10-10. Continúa `T16-piloto.md`. La ronda 1 dejó el modo
+Fecha: 2026-10-10. Continúa `T16-piloto.md`. La ronda 2 se detuvo por pérdida
+de hallazgos; la ronda 3 (abajo) la repitió con los arreglos. La ronda 1 dejó el modo
 coordinado sin capa visible; esta ronda lo reactivó en el repo central con la
 capa visible (#79), el respaldo de proveedor (#81), el bloque sin cierre (#82)
 y los pendientes de activación (#83).
@@ -134,8 +135,13 @@ terminada no llegó al modelo.
 
 ## Decisión de la ronda 3
 
-Los casos 1 a 5 pasan: el modo coordinado publica completo, conserva ids,
-respeta descartes, explica sin acreditar y re-revisa el mismo SHA sin
-duplicar. Queda activo en el repo central. Los consumidores
-(summonaikit-claude, goncloud-openclaw, goncloud-Orbit) siguen siendo una
-decisión del operador, después del #92.
+Los casos 1 a 5 pasan en lo que ejercieron: el modo coordinado publica
+completo, conserva ids, respeta descartes, explica sin acreditar y re-revisa
+el mismo SHA sin duplicar. **Pero ningún caso ejerció una resolución**, y al
+revisar #92 y #93 apareció el defecto: el coordinador armaba sus hechos sin
+delta y ningún hallazgo resuelto se cerraba (worker 38025265430 en #93: F1 y F2
+`resolved` con sus archivos en `changed_files`, y siguieron abiertos). El
+operador decidió arreglar hacia adelante con el central activo (#94). La fila
+«T16 piloto» queda abierta hasta ejercer una resolución en el central con #94
+mergeado. Los consumidores (summonaikit-claude, goncloud-openclaw,
+goncloud-Orbit) siguen siendo decisión del operador.
