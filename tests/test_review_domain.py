@@ -3294,3 +3294,124 @@ class ReportBoundary(unittest.TestCase):
         transicion = domain.accept_report(self._snapshot_v2([otro]), plan, report)
         f2 = {f.id: f for f in transicion.snapshot.findings}["F2"]
         self.assertIsInstance(f2.status, domain.StatusResolved)
+
+
+OBSERVACIONES_PILOTO2 = json.loads(
+    (ROOT / "tests" / "fixtures" / "t16_piloto2_observaciones.json").read_text()
+)
+
+
+class ReporteDelPilotoSinPerdidas(unittest.TestCase):
+    """T16-piloto-2: con anclas legadas en un solo archivo, accept_report tiraba
+    toda observación después de la primera (6 -> 1 en el run 38017166195)."""
+
+    REVISION = domain.Revision(
+        base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+    )
+
+    def _vacio(self):
+        return domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=self.REVISION,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+
+    def _aceptar(self, snapshot, run):
+        observaciones = [
+            domain.observation_de_entrada(e) for e in OBSERVACIONES_PILOTO2[run]
+        ]
+        plan = domain.ReviewPlan(
+            revision=self.REVISION, changed_paths=("piloto/caso_t16.py",)
+        )
+        report = domain.validar_reporte(
+            observaciones, domain.UNKNOWN, domain.RepositoryFacts()
+        )
+        return domain.accept_report(snapshot, plan, report).snapshot
+
+    def _resumen(self, snapshot):
+        return [(f.id, f.severity, f.title) for f in snapshot.findings]
+
+    def test_las_seis_observaciones_del_primer_push_entran(self):
+        estado = self._aceptar(self._vacio(), "38017166195")
+        self.assertEqual(
+            self._resumen(estado),
+            [
+                (
+                    "F1",
+                    "Critical",
+                    "Ejecución arbitraria de código: eval sobre el contenido del archivo",
+                ),
+                ("F2", "High", "ultimo siempre lanza IndexError (off-by-one)"),
+                (
+                    "F3",
+                    "Medium",
+                    "mediana no es la mediana para listas de tamaño par (y falla con lista vacía)",
+                ),
+                ("F4", "Medium", "promedio lanza ZeroDivisionError con lista vacía"),
+                ("F5", "Low", "El archivo abierto en leer_config nunca se cierra"),
+                ("F6", "Low", "El módulo no tiene ninguna prueba"),
+            ],
+        )
+        self.assertEqual(estado.next_id, 7)
+
+    def test_el_mismo_reporte_en_el_segundo_push_conserva_los_ids(self):
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar(primero, "38017166195")
+        self.assertEqual(self._resumen(segundo), self._resumen(primero))
+        self.assertEqual(segundo.next_id, 7, "ninguna observación entra duplicada")
+
+    def test_el_segundo_push_real_no_pierde_observaciones(self):
+        estado = self._aceptar(self._vacio(), "38017336748")
+        self.assertEqual(
+            [f.id for f in estado.findings], ["F1", "F2", "F3", "F4", "F5", "F6"]
+        )
+
+    def test_el_segundo_push_real_sobre_el_primero_las_registra_todas(self):
+        """Sin memoria en el worker el modelo reescribe los títulos: con identidad
+        por título ninguna coincide sola y cada una entra como posible duplicado
+        de los previos del archivo, nunca se tira (falta de identidad declarada
+        en Plans.md, fila T16-piloto-2 memoria del worker)."""
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar(primero, "38017336748")
+        nuevos = segundo.findings[len(primero.findings) :]
+        self.assertEqual(
+            [f.id for f in nuevos], ["F7", "F8", "F9", "F10", "F11", "F12"]
+        )
+        self.assertEqual(
+            {f.cause_hint for f in nuevos},
+            {"posible duplicado de F1, F2, F3, F4, F5, F6"},
+        )
+        self.assertEqual(self._resumen(segundo)[:6], self._resumen(primero))
+
+    def test_una_coincidencia_sin_previo_entra_como_nueva(self):
+        original = domain.match_finding
+
+        def coincide_con_un_id_ajeno(previos, obs, facts):
+            if obs.title.startswith("ultimo"):
+                return domain.MatchExisting(id="F99")
+            return original(previos, obs, facts)
+
+        with mock.patch.object(domain, "match_finding", coincide_con_un_id_ajeno):
+            estado = self._aceptar(self._vacio(), "38017166195")
+        self.assertEqual(len(estado.findings), 6, "nada se descarta en silencio")
+
+    def test_la_ruta_directa_y_la_coordinada_dejan_los_mismos_hallazgos(self):
+        for run in ("38017166195", "38017336748"):
+            with self.subTest(run=run):
+                coordinada = self._aceptar(self._vacio(), run)
+                directa, _ = review.merge_findings(
+                    None,
+                    {"findings": OBSERVACIONES_PILOTO2[run]},
+                    changed_files=["piloto/caso_t16.py"],
+                    reverted_files=[],
+                    dismiss_ids=[],
+                    dismiss_all=False,
+                )
+                self.assertEqual(
+                    [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
+                    self._resumen(coordinada),
+                )

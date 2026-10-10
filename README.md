@@ -33,10 +33,12 @@ ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado
 ```
 
 Modo coordinado (coordinador + worker con el escritor anterior retirado, en
-un único commit atómico; ver `docs/reviewer-rollout.md` para el corte):
+un único commit atómico; ver `docs/reviewer-rollout.md` para el corte). Todavía
+no se despliega: solo para un piloto, y el instalador se niega sin
+`AI_REVIEW_PILOTO=1`:
 
 ```bash
-ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
+AI_REVIEW_PILOTO=1 ACTION_SHA=<sha candidato> scripts/install.sh --coordinado gon0801/mi-repo
 ```
 
 El modo coordinado fija ambos workflows al SHA candidato del repo central
