@@ -3459,6 +3459,55 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
             [("F7", "Condición invertida en dividir_todo: divide por cero")],
         )
 
+    def test_el_titulo_igual_prefiere_el_vivo_sobre_el_descartado(self):
+        """F1 de ai-review en af981c7: con un descartado y un vivo del mismo
+        título en el archivo, la observación iba al descartado y se perdía."""
+        ancla = domain.AnchorLegacy(path="piloto/caso_t16.py", line=9)
+        previos = [
+            domain.Finding(
+                id="F1",
+                title="ultimo siempre lanza IndexError",
+                severity="High",
+                status=domain.StatusDismissed(command_id=1),
+                primary_anchor=ancla,
+            ),
+            domain.Finding(
+                id="F2",
+                title="ultimo siempre lanza IndexError",
+                severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=ancla,
+            ),
+        ]
+        estado = replace(self._vacio(), findings=previos, next_id=3)
+        entrada = {
+            "id": None,
+            "file": "piloto/caso_t16.py",
+            "line": 9,
+            "severity": "Critical",
+            "title": "ultimo siempre lanza IndexError",
+            "state": "open",
+        }
+        segundo = self._aceptar_entradas(estado, [entrada])
+        self.assertEqual(
+            [(f.id, f.severity, type(f.status).__name__) for f in segundo.findings],
+            [("F1", "High", "StatusDismissed"), ("F2", "Critical", "StatusOpen")],
+        )
+
+    def test_la_identidad_externa_current_tambien_honra_los_ids(self):
+        """F2 de ai-review en af981c7: normalize_policy usa el vocabulario
+        externo; `current` no debe apagar la identidad de la ruta directa."""
+        primero = self._aceptar(self._vacio(), "38017166195")
+        segundo = self._aceptar_entradas(
+            primero,
+            self._segundo_push_con_ids(),
+            policy=domain.ReviewPolicy(finding_identity="current"),
+        )
+        self.assertEqual(
+            [f.id for f in segundo.findings],
+            ["F1", "F2", "F3", "F4", "F5", "F6", "F7"],
+        )
+
     def test_con_anchors_el_id_del_modelo_no_decide(self):
         primero = self._aceptar(self._vacio(), "38017166195")
         segundo = self._aceptar_entradas(

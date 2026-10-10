@@ -1778,7 +1778,8 @@ def _cobertura_persistida(report, plan):
 def _match_como_merge_findings(previos, por_id, obs):
     """Identidad fuera de `anchors`, la misma de la ruta directa (merge_findings):
     el id que el modelo repite para un previo del mismo archivo; si no, el mismo
-    título en el mismo archivo (un descartado gana y no reaparece); si no, nuevo.
+    título en el mismo archivo, prefiriendo el vivo (un descartado solo gana si
+    es el único, y entonces no reaparece); si no, nuevo.
     Sin el respaldo por ruta sola: sin título igual no hay identidad que adivinar.
     """
     reclamado = por_id.get(obs.claimed_id)
@@ -1792,8 +1793,9 @@ def _match_como_merge_findings(previos, por_id, obs):
         and _ruta_primaria(f) == _ruta_primaria(obs)
         and f.title.casefold() == titulo
     ]
-    if iguales:
-        return MatchExisting(id=iguales[0].id)
+    vivos = [f for f in iguales if not isinstance(f.status, StatusDismissed)]
+    if vivos or iguales:
+        return MatchExisting(id=(vivos or iguales)[0].id)
     return MatchNew()
 
 
@@ -1821,8 +1823,11 @@ def accept_report(current, plan, report):
     previos = tuple(current.findings)
     findings = list(previos)
     por_id = {f.id: f for f in previos if f.id}
-    # `titles` es la identidad externa `current` que usa el coordinador.
-    honra_ids = plan.policy is not None and plan.policy.finding_identity == "titles"
+    # `titles` (interno) o `current` (externo, normalize_policy): la del coordinador.
+    honra_ids = plan.policy is not None and plan.policy.finding_identity in (
+        "titles",
+        "current",
+    )
     tocados, next_id = set(), current.next_id
     for obs in report.observations:
         severidad, marca_severidad = _severidad_de(obs.severity)
