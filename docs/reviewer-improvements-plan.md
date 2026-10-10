@@ -26,7 +26,7 @@ Autorización de David, 2026-09-27 (orden de ejecución del plan):
 7. Ejecuta los hooks instalados. Nunca uses `--no-verify`.
 8. Abre el PR para activar CI. Ejecuta la batería completa una vez sobre el SHA final del bloque y conserva el enlace.
 9. Agrupa los hallazgos de revisión en una ronda. Un bloqueo necesita un comando que lo reproduzca. Aplica las reglas de revisión de AGENTS.md.
-10. Para mediciones vivas y releases, incluye la revisión cruzada requerida por el repo. No leas ni imprimas valores de secretos.
+10. Para mediciones vivas y releases, pide el encargo del operador (la revisión cruzada con otra IA se retiró el 2026-10-09). No leas ni imprimas valores de secretos.
 11. Prueba primero la revisión candidata en el repo central. Los consumidores usan `@main`; mergear cambia los tres repositorios.
 12. Deja el PR listo para revisión. Haz merge únicamente si la autorización de ejecución incluye esa operación. La autorización de David (2026-09-27) la incluye: claw mergea todos los bloques con la herramienta de saikit.
 

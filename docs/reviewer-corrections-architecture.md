@@ -298,7 +298,7 @@ Los nombres siguientes organizan la entrega del diseño; no marcan tareas implem
 | E2, evaluación | Independiente | Dos productos con métricas distintas no se mezclan; un par con SHA/repo/tarea distintos se rechaza; ausentes y fallos conservan denominadores; normalización no filtra procedencia obvia. |
 | D0/C0, experimentos | R0, F1, U0 y E2 con baseline suficiente | Reversiones/deletes/rebase/política se comportan como el contrato; calidad y ahorro se miden contra el control antes de activar. |
 
-Durante una futura implementación se ejecutan pruebas focalizadas. Cada bug incluye la regresión que lo distingue. Pre-commit permanece obligatorio. La batería completa y la unión de shards se validan una vez por SHA final de cada bloque de código, reutilizando evidencia válida. Las mediciones vivas requieren la revisión cruzada prevista por el repo. Este documento no ejecuta esas etapas.
+Durante una futura implementación se ejecutan pruebas focalizadas. Cada bug incluye la regresión que lo distingue. Pre-commit permanece obligatorio. La batería completa y la unión de shards se validan una vez por SHA final de cada bloque de código, reutilizando evidencia válida. Las mediciones vivas requieren encargo del operador (la revisión cruzada con otra IA se retiró el 2026-10-09). Este documento no ejecuta esas etapas.
 
 ## Instalación, activación y retorno
 
