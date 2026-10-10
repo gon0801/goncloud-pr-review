@@ -22,3 +22,7 @@ def mediana(valores):
 
 def dividir_todo(valores, divisor):
     return [v / divisor for v in valores if divisor == 0]
+
+
+def primero(lista):
+    return lista[0] if lista else None
