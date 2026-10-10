@@ -456,6 +456,17 @@ class GitHubGlue(unittest.TestCase):
             calls[1][:4], ["api", "-X", "POST", "repos/o/r/issues/7/comments"]
         )
 
+    def test_publish_tells_the_workflow_the_sha_was_reviewed(self):
+        _, output, _ = self.run_cmd("publish", [])
+        self.assertEqual(output, "reviewed=true\n")
+
+    def test_publish_of_a_failed_review_tells_the_workflow_it_was_not_reviewed(self):
+        _, output, posted = self.run_cmd(
+            "publish", [], result={review.ERROR_KEY: "deepseek agotó su cuota"}
+        )
+        self.assertEqual(output, "reviewed=false\n")
+        self.assertIn("No se pudo revisar el commit", posted["body"])
+
     def test_publish_labels_the_provider_that_completed_the_fallback_and_redacts_its_key(
         self,
     ):
@@ -618,7 +629,8 @@ class GitHubGlue(unittest.TestCase):
 FAKE_CLAUDE = textwrap.dedent("""\
     #!/usr/bin/env python3
     import json, os, sys, time
-    time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
+    pausas = json.loads(os.environ.get("FAKE_CLAUDE_SLEEPS") or "{}")
+    time.sleep(float(pausas.get(os.environ.get("ANTHROPIC_MODEL"), os.environ.get("FAKE_CLAUDE_SLEEP", "0"))))
     log = os.environ["FAKE_CLAUDE_LOG"]
     previas = sum(1 for _ in open(log)) if os.path.exists(log) else 0
     registro = {k: os.environ.get(k) for k in
@@ -699,11 +711,14 @@ class ReasoningReplayRecovery(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result_path = Path(tmp) / "result.json"
+            falla = None
             try:
-                review.run_agent(cmd, child_env, result_path, provider, 600, remaining)
+                falla = review.run_agent(
+                    cmd, child_env, result_path, provider, 600, remaining
+                )
             except SystemExit as exc:
                 self.assertEqual(exc.code, 0)
-            result = json.loads(result_path.read_text())
+            result = falla or json.loads(result_path.read_text())
         return result, runner.call_args_list, cmd, child_env
 
     def test_replay_failure_starts_a_new_attempt_and_preserves_success(self):
@@ -718,15 +733,23 @@ class ReasoningReplayRecovery(unittest.TestCase):
             calls, [mock.call(cmd, child_env, 600), mock.call(cmd, child_env, 600)]
         )
 
-    def test_persistent_replay_failure_is_bounded_and_explained(self):
-        result, calls, _, _ = self.run_replies([self.replay_error, self.replay_error])
+    def test_persistent_replay_failure_is_bounded_and_handed_to_the_fallback(self):
+        falla, calls, _, _ = self.run_replies([self.replay_error, self.replay_error])
         self.assertEqual(len(calls), 2)
-        self.assertEqual(result, {review.ERROR_KEY: self.warning})
+        self.assertEqual(
+            falla,
+            review.FallaDelProveedor(
+                "reasoning",
+                "opencode-go rechazó el historial de razonamiento de la "
+                "conversación (reasoning_content)",
+                self.warning,
+            ),
+        )
 
     def test_replay_failure_does_not_retry_without_enough_budget(self):
-        result, calls, _, _ = self.run_replies([self.replay_error], remaining=320)
+        falla, calls, _, _ = self.run_replies([self.replay_error], remaining=320)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(result, {review.ERROR_KEY: self.warning})
+        self.assertEqual(falla.sin_respaldo, self.warning)
 
     def test_other_bad_requests_and_auth_errors_are_not_retried(self):
         for status, message in [
@@ -958,6 +981,106 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
         self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
+
+    def test_persistent_opencode_replay_error_switches_to_deepseek(self):
+        error = ReasoningReplayRecovery.replay_error
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_REPLIES=json.dumps([error, error, OK_REPLY]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [c["ANTHROPIC_MODEL"] for c in calls],
+            ["deepseek-v4.1-flash", "deepseek-v4.1-flash", "deepseek-flash[1m]"],
+        )
+        self.assertEqual(calls[2]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
+        self.assertIn(
+            "ai-review: opencode-go rechazó el historial de razonamiento de la "
+            "conversación (reasoning_content); se cambia a deepseek",
+            proc.stdout,
+        )
+        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
+
+    def test_primary_timeout_switches_to_the_other_provider_when_time_remains(self):
+        proc, calls, result, _, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_SLEEPS=json.dumps({"deepseek-v4.1-flash": 5}),
+            ATTEMPT_TIMEOUT="1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([c["ANTHROPIC_MODEL"] for c in calls], ["deepseek-flash[1m]"])
+        self.assertIn(
+            "ai-review: la revisión con opencode-go excedió el tiempo límite de 1 s; "
+            "se cambia a deepseek",
+            proc.stdout,
+        )
+        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
+
+    def test_primary_timeout_without_time_for_the_fallback_says_so(self):
+        proc, calls, result, _, _ = self.run_agent(
+            OK_REPLY,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_SLEEP="5",
+            ATTEMPT_TIMEOUT="1",
+            REVIEW_BUDGET_SECONDS="320",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo "
+                "límite de 1 s; no queda tiempo para probar deepseek"
+            },
+        )
+
+    def test_unavailable_primary_switches_to_the_other_provider(self):
+        overloaded = {"result": "overloaded", "is_error": True, "api_error_status": 529}
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FALLBACK_API_KEY="sk-go-fallback",
+            FAKE_CLAUDE_REPLIES=json.dumps([overloaded, overloaded, OK_REPLY]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [c["ANTHROPIC_MODEL"] for c in calls],
+            ["deepseek-flash[1m]", "deepseek-flash[1m]", "deepseek-v4.1-flash"],
+        )
+        self.assertEqual(result, dict(OK_REPLY, review_provider="opencode-go"))
+
+    def test_both_providers_failing_name_each_cause(self):
+        error = ReasoningReplayRecovery.replay_error
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_REPLIES=json.dumps(
+                [
+                    error,
+                    error,
+                    {
+                        "result": "API Error: 429 quota exceeded",
+                        "is_error": True,
+                        "api_error_status": 429,
+                    },
+                ]
+            ),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: "opencode-go rechazó el historial de razonamiento "
+                "de la conversación (reasoning_content); deepseek agotó su cuota"
+            },
+        )
 
     def test_opencode_go_runs_deepseek_through_a_local_proxy_that_alone_holds_the_key(
         self,
@@ -1819,6 +1942,17 @@ class TimeBudget(unittest.TestCase):
             (done.returncode, json.loads(done.stdout)["result"], done.stderr.strip()),
             (0, "ok", "aviso en stderr"),
         )
+
+    def test_action_exposes_whether_the_head_was_reviewed(self):
+        action = (ROOT / "action.yml").read_text()
+        publish = action[action.index("- name: Publish sticky comment") :]
+        self.assertEqual(publish.splitlines()[1].strip(), "id: publish")
+        self.assertIn("value: ${{ steps.publish.outputs.reviewed }}", action)
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        cierre = worker[
+            worker.index("- name: cerrar el resultado para el coordinador") :
+        ]
+        self.assertEqual(cierre.splitlines()[1].strip(), "id: cerrar")
 
     def test_action_cache_path_matches_the_install_dirs(self):
         action = (ROOT / "action.yml").read_text()
@@ -2914,6 +3048,43 @@ class Workflows(unittest.TestCase):
         )
         self.assertEqual(paquete["observaciones"], [])
         self.assertEqual(paquete["cobertura"], domain.UNKNOWN)
+
+    def _cerrar(self, resultado):
+        with tempfile.TemporaryDirectory() as work:
+            w = Path(work)
+            (w / "request-package.json").write_text(
+                json.dumps({"request_id": 1, "pr_head_sha": "c" * 40})
+            )
+            (w / "result.json").write_text(json.dumps(resultado))
+            entorno = {
+                "GITHUB_OUTPUT": str(w / "out"),
+                "GITHUB_STEP_SUMMARY": str(w / "summary"),
+            }
+            with mock.patch.dict(os.environ, entorno):
+                review.cmd_close_result(argparse.Namespace(work=work))
+            return tuple(
+                (w / n).read_text() if (w / n).exists() else ""
+                for n in ("out", "summary")
+            )
+
+    def test_close_result_sin_revision_lo_dice_en_outputs_y_resumen(self):
+        salida, resumen = self._cerrar(
+            {
+                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo límite de 900 s"
+            }
+        )
+        self.assertEqual(salida, "reviewed=false\n")
+        self.assertEqual(
+            resumen,
+            "> [!CAUTION]\n> **No se pudo revisar el commit ccccccc:** la revisión "
+            "con opencode-go excedió el tiempo límite de 900 s.\n",
+        )
+
+    def test_close_result_con_revision_lo_dice_en_outputs(self):
+        salida, resumen = self._cerrar(
+            {"result": "ok\nCOVERAGE: complete", "subtype": "success"}
+        )
+        self.assertEqual((salida, resumen), ("reviewed=true\n", ""))
 
     def test_close_result_conserva_costo_y_alcance(self):
         with tempfile.TemporaryDirectory() as work:

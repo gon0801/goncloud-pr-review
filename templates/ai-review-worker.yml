@@ -110,6 +110,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python "$GITHUB_WORKSPACE/review.py" run --work "${RUNNER_TEMP}/ai-review"
       - name: cerrar el resultado para el coordinador
+        id: cerrar
         env:
           API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
           FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

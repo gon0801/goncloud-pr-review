@@ -902,6 +902,13 @@ def set_output(key, value):
         fh.write(f"{key}={value}\n")
 
 
+def informar_revision(revisado):
+    """reviewed=true|false para el workflow: un fail-soft termina en verde y no
+    debe leerse como una revisión del SHA."""
+    if os.environ.get("GITHUB_OUTPUT"):
+        set_output("reviewed", "true" if revisado else "false")
+
+
 def fetch_all_comments(repo, pr):
     out = sh(
         "gh",
@@ -1455,59 +1462,101 @@ def cmd_run(args):
     attempt_timeout = int(
         os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
     )
-    primary_failure = run_with_provider(
+    primaria = run_with_provider(
         name, key, cmd, work, result_path, attempt_timeout, deadline
     )
-    if primary_failure:
-        primary_reason = (
-            f"{name} agotó su cuota"
-            if primary_failure == "quota"
-            else f"el proxy de {name} no arrancó"
-        )
-        fallback_key = os.environ.get("FALLBACK_API_KEY", "")
-        if not fallback_key:
-            soft_fail(
-                result_path,
-                f"{primary_reason}; falta FALLBACK_API_KEY para usar el otro proveedor",
-            )
-            return
-        fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
-        if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
-            soft_fail(
-                result_path,
-                f"{primary_reason}; no queda tiempo para probar {fallback_name}",
-            )
-            return
-        print(f"ai-review: {primary_reason}; se cambia a {fallback_name}", flush=True)
-        cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
-        fallback_failure = run_with_provider(
-            fallback_name,
-            fallback_key,
-            cmd,
-            work,
+    if primaria is None:
+        return
+    fallback_key = os.environ.get("FALLBACK_API_KEY", "")
+    if not fallback_key:
+        soft_fail(result_path, primaria.sin_respaldo)
+        return
+    fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
+    if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
+        soft_fail(
             result_path,
-            attempt_timeout,
-            deadline,
+            f"{primaria.motivo}; no queda tiempo para probar {fallback_name}",
         )
-        if fallback_failure:
-            if primary_failure == fallback_failure == "quota":
-                reason = "ambos proveedores agotaron su cuota"
-            else:
-                fallback_reason = (
-                    f"{fallback_name} agotó su cuota"
-                    if fallback_failure == "quota"
-                    else f"el proxy del respaldo {fallback_name} no arrancó"
-                )
-                reason = f"{primary_reason}; {fallback_reason}"
-            soft_fail(result_path, reason)
-        else:
-            result = json.loads(result_path.read_text())
-            if ERROR_KEY not in result:
-                result["review_provider"] = fallback_name
-                result_path.write_text(json.dumps(result))
+        return
+    print(f"ai-review: {primaria.motivo}; se cambia a {fallback_name}", flush=True)
+    cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
+    respaldo = run_with_provider(
+        fallback_name,
+        fallback_key,
+        cmd,
+        work,
+        result_path,
+        attempt_timeout,
+        deadline,
+        respaldo=True,
+    )
+    if respaldo is None:
+        result = json.loads(result_path.read_text())
+        if ERROR_KEY not in result:
+            result["review_provider"] = fallback_name
+            result_path.write_text(json.dumps(result))
+    elif primaria.tipo == respaldo.tipo == "quota":
+        soft_fail(result_path, "ambos proveedores agotaron su cuota")
+    else:
+        soft_fail(result_path, f"{primaria.motivo}; {respaldo.motivo}")
 
 
-def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadline):
+@dataclass(frozen=True)
+class FallaDelProveedor:
+    """Un proveedor no entregó la revisión por una causa propia de él (cuota,
+    proxy, historial de razonamiento, tiempo, caída): el otro proveedor sí puede
+    intentarlo. Los errores permanentes (llave, modelo) no llegan aquí."""
+
+    tipo: str
+    motivo: str
+    sin_respaldo: str
+
+    @classmethod
+    def cuota(cls, nombre):
+        motivo = f"{nombre} agotó su cuota"
+        return cls("quota", motivo, f"{motivo}; {SIN_LLAVE_DE_RESPALDO}")
+
+    @classmethod
+    def proxy(cls, nombre, respaldo=False):
+        motivo = f"el proxy {'del respaldo' if respaldo else 'de'} {nombre} no arrancó"
+        return cls("proxy", motivo, f"{motivo}; {SIN_LLAVE_DE_RESPALDO}")
+
+    @classmethod
+    def razonamiento(cls, nombre):
+        return cls(
+            "reasoning",
+            f"{nombre} rechazó el historial de razonamiento de la conversación "
+            "(reasoning_content)",
+            "el proveedor rechazó el historial de razonamiento de la conversación "
+            "(reasoning_content); no se pudo completar la revisión",
+        )
+
+    @classmethod
+    def tiempo(cls, nombre, segundos):
+        # Otro intento con el mismo proveedor tardaría lo mismo; el otro proveedor no.
+        return cls(
+            "timeout",
+            f"la revisión con {nombre} excedió el tiempo límite de {segundos} s",
+            f"la revisión excedió el tiempo límite de {segundos} s; no se reintenta "
+            "porque otro intento tardaría lo mismo",
+        )
+
+    @classmethod
+    def no_disponible(cls, nombre):
+        return cls(
+            "unavailable",
+            f"{nombre} falló en todos los intentos",
+            "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
+        )
+
+
+SIN_LLAVE_DE_RESPALDO = "falta FALLBACK_API_KEY para usar el otro proveedor"
+
+
+def run_with_provider(
+    name, key, cmd, work, result_path, attempt_timeout, deadline, respaldo=False
+):
+    """None si dejó un resultado en result_path; FallaDelProveedor si no."""
     provider = PROVIDERS[name]
     model = provider["model"]
     proxy = None
@@ -1515,7 +1564,7 @@ def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadli
         session = f"{env('REPO')}#{env('PR_NUMBER')}-{os.environ.get('GITHUB_RUN_ID', 'local')}"
         started = start_proxy(work, provider, key, session)
         if started is None:
-            return "proxy-failed"
+            return FallaDelProveedor.proxy(name, respaldo)
         proxy, base_url, token = started
         auth = {"ANTHROPIC_AUTH_TOKEN": token}
     else:
@@ -1549,11 +1598,7 @@ def run_with_provider(name, key, cmd, work, result_path, attempt_timeout, deadli
     )
 
     try:
-        return (
-            "quota"
-            if run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
-            else None
-        )
+        return run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline)
     finally:
         if proxy:
             proxy.terminate()
@@ -1615,8 +1660,11 @@ def run_in_group(cmd, env, timeout):
 
 
 def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
+    """None si dejó un resultado en result_path; FallaDelProveedor si este
+    proveedor no pudo revisar. Lo que ningún proveedor arreglaría termina en
+    soft_fail aquí mismo."""
     attempts = int(os.environ.get("ATTEMPTS", "2"))
-    failure_reason = None
+    falla = None
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
         if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
@@ -1644,12 +1692,8 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
                 file=sys.stderr,
             )
             print_proxy_log(result_path.parent)
-            soft_fail(
-                result_path,
-                f"la revisión excedió el tiempo límite de {timeout} s; no se reintenta porque otro intento tardaría lo mismo",
-            )
-            return
-        failure_reason = None
+            return FallaDelProveedor.tiempo(name, timeout)
+        falla = FallaDelProveedor.no_disponible(name)
         sys.stderr.write(proc.stderr[-4000:])
         try:
             result = json.loads(proc.stdout)
@@ -1674,7 +1718,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
             )
             print_proxy_log(result_path.parent)
             if quota_error(result):
-                return True
+                return FallaDelProveedor.cuota(name)
             reasoning_replay_error = (
                 name == "opencode-go"
                 and result.get("api_error_status") == 400
@@ -1682,10 +1726,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
                 in (result.get("result") or "")
             )
             if reasoning_replay_error:
-                failure_reason = (
-                    "el proveedor rechazó el historial de razonamiento de la conversación "
-                    "(reasoning_content); no se pudo completar la revisión"
-                )
+                falla = FallaDelProveedor.razonamiento(name)
             elif result.get("api_error_status") in (400, 401, 403, 404):
                 soft_fail(
                     result_path,
@@ -1694,11 +1735,7 @@ def run_agent(cmd, child_env, result_path, name, attempt_timeout, deadline):
                 return
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", RETRY_DELAY)))
-    soft_fail(
-        result_path,
-        failure_reason
-        or "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
-    )
+    return falla or FallaDelProveedor.no_disponible(name)
 
 
 def quota_error(result):
@@ -2283,6 +2320,7 @@ def cmd_publish(args):
     comments = fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
 
+    revisado = False
     if ERROR_KEY in result:
         # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
         reason = result[ERROR_KEY]
@@ -2342,6 +2380,7 @@ def cmd_publish(args):
                 ],
             )
         else:
+            revisado = True
             body = redact(
                 compose(result, manifest, sha=head, provider=name, findings=findings),
                 [
@@ -2382,6 +2421,7 @@ def cmd_publish(args):
     if summary:
         with open(summary, "a") as fh:
             fh.write(summary_text + "\n")
+    informar_revision(revisado)
 
 
 def _parser():
@@ -2962,6 +3002,14 @@ def cmd_close_result(args):
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
+    informar_revision(ERROR_KEY not in paquete)
+    resumen = os.environ.get("GITHUB_STEP_SUMMARY")
+    if ERROR_KEY in paquete and resumen:
+        with open(resumen, "a") as fh:
+            aviso = caution_banner(
+                paquete[ERROR_KEY], paquete.get("pr_head_sha") or "", has_previous=False
+            )
+            fh.write(aviso + "\n")
 
 
 # Lo que el comentario visible necesita del manifest del worker; el diff y el
