@@ -7,13 +7,14 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
-> **Estado del modo coordinado.** Activo solo en el repo central (#90). La
-> ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`) pasó los casos
-> 1 a 5 después de que la ronda 2 encontrara pérdida de hallazgos, pero ninguno
-> ejerció una resolución: el coordinador no verificaba los «resolved» del modelo
-> (#94 lo arregla, con el central activo). Los consumidores no se despliegan sin
-> decisión del operador, después de #92 y #94. Hasta que se quite esa barrera,
-> `install.sh --coordinado` se niega sin `AI_REVIEW_PILOTO=1`.
+> **Estado del modo coordinado.** Activo solo en el repo central (#96, CLI
+> `dff2ad3`). La ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
+> pasó los casos 1 a 5 después de que la ronda 2 encontrara pérdida de
+> hallazgos. La resolución sigue sin verse en el central: el coordinador ya la
+> verifica (#94), pero en la ronda 3b el modelo respondió sin bloque en las
+> revisiones con memoria (#98). Los consumidores no se despliegan sin decisión
+> del operador. Hasta que se quite esa barrera, `install.sh --coordinado` se
+> niega sin `AI_REVIEW_PILOTO=1`.
 
 ## Qué instala el modo coordinado
 
@@ -103,7 +104,8 @@ la cadena funciona tras seis arreglos pero sin capa visible; volvió a current
 (#79, #83) el publicador perdía 5 de 6 hallazgos por revisión; el central
 volvió al revisor directo (#86). Ronda 3 (mismo documento): con #87, #88 y #89
 el central reactivó el coordinado (#90) y pasaron los casos 1 a 5, sin ejercer
-una resolución (el coordinador no las verificaba; #94); sigue activo
+una resolución (el coordinador no las verificaba, #94; en la ronda 3b el modelo
+respondió sin bloque con memoria, #98); sigue activo
 en el central. Los consumidores (summonaikit-claude, goncloud-openclaw,
 goncloud-Orbit) quedan a decisión del operador después de #92. El corte y
 el retorno mecánicos son los que describe el procedimiento de T11 de arriba.

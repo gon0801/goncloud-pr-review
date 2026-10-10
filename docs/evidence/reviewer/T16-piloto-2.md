@@ -145,3 +145,47 @@ operador decidió arreglar hacia adelante con el central activo (#94). La fila
 «T16 piloto» queda abierta hasta ejercer una resolución en el central con #94
 mergeado. Los consumidores (summonaikit-claude, goncloud-openclaw,
 goncloud-Orbit) siguen siendo decisión del operador.
+
+---
+
+# Ronda 3b: caso de resolución (2026-10-10)
+
+Con #92, #94 (delta del worker) y #95 (historia completa) mergeados, el
+operador reinstaló el central con el #96 (merge `13c8227`, CLI fijado a
+`dff2ad3cf02ad64baddb1205984bd2f744187e9f`). PR de prueba: #97
+(`piloto/t16-resolucion`), con `piloto/resolucion.py` y tres defectos
+(`promedio` con lista vacía, `ultimo` fuera de rango y `es_par` invertido). La
+rama sale de `18b2fce`, detrás de `main`, y el PR tomó como base `13c8227`: es
+la misma condición de base desfasada que hizo tronar al worker del #94, sin
+mergear nada.
+
+| Paso | Resultado | Evidencia |
+|---|---|---|
+| Push 1, tres defectos | **Pasa.** El worker no truena con base desfasada (`BASE_SHA=13c8227`, head bifurcado de `18b2fce`; `full/no-prev`). 4 observaciones → 4 hallazgos (F1 `ultimo`, F2 `es_par`, F3 `promedio`, F4 sin pruebas), con visible y cabecera en orden. | Push `0c459f3`; worker 38028459321 ($0.1747, 15 turnos) |
+| Push 2, arregla `ultimo` | **No se ejerce la resolución.** El worker usó la memoria (`full/forced-full-t16`, `prev_sha=0c459f3`, `changed_files=[piloto/resolucion.py]`) y el modelo escribió «Hallazgo previo ya resuelto» para F1, pero en prosa: sin bloque ni `COVERAGE` (`model_ok=False`). El sistema degradó como debe: SHA `partial` con aviso visible y hallazgos conservados, así que F1 sigue abierto. | Push `dff65d7`; worker 38028855399 ($0.2298) |
+| Push 3, toca el mismo archivo | **Igual que el push 2.** Delta `dff65d7..7aa0da4` con el archivo; el modelo volvió a responder en prosa sin bloque. | Push `7aa0da4`; worker 38029088276 ($0.1234) |
+
+Lo que sí quedó probado:
+- **#95:** el worker ya no truena con base desfasada.
+- **#92:** la cabecera queda en orden. El push 2 salió `forced-full-t16`, no `incomplete-prev`.
+- **#89:** la memoria llega al worker.
+
+Lo que falta: con hallazgos previos en modo completo, el modelo omitió el bloque
+en 3 de 5 revisiones (ronda 3 caso 3; #97 pushes 2 y 3), y sin memoria nunca.
+El mensaje de usuario solo recordaba el formato del bloque en incremental. #98
+lo agrega a la revisión completa con memoria. Es un cambio de prompt: se
+comprueba repitiendo este caso con #98 instalado en el central.
+
+Costo de la ronda 3b: $0.1747 + $0.2298 + $0.1234 = **$0.5279**.
+
+Sobre la solicitud `pending` del #94 (worker 38026231461, que falló antes de
+subir resultado): es benigna. El #94 está mergeado y no emite
+`pull_request_target`, y un comentario sin comando no despacha nada. Solo un
+`workflow_dispatch` manual con `pr_number=94`, o un comando nuevo en ese PR, la
+reemplazaría por una revisión del head mergeado.
+
+## Decisión de la ronda 3b
+
+«T16 piloto» sigue abierta hasta ver un `StatusResolved` en el central con #98
+instalado. El coordinado sigue activo en el central, y su degradación ante un
+modelo sin bloque es honesta: `partial`, aviso y hallazgos conservados.
