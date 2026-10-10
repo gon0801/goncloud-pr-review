@@ -2259,6 +2259,22 @@ class Workflows(unittest.TestCase):
         self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
         self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
 
+    def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
+        # Orbit #419/#420: dos PRs nuevos piden la solicitud 1 a la vez; con el
+        # grupo sin PR, GitHub cancelaba el worker en espera y uno quedaba sin revisión.
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        grupo = re.search(r"^concurrency:\n  group: (.+)$", worker, re.M).group(1)
+
+        def resolver(pr, solicitud):
+            return (
+                grupo.replace("${{ github.repository }}", "o/r")
+                .replace("${{ inputs.pr_number }}", pr)
+                .replace("${{ inputs.request_id }}", solicitud)
+            )
+
+        self.assertNotEqual(resolver("419", "1"), resolver("420", "1"))
+        self.assertEqual(resolver("419", "1"), resolver("419", "1"))
+
     def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         pasos = (

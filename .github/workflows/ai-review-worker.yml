@@ -34,7 +34,7 @@ permissions:
 
 # La recuperación la decide el coordinador re-autorizando, no este grupo.
 concurrency:
-  group: ai-review-worker-${{ github.repository }}-${{ inputs.request_id }}
+  group: ai-review-worker-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.request_id }}
   cancel-in-progress: false
 
 # El display_title de este run es la entrada del resultado en el grupo del PR.
