@@ -666,7 +666,11 @@ FAKE_LITELLM = textwrap.dedent("""\
     http.server.HTTPServer(("127.0.0.1", int(args[args.index("--port") + 1])), Ok).serve_forever()
 """)
 
-OK_REPLY = {"result": "ok\nCOVERAGE: complete", "subtype": "success"}
+# Una revisión entregada siempre trae su bloque (vacío si no hay hallazgos) y COVERAGE.
+REVISION_COMPLETA = (
+    'ok\n<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: complete'
+)
+OK_REPLY = {"result": REVISION_COMPLETA, "subtype": "success"}
 
 
 def free_port():
@@ -779,6 +783,7 @@ class RunAgent(unittest.TestCase):
         provider="deepseek",
         api_key="sk-go-key-123",
         litellm_script=None,
+        explicar=None,
         **extra_env,
     ):
         with tempfile.TemporaryDirectory() as tmp:
@@ -794,6 +799,10 @@ class RunAgent(unittest.TestCase):
             work = tmp / "work"
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
+            if explicar:
+                (work / "request-package.json").write_text(
+                    json.dumps({"kind": "explain", "finding_id": explicar})
+                )
             port = free_port()
             env = dict(
                 os.environ,
@@ -928,11 +937,11 @@ class RunAgent(unittest.TestCase):
             },
         )
         self.assertIsNone(proxy)
-        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["result"], REVISION_COMPLETA)
 
     def test_opencode_replay_error_restarts_cli(self):
         exitoso = {
-            "result": "ok\nCOVERAGE: complete",
+            "result": REVISION_COMPLETA,
             "subtype": "success",
             "num_turns": 12,
         }
@@ -1176,7 +1185,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(calls[1]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
         self.assertIsNone(calls[1]["ANTHROPIC_AUTH_TOKEN"])
         self.assertTrue(all("FALLBACK_API_KEY" not in call["env"] for call in calls))
-        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["result"], REVISION_COMPLETA)
         self.assertEqual(result["review_provider"], "deepseek")
 
     def test_deepseek_quota_switches_to_opencode(self):
@@ -1262,7 +1271,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-flash[1m]"]
         )
-        self.assertEqual(result["result"], "ok\nCOVERAGE: complete")
+        self.assertEqual(result["result"], REVISION_COMPLETA)
         self.assertEqual(result["review_provider"], "deepseek")
 
     def test_fallback_proxy_failure_names_both_failed_providers(self):
@@ -1287,8 +1296,94 @@ class RunAgent(unittest.TestCase):
             {"result": "", "subtype": "error_max_turns", "is_error": True}
         )
         self.assertEqual(proc.returncode, 0)
-        self.assertEqual(len(calls), 1)
+        # Sin bloque: una vuelta de reparación; si tampoco lo entrega, queda parcial.
+        self.assertEqual(len(calls), 2)
         self.assertEqual(result["subtype"], "error_max_turns")
+        self.assertEqual(result["block_repair"], "failed")
+
+    SIN_BLOQUE = {
+        "result": "**Veredicto:** 1 High.\n\nF1: división por cero en `calc.py:3`.",
+        "subtype": "success",
+        "total_cost_usd": 0.2,
+        "num_turns": 30,
+    }
+    BLOQUE = (
+        '<!-- ai-review:findings={"findings":[{"id":"F-new","file":"calc.py","line":3,'
+        '"severity":"High","title":"División por cero","state":"open"}]} -->'
+    )
+
+    def test_sin_bloque_una_vuelta_de_reparacion_completa_la_revision(self):
+        reparada = {
+            "result": f"{self.BLOQUE}\nCOVERAGE: complete",
+            "subtype": "success",
+            "total_cost_usd": 0.03,
+            "num_turns": 1,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([self.SIN_BLOQUE, reparada]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 2)
+        argv = calls[1]["argv"]
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "4")
+        self.assertIn("RESPUESTA_PREVIA", argv[argv.index("-p") + 1])
+        self.assertIn("división por cero", argv[argv.index("-p") + 1])
+        self.assertEqual(
+            result["result"],
+            f"{self.SIN_BLOQUE['result']}\n\n{self.BLOQUE}\nCOVERAGE: complete",
+        )
+        self.assertEqual(result["block_repair"], "ok")
+        self.assertAlmostEqual(result["total_cost_usd"], 0.23)
+        self.assertEqual(result["num_turns"], 31)
+        modelo = review.parse_model_findings(result["result"])
+        self.assertEqual(
+            [f["title"] for f in modelo["findings"]], ["División por cero"]
+        )
+
+    def test_si_la_reparacion_tampoco_trae_bloque_queda_parcial(self):
+        prosa = {
+            "result": "Sigo sin bloque.",
+            "subtype": "success",
+            "total_cost_usd": 0.02,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([self.SIN_BLOQUE, prosa]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
+        self.assertEqual(result["block_repair"], "failed")
+        self.assertAlmostEqual(result["total_cost_usd"], 0.22)
+
+    def test_sin_tiempo_no_se_intenta_la_reparacion(self):
+        proc, calls, result, _, _ = self.run_agent(
+            self.SIN_BLOQUE, provider="deepseek", REVIEW_BUDGET_SECONDS="100"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result, self.SIN_BLOQUE)
+        self.assertIn("no queda tiempo para repararlo", proc.stderr)
+
+    def test_con_bloque_no_hay_reparacion(self):
+        proc, calls, result, _, _ = self.run_agent(OK_REPLY, provider="deepseek")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result, OK_REPLY)
+
+    def test_una_explicacion_no_se_repara(self):
+        explicacion = {"result": "F1 pasa porque…", "subtype": "success"}
+        proc, calls, result, _, _ = self.run_agent(
+            explicacion,
+            provider="deepseek",
+            explicar="F1",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result, explicacion)
 
     def test_empty_api_key_fails_soft_without_calling_claude(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1870,7 +1965,7 @@ class TimeBudget(unittest.TestCase):
             return proxy, "http://127.0.0.1:4000", "sk-token"
 
         def fake_run_agent(
-            cmd, child_env, result_path, name, attempt_timeout, deadline
+            cmd, child_env, result_path, name, attempt_timeout, deadline, attempts=None
         ):
             captured["deadline"] = deadline
             result_path.write_text(json.dumps(OK_REPLY))
