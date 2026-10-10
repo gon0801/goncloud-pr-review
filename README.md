@@ -34,7 +34,8 @@ ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado
 
 Modo coordinado (coordinador + worker con el escritor anterior retirado, en
 un único commit atómico; ver `docs/reviewer-rollout.md` para el corte y el
-retorno). Pasó el piloto T16 y es el modo del repo central:
+retorno). Pasó el piloto T16 y es el modo del repo central; activarlo en un
+consumidor es decisión del operador:
 
 ```bash
 ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo

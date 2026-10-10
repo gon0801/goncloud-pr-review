@@ -29,9 +29,9 @@ ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
   `.github/workflows/ai-review-worker.yml`, retira el escritor anterior
   `.github/workflows/ai-review.yml` y conserva cualquier otro archivo.
 - Ambos workflows fijan el CLI confiable a `gon0801/goncloud-pr-review`
-  en `ACTION_SHA` (checkout con `repository` y `ref` explícitos). El piloto
-  queda clavado a ese SHA candidato: un merge de `main` del repo central no
-  cambia lo que ejecutan los consumidores instalados.
+  en `ACTION_SHA` (checkout con `repository` y `ref` explícitos). Cada repo
+  instalado queda clavado a ese SHA: un merge de `main` del repo central no
+  cambia lo que ejecuta hasta que se reinstala.
 - Si la rama cambió durante la instalación, el instalador reintenta sobre la
   punta nueva sin forzar; si no logra en tres intentos, falla con error.
 - El conjunto lee los mismos secrets que el escritor que el retorno repone:
@@ -60,9 +60,9 @@ sin publicar. Consumidores sin configuración nueva se comportan igual que antes
    (schema 3, generación actual, descartes y solicitudes pendientes
    presentes). `review.py reconcile` sobre un evento sin admisión es el
    verificador: publica sin trabajo nuevo o falla alto.
-4. **Activar el coordinador.** Fusiona el PR del conjunto. El piloto corre
-   sobre el SHA candidato: prueba primero revisiones fijas en el repo central
-   antes de fusionar en un consumidor.
+4. **Activar el coordinador.** Fusiona el PR del conjunto. En un consumidor,
+   solo con la activación aprobada por el operador y con un SHA que ya corre
+   en el repo central.
 
 ## Retorno: del coordinador al escritor compatible
 
