@@ -948,6 +948,7 @@ class CoordinadorCli(unittest.TestCase):
             "workflow_run": {
                 "id": 77,
                 "name": "ai-review-worker",
+                "path": ".github/workflows/ai-review-worker.yml",
                 "head_branch": "main",
                 "head_sha": "f" * 40,
                 "run_attempt": 1,
@@ -994,6 +995,7 @@ class CoordinadorCli(unittest.TestCase):
             "workflow_run": {
                 "id": 77,
                 "name": "ai-review-worker",
+                "path": ".github/workflows/ai-review-worker.yml",
                 "head_branch": "fork-de-atacante",
                 "head_sha": "1" * 40,
                 "run_attempt": 1,
@@ -1045,6 +1047,7 @@ class CoordinadorCli(unittest.TestCase):
             "workflow_run": {
                 "id": 77,
                 "name": "ai-review-worker",
+                "path": ".github/workflows/ai-review-worker.yml",
                 "head_branch": "main",
                 "head_sha": "f" * 40,
                 "run_attempt": 1,
@@ -1091,6 +1094,91 @@ class CoordinadorCli(unittest.TestCase):
         self.assertEqual(len(falso.patches), 1)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.pending_requests, [])
+
+    def _reconcile_workflow_run(self, workflow_run):
+        estado = snapshot_base(generation=1)
+        digest = review.digest_de_politica(review.politica_de_revision())
+        target = domain.ReviewTarget(
+            repository="o/r",
+            pr_number=1,
+            head_sha="c" * 40,
+            base_sha="b" * 40,
+            policy_digest=digest,
+        )
+        creada = domain.reconcile(
+            estado, domain.RequestReview(origin=PUSH, target=target), hechos(), POLICY
+        )
+        falso = _ComentarioFalso(
+            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
+        )
+        artifact = {
+            "request_id": 1,
+            "run_id": 77,
+            "attempt": 1,
+            "pr_head_sha": "c" * 40,
+            "policy_digest": digest,
+            "observaciones": [],
+            "cobertura": "complete",
+        }
+
+        def falso_sh(*args, **kw):
+            if any("commits/" in str(a) for a in args):
+                return mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+            return mock.Mock(
+                stdout=json.dumps(
+                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                )
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "result.json").write_text(json.dumps(artifact))
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"workflow_run": workflow_run}))
+            with self._entorno(
+                tmp,
+                GITHUB_EVENT_NAME="workflow_run",
+                GITHUB_EVENT_PATH=str(payload_path),
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=falso_sh):
+                        try:
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        except SystemExit as exc:
+                            return falso, exc.code
+        return falso, None
+
+    def test_workflow_run_con_run_name_identifica_el_worker_por_path(self):
+        # Con run-name, "name" y "display_title" traen el título del run (el PR).
+        falso, salida = self._reconcile_workflow_run(
+            {
+                "id": 77,
+                "name": "1",
+                "display_title": "1",
+                "path": ".github/workflows/ai-review-worker.yml",
+                "head_branch": "main",
+                "head_sha": "f" * 40,
+                "run_attempt": 1,
+            }
+        )
+        self.assertIsNone(salida)
+        self.assertEqual(len(falso.patches), 1)
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertEqual(carga.snapshot.pending_requests, [])
+
+    def test_workflow_run_que_imita_el_nombre_desde_otro_workflow_se_rechaza(self):
+        falso, salida = self._reconcile_workflow_run(
+            {
+                "id": 77,
+                "name": "ai-review-worker",
+                "display_title": "ai-review-worker",
+                "path": ".github/workflows/otro.yml",
+                "head_branch": "main",
+                "head_sha": "f" * 40,
+                "run_attempt": 1,
+            }
+        )
+        self.assertEqual(salida, 1)
+        self.assertEqual(falso.patches, [])
 
     def test_sticky_legado_crea_solicitud_y_conserva_hallazgos(self):
 

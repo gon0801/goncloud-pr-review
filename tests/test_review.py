@@ -3309,6 +3309,7 @@ class Workflows(unittest.TestCase):
                         "workflow_run": {
                             "id": 77,
                             "name": "ai-review-worker",
+                            "path": ".github/workflows/ai-review-worker.yml",
                             "head_branch": "main",
                             "head_sha": "f" * 40,
                             "run_attempt": 1,

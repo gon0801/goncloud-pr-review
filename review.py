@@ -2644,11 +2644,19 @@ def metadatos_del_run(repo, run_id, attempt):
     """Metadatos del run del worker leídos de la API, con la forma del payload
     de workflow_run. El worker avisa por workflow_dispatch porque un run
     despachado con GITHUB_TOKEN no dispara workflow_run al terminar."""
-    datos = json.loads(
-        sh("gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}").stdout
+    return forma_del_run(
+        json.loads(
+            sh(
+                "gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+            ).stdout
+        )
     )
-    # Con run-name, la API devuelve en "name" el título del run; el workflow
-    # sale del path, que el título no puede imitar.
+
+
+def forma_del_run(datos):
+    """Un run (API o payload de workflow_run) en la forma que autentica el
+    coordinador. Con run-name, "name" trae el título del run; el workflow sale
+    del path, que el título no puede imitar."""
     ruta = datos.get("path") or ""
     return {
         "id": datos.get("id"),
@@ -2717,7 +2725,7 @@ def cmd_reconcile(args):
             )
         else:
             payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            wr = payload.get("workflow_run") or {}
+            wr = forma_del_run(payload.get("workflow_run") or {})
         artifact = json.loads((Path(args.work) / "result.json").read_text())
         solicitud = next(
             (r for r in current.pending_requests if r.id == artifact.get("request_id")),
