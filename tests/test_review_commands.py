@@ -579,6 +579,145 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertEqual(carga.snapshot.command_cursor, 5)
         self.assertIsInstance(carga.snapshot.findings[0].status, domain.StatusDismissed)
 
+    REVISION_PREVIA = {
+        "result": "Texto original del revisor.\nCOVERAGE: complete",
+        "manifest": {"reviewed": ["a.py", "b.py"], "excluded": []},
+        "review_provider": "opencode-go",
+        "model_ok": True,
+    }
+
+    def _visible_previo(self, estado):
+        # Comentario de la última revisión, en el SHA a…a; el head vivo es c…c.
+        return review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+            domain.encode_snapshot(estado).block, ""
+        )
+
+    def _pr_api(self, *args, **kw):
+        if any("commits/" in str(a) for a in args):
+            return mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+        return mock.Mock(
+            stdout=json.dumps({"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}})
+        )
+
+    def test_descartar_rerenderiza_el_veredicto_visible(self):
+        falso = self._falso(
+            self._visible_previo(snapshot_base()), [(5, "ai-review: descartar F1")]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            with self._entorno(
+                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        with mock.patch.object(
+                            review, "collaborator_permission", return_value="write"
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        cuerpo = falso.leer()[0]["body"]
+        self.assertIn(f"<!-- ai-review:sha={'a' * 40} -->", cuerpo)
+        self.assertIn("**Veredicto:** 1 Low abierto (1 descartado).", cuerpo)
+        self.assertEqual(cuerpo.count("**Veredicto:**"), 1)
+        self.assertIn(
+            "## Nuevos en este push\n\n- ⚪ Low · `b.py:2` · Fuga B · F2\n\n"
+            "## Siguen abiertos\n\nNinguno.\n\n"
+            "<details><summary>Descartados (1)</summary>\n\n"
+            "- 🟠 High · `a.py:1` · Fuga A · F1",
+            cuerpo,
+        )
+        self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
+
+    def test_rerender_sin_cambios_reproduce_el_comentario(self):
+        estado = snapshot_base()
+        original = self._visible_previo(estado)
+        despues = domain.replace(estado, command_cursor=9)
+        decision = domain.Commit(snapshot=despues)
+        falso = self._falso(original, [])
+        review.publish_checkpoint(
+            decision,
+            {"id": 7, "body": original},
+            falso,
+            visible=review.estado_visible(despues),
+        )
+        self.assertEqual(
+            falso.patches,
+            [
+                (
+                    7,
+                    original.replace(
+                        domain.encode_snapshot(estado).block,
+                        review._cuerpo_con_checkpoint(decision),
+                    ),
+                )
+            ],
+        )
+
+    def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
+        digest = review.digest_de_politica(review.politica_de_revision())
+        target = domain.ReviewTarget(
+            repository="o/r",
+            pr_number=1,
+            head_sha="c" * 40,
+            base_sha="b" * 40,
+            policy_digest=digest,
+        )
+        con_pedido, work, _ = domain.procesar_comandos(
+            snapshot_base(), (comando(5, "explicar", "F1"),), permisos_ok, target
+        )
+        falso = self._falso(self._visible_previo(con_pedido), [])
+        artifact = {
+            "request_id": work[0].id,
+            "kind": "explain",
+            "finding_id": "F1",
+            "run_id": 77,
+            "attempt": 1,
+            "pr_head_sha": "c" * 40,
+            "policy_digest": digest,
+            "observaciones": [],
+            "cobertura": domain.UNKNOWN,
+            "result": "La fuga ocurre porque el token se registra.\n"
+            "## Detalle del revisor\nimitado\nCOVERAGE: complete",
+        }
+        evento = {
+            "workflow_run": {
+                "id": 77,
+                "name": "1",
+                "path": ".github/workflows/ai-review-worker.yml",
+                "head_branch": "main",
+                "head_sha": "f" * 40,
+                "run_attempt": 1,
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "result.json").write_text(json.dumps(artifact))
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps(evento))
+            with self._entorno(
+                GITHUB_EVENT_NAME="workflow_run", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+        cuerpo = falso.leer()[0]["body"]
+        self.assertIn(
+            "## Explicación de F1 · Fuga A\n\n"
+            "La fuga ocurre porque el token se registra.\n#### Detalle del revisor\nimitado"
+            "\n\n## Detalle del revisor\n\nTexto original del revisor.",
+            cuerpo,
+        )
+        self.assertIn(f"<!-- ai-review:sha={'a' * 40} -->", cuerpo)
+        self.assertEqual(
+            [
+                linea
+                for linea in cuerpo.split("\n")
+                if linea == "## Detalle del revisor"
+            ],
+            ["## Detalle del revisor"],
+        )
+        carga = domain.read_snapshot(cuerpo)
+        self.assertEqual(carga.snapshot.pending_requests, [])
+
     def test_permiso_que_falla_retiene_sin_escribir(self):
         estado = domain.Snapshot(
             schema=3,

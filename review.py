@@ -2882,6 +2882,19 @@ def cmd_reconcile(args):
             {f.id for f in current.findings},
             artifact.get("pr_head_sha") or head,
         )
+    elif isinstance(decision, review_domain.Commit) and event_name == "issue_comment":
+        visible = estado_visible(decision.snapshot)
+    elif (
+        artifact is not None
+        and isinstance(decision, review_domain.Commit)
+        and solicitud.kind == "explain"
+        and ERROR_KEY not in artifact
+        and review_domain._target_vigente(solicitud, facts, policy)
+    ):
+        visible = estado_visible(
+            decision.snapshot,
+            (solicitud.finding_id, texto_de_explicacion(artifact)),
+        )
     observado = sticky if sticky else None
     resultado = publish_checkpoint(
         decision, observado, adaptador, login=login, visible=visible
@@ -3083,6 +3096,119 @@ def revision_visible(artifact, snapshot, previos, head):
                 "completion": snapshot.completion,
             },
         )
+
+    return armar
+
+
+TITULO_DE_REVISION = "### Revisión automática · "
+DETALLE_DEL_REVISOR = "## Detalle del revisor"
+EXPLICACION_PREFIX = "## Explicación de "
+EXPLICACION_MAX = 8000
+EXPLICACIONES_VISIBLES = 3
+
+
+def texto_de_explicacion(artifact):
+    """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
+    Sus encabezados bajan a ####: la prosa no puede imitar las secciones del
+    comentario que el re-render busca."""
+    texto, _, _ = split_coverage(artifact.get("result") or "")
+    texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
+    texto = re.sub(r"^#{1,6} ", "#### ", texto, flags=re.M)
+    if len(texto) > EXPLICACION_MAX:
+        texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
+    return texto or "_El revisor no devolvió texto._"
+
+
+def estado_visible(snapshot, explicacion=None):
+    """Re-render del comentario cuando un comando o una explicación cambian la
+    memoria sin una revisión nueva: veredicto y secciones salen del snapshot;
+    los marcadores sha=/completion=, los avisos, el título y el detalle del
+    revisor se conservan (nada de esto acredita un SHA). explicacion es
+    (finding_id, texto). Un cuerpo sin la forma de una revisión conserva el
+    resto tal cual."""
+    merged = review_domain.hallazgos_legacy(snapshot)
+    titulos = {f["id"]: f["title"] for f in merged}
+    nueva = []
+    if explicacion is not None:
+        fid, texto = explicacion
+        titulo = html.escape(titulos.get(fid, ""), quote=False)
+        nueva = [
+            f"{EXPLICACION_PREFIX}{fid}" + (f" · {titulo}" if titulo else ""),
+            "",
+            texto,
+        ]
+
+    def armar(bloque, resto):
+        lineas = resto.split("\n") if resto else []
+        titulo = next(
+            (
+                i
+                for i, linea in enumerate(lineas)
+                if linea.startswith(TITULO_DE_REVISION)
+            ),
+            None,
+        )
+        detalle = next(
+            (i for i, linea in enumerate(lineas) if linea == DETALLE_DEL_REVISOR), None
+        )
+        veredicto = (
+            next(
+                (i for i in range(titulo, detalle) if VERDICT_RE.match(lineas[i])),
+                None,
+            )
+            if titulo is not None and detalle is not None and titulo < detalle
+            else None
+        )
+        if veredicto is None:
+            cuerpo = [MARKER, bloque] + ([resto] if resto else [])
+            return "\n".join(cuerpo + (["", *nueva] if nueva else []))
+        marcas = (SHA_PREFIX, COMPLETION_PREFIX)
+        previo = [linea for linea in lineas[:titulo] if not linea.startswith(marcas)]
+        while previo and not previo[0]:
+            previo.pop(0)
+        while previo and not previo[-1]:
+            previo.pop()
+        region = lineas[veredicto:detalle]
+        nuevos = []
+        if "## Nuevos en este push" in region and "## Siguen abiertos" in region:
+            tramo = region[
+                region.index("## Nuevos en este push") : region.index(
+                    "## Siguen abiertos"
+                )
+            ]
+            nuevos = [
+                m.group(1) for linea in tramo if (m := re.search(r" · (\S+)$", linea))
+            ]
+        explicaciones = []
+        for linea in region:
+            if linea.startswith(EXPLICACION_PREFIX):
+                explicaciones.append([linea])
+            elif explicaciones:
+                explicaciones[-1].append(linea)
+        if nueva:
+            explicaciones = [
+                e
+                for e in explicaciones
+                if e[0].split(" · ")[0] != nueva[0].split(" · ")[0]
+            ]
+            explicaciones.append(nueva)
+        cuerpo = [
+            MARKER,
+            *[linea for linea in lineas[:titulo] if linea.startswith(marcas)],
+            bloque,
+            *(previo + [""] if previo else []),
+            lineas[titulo],
+            *lineas[titulo + 1 : veredicto],
+            verdict_for(merged),
+            "",
+            *sections_for(merged, nuevos),
+        ]
+        for e in explicaciones[-EXPLICACIONES_VISIBLES:]:
+            while e and not e[-1]:
+                e = e[:-1]
+            cuerpo += ["", *e]
+        cuerpo += ["", *lineas[detalle:]]
+        return "\n".join(cuerpo)[:GITHUB_COMMENT_MAX]
 
     return armar
 
