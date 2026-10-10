@@ -651,6 +651,17 @@ class CoordinadoSinBandera(InstaladorTest):
         )
 
 
+class CoordinadoSinActionSha(InstaladorTest):
+    def test_el_coordinado_sin_action_sha_sale_sin_tocar_nada(self):
+        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": ""})
+        self.assertEqual(resultado.returncode, 2)
+        self.assertIn("requiere ACTION_SHA", resultado.stderr)
+        repo = self._repo_final("o/r")
+        self.assertNotIn("chore/ai-review", repo["branches"])
+        self.assertEqual(repo["prs"], [])
+
+
 class CompatibleRollback(InstaladorTest):
     def test_el_retiro_atomico_restaura_el_escritor_anterior(self):
         self._repo(
