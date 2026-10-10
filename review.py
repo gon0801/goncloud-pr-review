@@ -1442,7 +1442,10 @@ def build_prompt(manifest, work, max_turns):
         prompt += (
             f"\n- This PR already has findings from an earlier review: {work}/prev_findings.md. "
             f'Report the same issues with their same ids, use "F-new" for new ones, and never report '
-            f"or describe the dismissed ones."
+            f"or describe the dismissed ones. Emit the findings block right before COVERAGE with "
+            f'every previous finding (state "open", or "resolved" if this diff fixed it) and the '
+            f"new ones, as one line that starts with `<!-- ai-review:findings=` and ends with "
+            f"` -->`, then the COVERAGE line."
         )
     if manifest.get("mode") == "incremental":
         reviewed = manifest.get("reviewed", [])

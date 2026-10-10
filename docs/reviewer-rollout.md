@@ -7,13 +7,14 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
-> **El modo coordinado NO se despliega.** Ni en consumidores ni en el repo
-> central fuera de un piloto: la ronda 2 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
-> encontró pérdida de hallazgos y el central volvió al revisor directo (#86).
-> Se despliega solo cuando estén mergeados los arreglos de T16-piloto-2 en
-> `Plans.md` (pérdida, memoria del worker, instalador) y una ronda 3 pase
-> completa. Hasta entonces `install.sh --coordinado` se niega sin
-> `AI_REVIEW_PILOTO=1`.
+> **Estado del modo coordinado.** Activo solo en el repo central (#96, CLI
+> `dff2ad3`). La ronda 3 del piloto (`docs/evidence/reviewer/T16-piloto-2.md`)
+> pasó los casos 1 a 5 después de que la ronda 2 encontrara pérdida de
+> hallazgos, y la resolución ya se ve en el central (revisión coordinada del #93,
+> con #94). Pendiente: con memoria, el modelo a veces responde sin bloque y ese
+> push no resuelve nada (#98). Los consumidores no se despliegan sin decisión
+> del operador. Hasta que se quite esa barrera, `install.sh --coordinado` se
+> niega sin `AI_REVIEW_PILOTO=1`.
 
 ## Qué instala el modo coordinado
 
@@ -101,8 +102,11 @@ ejecutó en el PR #65. Ronda 1 del piloto (`docs/evidence/reviewer/T16-piloto.md
 la cadena funciona tras seis arreglos pero sin capa visible; volvió a current
 (#77). Ronda 2 (`docs/evidence/reviewer/T16-piloto-2.md`): con capa visible
 (#79, #83) el publicador perdía 5 de 6 hallazgos por revisión; el central
-volvió al revisor directo (#86). Los consumidores (summonaikit-claude,
-goncloud-openclaw, goncloud-Orbit) siguen bloqueados por el piloto. El corte y
+volvió al revisor directo (#86). Ronda 3 (mismo documento): con #87, #88 y #89
+el central reactivó el coordinado (#90) y pasaron los casos 1 a 5; con #94 la
+resolución quedó vista en el central (revisión coordinada del #93) y el piloto
+se cerró. Sigue activo en el central. Los consumidores (summonaikit-claude,
+goncloud-openclaw, goncloud-Orbit) quedan a decisión del operador. El corte y
 el retorno mecánicos son los que describe el procedimiento de T11 de arriba.
 
 ## Qué hay congelado hoy

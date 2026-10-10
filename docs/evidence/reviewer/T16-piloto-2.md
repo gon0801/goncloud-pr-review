@@ -1,6 +1,7 @@
-# T16: segunda ronda del piloto coordinado (detenida)
+# T16: rondas 2 y 3 del piloto coordinado
 
-Fecha: 2026-10-10. Continúa `T16-piloto.md`. La ronda 1 dejó el modo
+Fecha: 2026-10-10. Continúa `T16-piloto.md`. La ronda 2 se detuvo por pérdida
+de hallazgos; la ronda 3 (abajo) la repitió con los arreglos. La ronda 1 dejó el modo
 coordinado sin capa visible; esta ronda lo reactivó en el repo central con la
 capa visible (#79), el respaldo de proveedor (#81), el bloque sin cierre (#82)
 y los pendientes de activación (#83).
@@ -80,8 +81,127 @@ Dos corridas del worker en el #85, con opencode-go: $0.1433 (12 turnos) y
 $0.1210 (10 turnos), **$0.2643** en total. El worker del #86 y
 el del #87 corrieron durante la ventana activa y no se suman al piloto.
 
-## Decisión
+## Decisión de la ronda 2 (histórica; la sustituye la ronda 3, abajo)
 
 El modo coordinado no se despliega. La ronda 3 exige los arreglos de
 T16-piloto-2 en `main` (pérdida, gate, identidad, memoria del worker,
 instalador) y repetir los seis casos completos.
+
+---
+
+# Ronda 3 (2026-10-10)
+
+Con los arreglos de la ronda 2 en `main` (#87 instalador, #88 pérdida e
+identidad, #89 memoria del worker), el operador reactivó el modo coordinado en
+el repo central con el #90 (merge `20d4c29`, CLI fijado a
+`fb52b385411e025ddb980e79fd2d15f1b48e96d8`). PR de prueba: #91
+(`piloto/t16-ronda-3`), con el mismo `piloto/caso_t16.py`. El #85 se cerró con
+un comentario que apunta a esta ronda.
+
+## Casos
+
+| Caso | Resultado | Evidencia |
+|---|---|---|
+| 1. Push normal | **Pasa.** El visible trae veredicto, hallazgos, cobertura y SHA; el bloque de memoria va antes del visible; el resultado lleva el costo. **6 observaciones del modelo → 6 hallazgos** (F1..F6), contados en el `result.json` real y en el JSON de la memoria. | Push `ef5f6e3`; worker 38022908715 ($0.1794, 14 turnos, opencode-go); publicador 38022963019; comentario 6093596224 |
+| 2. Segundo push con un defecto nuevo | **Pasa.** El modelo recibió la memoria y repitió F1..F6; `dividir_todo` entró como **F7**; 7 observaciones → 7 hallazgos y `next_id=8`. El log ya no dice `no-prev`: dice `full/incomplete-prev` por el defecto menor 1 (abajo). | Push `8015d43`; worker 38023035641 ($0.1582, 11 turnos) |
+| 3. Descarte concurrente | **Pasa.** `ai-review: descartar F2` (comentario 6093645422) mientras corría el worker 38023259921. Estado final consistente: F2 descartado con recibo, `command_cursor=6093645422`, sin solicitudes pendientes, re-render con «Descartados (1)». Ese worker no entregó bloque ni `COVERAGE` (`model_ok=False`): el SHA quedó `partial` con aviso visible y se conservaron los hallazgos. Que F2 no reaparece con otro id lo prueba el caso 5, con un bloque real. | Push `37aa4c5`; worker 38023259921 ($0.1609); publicadores 38023244131, 38023276276, 38023320788 |
+| 4. Explicar | **Pasa en estado.** `ai-review: explicar F7` (comentario 6093661355) aparece como «## Explicación de F7» sin acreditar SHA: `sha=37aa4c5`/`partial`, generación 4 y hallazgos sin cambio, recibo «solicitud de explicación 4 para F7». **Defecto menor 2:** el contenido fue una revisión completa, no una explicación de F7. | Worker 38023408868 ($0.1745); publicador 38023481871 |
+| 5. Otra revisión del mismo SHA | **Pasa.** Re-run del publicador del push `37aa4c5` (38023244131, intento 2): el worker 38023648131 corrió `full/same-sha`, el modelo repitió los 6 ids vivos y **no reportó F2**; sin duplicados (`next_id=8`), cursor intacto, cobertura `complete`. El «Re-run jobs» del worker de una solicitud ya terminada (38023259921, intento 2) no revisa: `execute-request` sale con «la solicitud '3' no está pendiente» y la memoria no cambia; el publicador que avisa queda en rojo (38023567020) sin efecto en el estado. | Worker 38023648131 ($0.1022, 10 turnos); publicador 38023702582 |
+| 6. T05 representativos | **Parcial.** Un solo comentario con el marcador en todo el PR; bloque de 2320 bytes (perfil de 8000) con UTF-8 no ASCII que cierra con `-->`; solicitudes simultáneas (revisión 3 y comando) sin ids duplicados. **Incremental:** no alcanzable, el segundo push se fuerza a completo desde #65. **Full forzado:** no se observó por el defecto menor 1; la corrida fue completa con delta igual. **Falla del proveedor:** no ejercida; simularla exige tocar secrets o variables del repo; la cubren las pruebas de #81. | — |
+
+## Defectos menores (PR #92, mergeado después)
+
+1. **Cabecera del sticky fuera de orden.** Al admitir una solicitud, el
+   checkpoint sin visible escribía `MARKER`, bloque, `sha=`, `completion=`
+   (historial de ediciones del comentario 6093596224, 04:08:49).
+   `reviewed_completion` exige `sha=`/`completion=` justo tras el marcador:
+   el worker leía la revisión previa como incompleta (`incomplete-prev` en
+   vez de `forced-full-t16`). El efecto fue de etiqueta: los dos caminos
+   revisan completo con delta. Lo mismo en el aviso de fallo.
+2. **La explicación corría una revisión completa.** El prompt del worker no
+   leía el tipo de solicitud del paquete.
+
+Sin arreglo, registrados en Plans.md:
+- El «Re-run jobs» del worker de una solicitud terminada deja en rojo al
+  publicador que avisa (rojo benigno, sin efecto en la memoria).
+- Una vez el modelo omitió el bloque y `COVERAGE` (caso 3); el sistema degradó
+  bien: `partial`, aviso visible y hallazgos conservados.
+
+## Costo de la ronda 3
+
+Cinco corridas del worker con modelo, todas con opencode-go: $0.1794 + $0.1582
++ $0.1609 + $0.1745 + $0.1022 = **$0.7752**. El re-run de la solicitud
+terminada no llegó al modelo.
+
+## Decisión de la ronda 3 (histórica; la sustituye la ronda 3b, abajo)
+
+Los casos 1 a 5 pasan en lo que ejercieron: el modo coordinado publica
+completo, conserva ids, respeta descartes, explica sin acreditar y re-revisa
+el mismo SHA sin duplicar. **Pero ningún caso ejerció una resolución**, y al
+revisar #92 y #93 apareció el defecto: el coordinador armaba sus hechos sin
+delta y ningún hallazgo resuelto se cerraba (worker 38025265430 en #93: F1 y F2
+`resolved` con sus archivos en `changed_files`, y siguieron abiertos). El
+operador decidió arreglar hacia adelante con el central activo (#94). La fila
+«T16 piloto» queda abierta hasta ejercer una resolución en el central con #94
+mergeado. Los consumidores (summonaikit-claude, goncloud-openclaw,
+goncloud-Orbit) siguen siendo decisión del operador.
+
+---
+
+# Ronda 3b: caso de resolución (2026-10-10)
+
+Con #92, #94 (delta del worker) y #95 (historia completa) mergeados, el
+operador reinstaló el central con el #96 (merge `13c8227`, CLI fijado a
+`dff2ad3cf02ad64baddb1205984bd2f744187e9f`). PR de prueba: #97
+(`piloto/t16-resolucion`), con `piloto/resolucion.py` y tres defectos
+(`promedio` con lista vacía, `ultimo` fuera de rango y `es_par` invertido). La
+rama sale de `18b2fce`, detrás de `main`, y el PR tomó como base `13c8227`: es
+la misma condición de base desfasada que hizo tronar al worker del #94, sin
+mergear nada.
+
+| Paso | Resultado | Evidencia |
+|---|---|---|
+| Push 1, tres defectos | **Pasa.** El worker no truena con base desfasada (`BASE_SHA=13c8227`, head bifurcado de `18b2fce`; `full/no-prev`). 4 observaciones → 4 hallazgos (F1 `ultimo`, F2 `es_par`, F3 `promedio`, F4 sin pruebas), con visible y cabecera en orden. | Push `0c459f3`; worker 38028459321 ($0.1747, 15 turnos) |
+| Push 2, arregla `ultimo` | **No se ejerce la resolución.** El worker usó la memoria (`full/forced-full-t16`, `prev_sha=0c459f3`, `changed_files=[piloto/resolucion.py]`) y el modelo escribió «Hallazgo previo ya resuelto» para F1, pero en prosa: sin bloque ni `COVERAGE` (`model_ok=False`). El sistema degradó como debe: SHA `partial` con aviso visible y hallazgos conservados, así que F1 sigue abierto. | Push `dff65d7`; worker 38028855399 ($0.2298) |
+| Push 3, toca el mismo archivo | **Igual que el push 2.** Delta `dff65d7..7aa0da4` con el archivo; el modelo volvió a responder en prosa sin bloque. | Push `7aa0da4`; worker 38029088276 ($0.1234) |
+
+Lo que sí quedó probado:
+- **#95:** el worker ya no truena con base desfasada.
+- **#92:** la cabecera queda en orden. El push 2 salió `forced-full-t16`, no `incomplete-prev`.
+- **#89:** la memoria llega al worker.
+
+Lo que falta: con hallazgos previos en modo completo, el modelo omitió el bloque
+en 3 de 5 revisiones (ronda 3 caso 3; #97 pushes 2 y 3), y sin memoria nunca.
+El mensaje de usuario solo recordaba el formato del bloque en incremental. #98
+lo agrega a la revisión completa con memoria. Es un cambio de prompt: se
+comprueba repitiendo este caso con #98 instalado en el central.
+
+Costo de la ronda 3b: $0.1747 + $0.2298 + $0.1234 = **$0.5279**.
+
+Sobre la solicitud `pending` del #94 (worker 38026231461, que falló antes de
+subir resultado): es benigna. El #94 está mergeado y no emite
+`pull_request_target`, y un comentario sin comando no despacha nada. Solo un
+`workflow_dispatch` manual con `pr_number=94`, o un comando nuevo en ese PR, la
+reemplazaría por una revisión del head mergeado.
+
+## Resolución vista en el central (#93)
+
+La resolución sí quedó ejercida en el central, en la revisión coordinada de
+este mismo PR de evidencia (#93). Con el push `b32492f`, que arreglaba hallazgos
+de la revisión anterior, el worker 38029582041 corrió `full/forced-full-t16`
+($1.8152, 20 turnos, 4 archivos, 31926 bytes de diff) y entregó su bloque. El
+publicador 38029986375 tomó el delta del worker sin el aviso «sin delta
+verificable». En la memoria (generación 5), F1, F2, F4, F5, F7 y F8 quedaron
+`resolved` con `at_sha=b32492f`, y F3, F6 y F9 siguieron abiertos con sus ids.
+El visible muestra «Resueltos (6)» y el veredicto «1 Medium, 2 Low abiertos (6
+resueltos)». Es el caso que faltaba: un push que arregla, sus hallazgos
+resueltos y los demás abiertos con sus ids.
+
+## Decisión de la ronda 3b
+
+«T16 piloto» se cierra: las rondas 3 y 3b ejercieron en el central los casos 1
+a 5 y la resolución. Queda abierta la fila «T16 ronda 3b bloque con memoria»
+(#98): con memoria, el modelo a veces responde sin bloque, y entonces el sistema
+degrada honestamente (`partial`, aviso, hallazgos conservados), pero ese push no
+resuelve nada. El coordinado sigue activo en el central. Los consumidores son
+decisión del operador.
