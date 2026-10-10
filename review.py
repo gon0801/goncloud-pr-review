@@ -2684,6 +2684,37 @@ def forma_del_run(datos):
     }
 
 
+def hechos_con_delta_del_worker(facts, artifact, current):
+    """Los hechos del coordinador con el delta que calculó el worker, para que
+    una resolución del modelo se pueda verificar contra un cambio pertinente.
+
+    Se llama solo con un artifact autenticado (run del worker en el ref de
+    confianza): el manifest lo escribe el CLI fijado, que trata el PR como
+    datos. Además el delta debe partir del head que esta memoria acreditó por
+    última vez; si no, es de otra base y se degrada a «sin delta» (el resuelto
+    del modelo queda sin verificar), con aviso."""
+    manifest = artifact.get("manifest") or {}
+    desde = manifest.get("prev_sha")
+    cambiados = manifest.get("changed_files")
+    esperado = current.revision.head_sha if current.revision else None
+    if (
+        _sha_hexa(desde)
+        and desde == esperado
+        and isinstance(cambiados, list)
+        and all(isinstance(ruta, str) and ruta for ruta in cambiados)
+    ):
+        return replace(facts, changed_paths=tuple(cambiados), delta_calculado=True)
+    if not current.findings:
+        return facts  # nada que resolver: la primera revisión no lleva delta
+    print(
+        f"ai-review: sin delta verificable del worker (prev_sha {str(desde)[:7]} "
+        f"contra el último revisado {str(esperado)[:7]}); las resoluciones del "
+        f"modelo quedan sin verificar",
+        file=sys.stderr,
+    )
+    return facts
+
+
 def cmd_reconcile(args):
     repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
@@ -2799,6 +2830,7 @@ def cmd_reconcile(args):
                 review_domain.observation_de_entrada(e)
                 for e in autenticado.observaciones
             ]
+            facts = hechos_con_delta_del_worker(facts, artifact, current)
             decision = review_domain.reconcile(
                 current,
                 review_domain.ReportReady(
