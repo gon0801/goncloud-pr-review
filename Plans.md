@@ -118,11 +118,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 
 | Origen | Nota | Estado |
 |---|---|---|
-| T16 consumidores | desplegar el coordinador en gon0801/summonaikit-claude, gon0801/goncloud-openclaw y gon0801/goncloud-Orbit (nombres reales; los tres públicos) después del piloto | cerrada (summonaikit-claude #370, goncloud-openclaw #254, goncloud-Orbit #416 con el check requerido review→reconcile; central re-fijado a 9fa765d en #107) |
-| T16 ronda 3b bloque con memoria | con hallazgos previos en modo completo el modelo respondió en prosa sin bloque ni COVERAGE en 3 de 5 revisiones (ronda 3 caso 3; #97 pushes 2 y 3), así que su «resuelto» no llega al coordinador; el mensaje solo recordaba el formato en incremental | abierta (#98: el mensaje de la revisión completa con memoria pide el bloque y COVERAGE; comprobar en el central) |
-| T16 #89 F2 | vocabulario de identidad duplicado (titles/current) sin normalizar en la frontera; normalizar una vez en ReviewPolicy | abierta |
-| T16-piloto-2 instalador (revisión de #87) | Low tardío de ai-review en 31c0e00: los reintentos del instalador no vuelven a fusionar main si main avanza entre intentos (la otra mitad, el rollout que decía "el modo actual no cambia", quedó corregida en la limpieza del plan) | abierta |
-| T16 #83 Detalle | la prosa del revisor en Detalle no neutraliza marcadores `<!-- ai-review:* -->` (misma familia que #83 F2, preexistente) | abierta |
+| T16 ronda 3b bloque con memoria | con hallazgos previos en modo completo el modelo respondió en prosa sin bloque ni COVERAGE en 3 de 5 revisiones (ronda 3 caso 3; #97 pushes 2 y 3), así que su «resuelto» no llega al coordinador; el mensaje solo recordaba el formato en incremental | abierta (#98: el mensaje de la revisión completa con memoria pide el bloque y COVERAGE. Con el CLI que lo trae, 2 de 2 revisiones con memoria entregaron bloque y COVERAGE (#105 a419992, run 38032582203; #108 4f6c9ed, run 38034136937; las otras 5 fueron full/no-prev); se cierra con al menos una más, ver #109) |
 | Issue [#99](https://github.com/gon0801/goncloud-pr-review/issues/99) | Revisor coordinado: robustez del publicador, el worker y los comandos (25 puntos no bloqueantes) | abierta |
 | Issue [#100](https://github.com/gon0801/goncloud-pr-review/issues/100) | Instalador y plantillas: robustez de la instalación (9 puntos no bloqueantes) | abierta |
 | Issue [#101](https://github.com/gon0801/goncloud-pr-review/issues/101) | Dominio: identidad, memoria y presupuesto del comentario (15 puntos no bloqueantes) | abierta |
