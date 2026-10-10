@@ -3165,7 +3165,9 @@ def estado_visible(snapshot, explicacion=None):
         )
         if veredicto is None:
             cuerpo = [MARKER, bloque] + ([resto] if resto else [])
-            return "\n".join(cuerpo + (["", *nueva] if nueva else []))
+            return "\n".join(cuerpo + (["", *nueva] if nueva else []))[
+                :GITHUB_COMMENT_MAX
+            ]
         marcas = (SHA_PREFIX, COMPLETION_PREFIX)
         previo = [linea for linea in lineas[:titulo] if not linea.startswith(marcas)]
         while previo and not previo[0]:

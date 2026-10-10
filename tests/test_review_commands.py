@@ -681,6 +681,12 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("motivo dos", cuerpo)
         self.assertNotIn("motivo uno", cuerpo)
 
+    def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
+        cuerpo = review.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
+            "bloque", "x" * review.GITHUB_COMMENT_MAX
+        )
+        self.assertEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+
     def test_explicacion_no_puede_imitar_marcadores_ni_secciones(self):
         texto = review.texto_de_explicacion(
             {
