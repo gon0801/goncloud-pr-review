@@ -2282,6 +2282,66 @@ class Workflows(unittest.TestCase):
             'review.py" execute-request', paso["preparar solicitud y paquete"]
         )
 
+    def test_el_worker_encuentra_la_base_comun_aunque_main_avance(self):
+        # T16 ronda 3: con el checkout superficial, un PR cuya base avanzó tras el
+        # fork tronaba en prepare (git merge-base) y se quedaba sin revisión.
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        checkout = worker.split("name: checkout del código confiable del worker")[1]
+        checkout = checkout.split("- name:")[0]
+        profundidad = re.search(r"fetch-depth: (\d+)", checkout)
+        profundidad = (
+            int(profundidad.group(1)) if profundidad else 1
+        )  # default de checkout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            origen = Path(tmp) / "origen"
+
+            def git(*args, cwd=origen):
+                return subprocess.run(
+                    ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                    cwd=cwd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            origen.mkdir()
+            git("init", "-q", "-b", "main")
+            (origen / "a.txt").write_text("a\n")
+            git("add", ".")
+            git("commit", "-q", "-m", "fork")
+            git("checkout", "-q", "-b", "pr")
+            (origen / "a.txt").write_text("pr\n")
+            git("commit", "-q", "-am", "pr")
+            head = git("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            (origen / "b.txt").write_text("b\n")
+            git("add", ".")
+            git("commit", "-q", "-m", "main avanza")
+            base = git("rev-parse", "HEAD")
+
+            worker_dir = Path(tmp) / "worker"
+            clon = ["clone", "-q"] + (
+                ["--depth", str(profundidad)] if profundidad else []
+            )
+            git(*clon, f"file://{origen}", str(worker_dir), cwd=tmp)
+            git(
+                "fetch",
+                "-q",
+                "--no-tags",
+                "origin",
+                f"+{head}:refs/ai-review/head",
+                cwd=worker_dir,
+            )
+            git("fetch", "-q", "--no-tags", "origin", base, cwd=worker_dir)
+            comun = subprocess.run(
+                ["git", "merge-base", base, head],
+                cwd=worker_dir,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(comun.returncode, 0, comun.stderr)
+
     def test_el_cierre_del_worker_conoce_proveedor_y_secretos_a_redactar(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
