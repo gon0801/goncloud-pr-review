@@ -960,7 +960,9 @@ def cmd_gate(args):
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    state = parse_findings_block(sticky["body"]) if sticky else None
+    # También la memoria v2/v3 del coordinador: tras un retorno el modelo no
+    # puede revisar sin los hallazgos previos.
+    state = review_domain.estado_legado_de_memoria(sticky["body"]) if sticky else None
     if state:
         try:
             dismiss_ids, dismiss_all, _ = collect_dismissals(
@@ -2546,6 +2548,8 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
         f"base_sha={solicitud.target.get('base_sha', '')}",
         "-f",
         f"coordinator_run_id={run_id}",
+        "-f",
+        f"finding_identity={politica_de_identidad()}",
     )
 
 
@@ -2999,6 +3003,7 @@ def cmd_execute_request(args):
         "pr_head_sha": head,
         "base_sha": base,
         "policy_digest": digest_de_politica(policy),
+        "finding_identity": politica_de_identidad(),
         "plan": plan,
         "target": dict(solicitud.target),
         "observaciones": [],
@@ -3024,9 +3029,11 @@ def cmd_close_result(args):
     ]
     texto = redact(resultado.get("result") or "", secretos)
     avisar_bloque_sin_cierre(texto)
-    modelo = parse_model_findings(
-        texto, conservar_anclas=politica_de_identidad() == "anchors"
-    )
+    # La identidad viaja en el paquete desde la solicitud del coordinador.
+    identidad = paquete.get("finding_identity") or politica_de_identidad()
+    if identidad not in IDENTIDADES:
+        sys.exit(f"ai-review: identidad de hallazgos '{identidad}' no admitida")
+    modelo = parse_model_findings(texto, conservar_anclas=identidad == "anchors")
     paquete.update(
         {
             "result": texto,

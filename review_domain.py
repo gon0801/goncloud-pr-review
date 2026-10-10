@@ -1026,6 +1026,17 @@ def hallazgos_legacy(snapshot):
     return _legacy_raw_of_snapshot(snapshot)["findings"]
 
 
+def estado_legado_de_memoria(body):
+    """El estado legado de cualquier memoria legible: el bloque legado tal cual
+    o la vista legada de una memoria v2/v3 (la que deja el coordinador)."""
+    load = read_snapshot(body)
+    if isinstance(load, Legacy):
+        return load.raw
+    if isinstance(load, Valid):
+        return _legacy_raw_of_snapshot(load.snapshot)
+    return None
+
+
 def snapshot_a_v3(snapshot):
     """Migra un Snapshot legado/v2 a schema 3.
 
@@ -1779,17 +1790,20 @@ def accept_report(current, plan, report):
     cambiadas = (
         set(facts.changed_paths) if facts.delta_calculado else set(plan.changed_paths)
     ) | revertidas
-    findings = list(current.findings)
-    por_id = {f.id: f for f in findings if f.id}
+    # Las observaciones de un mismo reporte son distintas entre sí: sólo se
+    # comparan contra los previos al entrar, nunca contra las creadas aquí.
+    previos = tuple(current.findings)
+    findings = list(previos)
+    por_id = {f.id: f for f in previos if f.id}
     tocados, next_id = set(), current.next_id
     for obs in report.observations:
         severidad, marca_severidad = _severidad_de(obs.severity)
-        match = match_finding(findings, obs, facts)
+        match = match_finding(previos, obs, facts)
+        if isinstance(match, MatchExisting) and match.id not in por_id:
+            match = MatchNew()
         if isinstance(match, MatchExisting):
             fid = match.id
-            previo = por_id.get(fid)
-            if previo is None:
-                continue
+            previo = por_id[fid]
             if isinstance(previo.status, StatusDismissed):
                 continue  # un descarte confirmado no reaparece
             severidad, marca_severidad = _severidad_de(obs.severity)

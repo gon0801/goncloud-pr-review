@@ -2164,6 +2164,7 @@ class Workflows(unittest.TestCase):
                 "PR_NUMBER": "12",
                 "HEAD_SHA": "a" * 40,
                 "BASE_SHA": "b" * 40,
+                "FINDING_IDENTITY": "current",
             }
             base.update(entradas)
             return subprocess.run(
@@ -2173,11 +2174,14 @@ class Workflows(unittest.TestCase):
             ).returncode
 
         self.assertEqual(correr(), 0)
+        self.assertEqual(correr(FINDING_IDENTITY="anchors"), 0)
         for campo, valor in (
             ("REQUEST_ID", "1\nX=1"),
             ("PR_NUMBER", '12"; touch pwn; "'),
             ("HEAD_SHA", "a" * 40 + "\nX=1"),
             ("BASE_SHA", "no-es-sha"),
+            ("FINDING_IDENTITY", "anchors\nX=1"),
+            ("FINDING_IDENTITY", "titles"),
         ):
             with self.subTest(campo=campo):
                 self.assertNotEqual(correr(**{campo: valor}), 0)
@@ -3136,6 +3140,89 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(salida, esperado)
                 self.assertEqual(fallo is None, esperado == "reviewed=true\n")
 
+    def _cerrar_con_identidad(self, en_paquete, en_entorno):
+        ancla = {
+            "path": "a.py",
+            "blob_sha": "e" * 40,
+            "range": [3, 4],
+            "excerpt_digest": "f" * 64,
+        }
+        bloque = json.dumps(
+            {
+                "findings": [
+                    {
+                        "id": "F-new",
+                        "file": "a.py",
+                        "line": 3,
+                        "severity": "High",
+                        "title": "bug",
+                        "state": "open",
+                        "anchor": ancla,
+                    }
+                ]
+            }
+        )
+        with tempfile.TemporaryDirectory() as work:
+            (Path(work) / "request-package.json").write_text(
+                json.dumps({"request_id": 1, "finding_identity": en_paquete})
+            )
+            (Path(work) / "result.json").write_text(
+                json.dumps(
+                    {
+                        "result": f"<!-- ai-review:findings={bloque} -->\nCOVERAGE: complete",
+                        "subtype": "success",
+                    }
+                )
+            )
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": en_entorno}):
+                review.cmd_close_result(argparse.Namespace(work=work))
+            return json.loads((Path(work) / "result.json").read_text())
+
+    def test_close_result_parsea_con_la_identidad_del_coordinador(self):
+        """UW-r6 N3: el worker parseaba con su propio entorno aunque el
+        coordinador operara en anchors y las anclas se perdían."""
+        con_anclas = self._cerrar_con_identidad("anchors", "current")
+        self.assertEqual(
+            con_anclas["observaciones"][0]["anchor"],
+            {
+                "path": "a.py",
+                "blob_sha": "e" * 40,
+                "range": [3, 4],
+                "excerpt_digest": "f" * 64,
+            },
+        )
+        sin_anclas = self._cerrar_con_identidad("current", "anchors")
+        self.assertNotIn("anchor", sin_anclas["observaciones"][0])
+
+    def test_el_despacho_pasa_la_identidad_del_coordinador(self):
+        capturado = []
+
+        def sh_falso(*args, **kw):
+            capturado.append(args)
+            return mock.Mock(returncode=0, stdout="")
+
+        solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
+        with mock.patch.object(review, "sh", sh_falso):
+            with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
+                review.despachar_worker(
+                    solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
+                )
+        self.assertIn("finding_identity=anchors", capturado[0])
+
+    def test_el_worker_recibe_y_valida_la_identidad(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        self.assertIn(
+            "      finding_identity:\n"
+            "        description: Identidad de hallazgos del coordinador (current o anchors)\n"
+            "        required: false\n"
+            "        default: current\n",
+            worker,
+        )
+        trabajo = worker.split("  execute:\n")[1].split("    steps:")[0]
+        self.assertIn("FINDING_IDENTITY: ${{ inputs.finding_identity }}", trabajo)
+        validar = worker.split("- name: validar entradas")[1].split("- name:")[0]
+        self.assertIn('[[ "$FINDING_IDENTITY" =~ ^(current|anchors)$ ]]', validar)
+
     def test_close_result_conserva_costo_y_alcance(self):
         with tempfile.TemporaryDirectory() as work:
             (Path(work) / "request-package.json").write_text(
@@ -3710,6 +3797,32 @@ class Workflows(unittest.TestCase):
             paquete["policy_digest"],
             review.digest_de_politica(review.politica_de_revision()),
             "el digest sale de la política normalizada, no del checkpoint",
+        )
+        self.assertEqual(paquete["finding_identity"], "current")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "REPO": "o/r",
+                    "PR_NUMBER": "1",
+                    "HEAD_SHA": "c" * 40,
+                    "BASE_SHA": "b" * 40,
+                    "GITHUB_RUN_ID": "55",
+                    "BOT_LOGIN": "bot",
+                    "FINDING_IDENTITY": "anchors",
+                },
+                clear=False,
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    review.cmd_execute_request(
+                        argparse.Namespace(work=tmp, request_id="1")
+                    )
+            paquete = json.loads((Path(tmp) / "request-package.json").read_text())
+        self.assertEqual(
+            paquete["finding_identity"],
+            "anchors",
+            "la identidad del coordinador viaja hasta close-result",
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -4639,6 +4752,74 @@ class ReviewContinuity(unittest.TestCase):
         ):
             review.cmd_gate(argparse.Namespace(work=str(work)))
         return json.loads((work / "prev.json").read_text()), output.call_args.args
+
+    def test_el_gate_lee_la_memoria_schema3_del_coordinador(self):
+        """F2 de #86: tras el retorno, el gate no entendía la memoria v3 y el
+        modelo revisaba sin los hallazgos previos ("Sin hallazgos previos")."""
+        import review_domain as domain
+
+        estado = domain.Snapshot(
+            schema=3,
+            generation=3,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.COMPLETE_CLAIM,
+            findings=[
+                domain.Finding(
+                    id="F1",
+                    title="eval sobre el contenido del archivo",
+                    severity="Critical",
+                    status=domain.StatusDismissed(command_id=7),
+                    primary_anchor=domain.AnchorLegacy(path="piloto/caso.py", line=15),
+                ),
+                domain.Finding(
+                    id="F2",
+                    title="ultimo siempre lanza IndexError",
+                    severity="High",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="piloto/caso.py", line=9),
+                ),
+            ],
+            command_cursor=7,
+        )
+        cuerpo = (
+            f"{review.MARKER}\n{review.SHA_PREFIX}{'c' * 40} -->\n"
+            f"{domain.encode_snapshot(estado)}\n### Revisión"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            prev, _ = self.gate(Path(tmp), "e" * 40, cuerpo)
+        self.assertEqual(prev["sha"], "c" * 40)
+        self.assertEqual(
+            prev["state"],
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": "piloto/caso.py",
+                        "line": 15,
+                        "severity": "Critical",
+                        "title": "eval sobre el contenido del archivo",
+                        "state": "dismissed",
+                    },
+                    {
+                        "id": "F2",
+                        "file": "piloto/caso.py",
+                        "line": 9,
+                        "severity": "High",
+                        "title": "ultimo siempre lanza IndexError",
+                        "state": "open",
+                    },
+                ],
+                "next": 3,
+                "seen": 7,
+            },
+        )
+        self.assertIn(
+            "ultimo siempre lanza IndexError",
+            review.prev_findings_markdown(prev["state"]),
+        )
 
     def test_partial_publish_recovers_full_scope_then_stays_full_by_decision(self):
         fixture = IncrementalPrepare()

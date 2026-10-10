@@ -1,0 +1,138 @@
+{
+ "38017166195": [
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 15,
+   "severity": "Critical",
+   "title": "Ejecución arbitraria de código: eval sobre el contenido del archivo",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 9,
+   "severity": "High",
+   "title": "ultimo siempre lanza IndexError (off-by-one)",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 20,
+   "severity": "Medium",
+   "title": "mediana no es la mediana para listas de tamaño par (y falla con lista vacía)",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 5,
+   "severity": "Medium",
+   "title": "promedio lanza ZeroDivisionError con lista vacía",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 13,
+   "severity": "Low",
+   "title": "El archivo abierto en leer_config nunca se cierra",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 1,
+   "severity": "Low",
+   "title": "El módulo no tiene ninguna prueba",
+   "state": "open"
+  }
+ ],
+ "38017336748": [
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 15,
+   "severity": "Critical",
+   "title": "eval sobre el contenido de un archivo (ejecución arbitraria de código)",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 9,
+   "severity": "High",
+   "title": "ultimo siempre lanza IndexError",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 24,
+   "severity": "High",
+   "title": "Condición invertida en dividir_todo: divide por cero",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 20,
+   "severity": "Medium",
+   "title": "mediana devuelve el elemento central superior en listas de longitud par",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 5,
+   "severity": "Low",
+   "title": "promedio lanza ZeroDivisionError con entrada vacía",
+   "state": "open"
+  },
+  {
+   "id": null,
+   "file": "piloto/caso_t16.py",
+   "files": [
+    "piloto/caso_t16.py"
+   ],
+   "line": 12,
+   "severity": "Low",
+   "title": "leer_config no cierra el archivo abierto",
+   "state": "open"
+  }
+ ]
+}
