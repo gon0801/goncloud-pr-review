@@ -50,12 +50,15 @@ jobs:
       - name: checkout del código confiable del worker
         uses: actions/checkout@v4
         with:
+          # Historia completa: con profundidad 1 la base del PR queda como raíz
+          # superficial y git merge-base falla en cuanto main avanza tras el fork.
+          fetch-depth: 0
           persist-credentials: false
       - name: checkout del CLI confiable del repo central
         uses: actions/checkout@v4
         with:
           repository: gon0801/goncloud-pr-review
-          ref: fb52b385411e025ddb980e79fd2d15f1b48e96d8
+          ref: dff2ad3cf02ad64baddb1205984bd2f744187e9f
           path: ai-review-code
           persist-credentials: false
       - name: validar entradas
