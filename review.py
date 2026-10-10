@@ -622,6 +622,28 @@ def _marcador_cobertura(warnings, findings):
     return "partial" if warnings else "complete"
 
 
+AVISO_DE_PRESUPUESTO = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
+
+
+def prosa_en_presupuesto(armar, prosa, budget):
+    """La prosa recortada para que armar(prosa), el comentario entero, quepa en
+    el presupuesto por caracteres y por bytes; None si ni el cuerpo sin prosa
+    cabe (el presupuesto se rechaza y mandan los topes actuales). armar une la
+    prosa como un elemento más, así que el cuerpo mide fijo + prosa."""
+    fijo = armar("")
+    chars = budget.comment_max_chars - len(fijo)
+    octetos = budget.comment_max_bytes - len(fijo.encode("utf-8"))
+    if chars < 0 or octetos < 0:
+        return None
+    if len(prosa) <= chars and len(prosa.encode("utf-8")) <= octetos:
+        return prosa
+    aviso = AVISO_DE_PRESUPUESTO
+    if len(aviso) > chars or len(aviso.encode("utf-8")) > octetos:
+        aviso = ""  # margen menor que el aviso: se recorta sin él
+    recorte = prosa[: chars - len(aviso)]
+    return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
+
+
 def compose(result, manifest, *, sha, provider, findings=None, budget=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
@@ -687,35 +709,26 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         "",
         "</details>",
     ]
-    if budget is not None:
-        fijo = "\n".join(parts + ["", ""] + scope) + "\n"
-        disponible_bytes = budget.comment_max_bytes - len(fijo.encode("utf-8"))
-        disponible_chars = budget.comment_max_chars - len(fijo)
-        if disponible_bytes < 0 or disponible_chars < 0:
-            budget = None
-    if budget is not None:
-        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
-        prose = review or "_El revisor no devolvió texto._"
-        if len(prose) > disponible_chars:
-            prose = prose[: max(0, disponible_chars - len(aviso))] + aviso
-        if len(prose.encode("utf-8")) > disponible_bytes:
-            prose = trim_utf8(prose, disponible_bytes, aviso)
-        parts.append(prose)
-        parts += scope
-        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
     if not manifest["reviewed"]:
         review = (
             review
             or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
         )
+    review = review or "_El revisor no devolvió texto._"
+
+    def armar(prosa):
+        return "\n".join(parts + [prosa, ""] + scope)
+
+    if budget is not None:
+        prosa = prosa_en_presupuesto(armar, review, budget)
+        if prosa is not None:
+            return armar(prosa)[:GITHUB_COMMENT_MAX]
     if len(review) > COMMENT_LIMIT:
         review = (
             review[:COMMENT_LIMIT]
             + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
         )
-    parts += [review or "_El revisor no devolvió texto._", ""]
-    parts += scope
-    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    return armar(review)[:GITHUB_COMMENT_MAX]
 
 
 def compose_with_findings(
@@ -757,16 +770,6 @@ def compose_with_findings(
             )
         partes[3] = review or "_El revisor no devolvió texto._"
         return "\n".join(partes)
-    # El checkpoint confirmado jamás se recorta: si no cabe en el
-    # presupuesto, se rechaza y se publican los topes actuales.
-    if budget is not None and len(block.encode("utf-8")) > budget.comment_max_bytes:
-        budget = None
-    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
-    if budget is None and len(review) > budget_prosa:
-        review = (
-            review[:budget_prosa]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
@@ -793,7 +796,9 @@ def compose_with_findings(
             review = "Sin hallazgos nuevos en este push."
         else:
             review = "_El revisor no devolvió texto._"
-    parts += ["", "## Detalle del revisor", "", review, ""]
+    parts += ["", "## Detalle del revisor", ""]
+    i_prosa = len(parts)
+    parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         scope.insert(
@@ -808,22 +813,23 @@ def compose_with_findings(
         "",
         "</details>",
     ]
-    if budget is not None:
-        i_prosa = parts.index("## Detalle del revisor") + 2
-        sin_prosa = "\n".join(parts[:i_prosa] + parts[i_prosa + 1 :])
-        disponible_bytes = max(
-            0, budget.comment_max_bytes - len(sin_prosa.encode("utf-8")) - 1
-        )
-        disponible_chars = max(0, budget.comment_max_chars - len(sin_prosa) - 1)
-        aviso = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
-        if len(review) > disponible_chars:
-            review = review[: max(0, disponible_chars - len(aviso))] + aviso
-        if len(review.encode("utf-8")) > disponible_bytes:
-            review = trim_utf8(review, disponible_bytes, aviso)
-        parts[i_prosa] = review
-        return "\n".join(parts)[:GITHUB_COMMENT_MAX]
 
-    return "\n".join(parts)[:GITHUB_COMMENT_MAX]
+    def armar(prosa):
+        return "\n".join(parts[:i_prosa] + [prosa] + parts[i_prosa + 1 :])
+
+    # El checkpoint confirmado jamás se recorta: va en el fijo, y si el fijo no
+    # cabe en el presupuesto se rechaza y se publican los topes actuales.
+    if budget is not None:
+        prosa = prosa_en_presupuesto(armar, review, budget)
+        if prosa is not None:
+            return armar(prosa)[:GITHUB_COMMENT_MAX]
+    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
+    if len(review) > budget_prosa:
+        review = (
+            review[:budget_prosa]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
+    return armar(review)[:GITHUB_COMMENT_MAX]
 
 
 CAUTION_MARK = "> [!CAUTION]"
@@ -2628,14 +2634,15 @@ def _comandos_de_comentarios(comentarios, login, cursor):
 
 
 def fallo_de_resultado(artifact, run_id, attempt):
-    motivo = (artifact or {}).get(ERROR_KEY)
-    if not motivo:
+    # La presencia de la clave decide, como reviewed= en el worker y el aviso
+    # de revision_visible: un motivo vacío sigue siendo un fallo.
+    if ERROR_KEY not in (artifact or {}):
         return None
     return review_domain.ReportFailed(
-        request_id=(artifact or {}).get("request_id"),
+        request_id=artifact.get("request_id"),
         run_id=run_id,
         attempt=attempt,
-        motivo=motivo,
+        motivo=artifact[ERROR_KEY] or "el worker falló sin motivo",
         retryable=True,
     )
 
@@ -2644,11 +2651,19 @@ def metadatos_del_run(repo, run_id, attempt):
     """Metadatos del run del worker leídos de la API, con la forma del payload
     de workflow_run. El worker avisa por workflow_dispatch porque un run
     despachado con GITHUB_TOKEN no dispara workflow_run al terminar."""
-    datos = json.loads(
-        sh("gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}").stdout
+    return forma_del_run(
+        json.loads(
+            sh(
+                "gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+            ).stdout
+        )
     )
-    # Con run-name, la API devuelve en "name" el título del run; el workflow
-    # sale del path, que el título no puede imitar.
+
+
+def forma_del_run(datos):
+    """Un run (API o payload de workflow_run) en la forma que autentica el
+    coordinador. Con run-name, "name" trae el título del run; el workflow sale
+    del path, que el título no puede imitar."""
     ruta = datos.get("path") or ""
     return {
         "id": datos.get("id"),
@@ -2717,7 +2732,7 @@ def cmd_reconcile(args):
             )
         else:
             payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            wr = payload.get("workflow_run") or {}
+            wr = forma_del_run(payload.get("workflow_run") or {})
         artifact = json.loads((Path(args.work) / "result.json").read_text())
         solicitud = next(
             (r for r in current.pending_requests if r.id == artifact.get("request_id")),
@@ -2867,6 +2882,19 @@ def cmd_reconcile(args):
             decision.snapshot,
             {f.id for f in current.findings},
             artifact.get("pr_head_sha") or head,
+        )
+    elif isinstance(decision, review_domain.Commit) and event_name == "issue_comment":
+        visible = estado_visible(decision.snapshot)
+    elif (
+        artifact is not None
+        and isinstance(decision, review_domain.Commit)
+        and solicitud.kind == "explain"
+        and ERROR_KEY not in artifact
+        and review_domain._target_vigente(solicitud, facts, policy)
+    ):
+        visible = estado_visible(
+            decision.snapshot,
+            (solicitud.finding_id, texto_de_explicacion(artifact)),
         )
     observado = sticky if sticky else None
     resultado = publish_checkpoint(
@@ -3069,6 +3097,129 @@ def revision_visible(artifact, snapshot, previos, head):
                 "completion": snapshot.completion,
             },
         )
+
+    return armar
+
+
+TITULO_DE_REVISION = "### Revisión automática · "
+DETALLE_DEL_REVISOR = "## Detalle del revisor"
+EXPLICACION_PREFIX = "## Explicación de "
+EXPLICACION_MAX = 8000
+EXPLICACIONES_VISIBLES = 3
+
+
+def texto_de_explicacion(artifact):
+    """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
+    La prosa sale del contenido del PR: no puede imitar las secciones que el
+    re-render busca (encabezados bajan a ####, también con sangría), ni los
+    marcadores ai-review:* (todo <!-- se escapa), ni cerrar un <details>."""
+    texto, _, _ = split_coverage(artifact.get("result") or "")
+    texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
+    texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
+    texto = texto.replace("<!--", "&lt;!--")
+    texto = re.sub(r"<(/?details)", r"&lt;\1", texto, flags=re.I)
+    if len(texto) > EXPLICACION_MAX:
+        texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
+    return texto or "_El revisor no devolvió texto._"
+
+
+def estado_visible(snapshot, explicacion=None):
+    """Re-render del comentario cuando un comando o una explicación cambian la
+    memoria sin una revisión nueva: veredicto y secciones salen del snapshot;
+    los marcadores sha=/completion=, los avisos, el título y el detalle del
+    revisor se conservan (nada de esto acredita un SHA). explicacion es
+    (finding_id, texto). Un cuerpo sin la forma de una revisión conserva el
+    resto tal cual."""
+    merged = review_domain.hallazgos_legacy(snapshot)
+    titulos = {f["id"]: f["title"] for f in merged}
+    nueva = []
+    if explicacion is not None:
+        fid, texto = explicacion
+        titulo = html.escape(titulos.get(fid, ""), quote=False)
+        nueva = [
+            f"{EXPLICACION_PREFIX}{fid}" + (f" · {titulo}" if titulo else ""),
+            "",
+            texto,
+        ]
+
+    def armar(bloque, resto):
+        lineas = resto.split("\n") if resto else []
+        titulo = next(
+            (
+                i
+                for i, linea in enumerate(lineas)
+                if linea.startswith(TITULO_DE_REVISION)
+            ),
+            None,
+        )
+        detalle = next(
+            (i for i, linea in enumerate(lineas) if linea == DETALLE_DEL_REVISOR), None
+        )
+        veredicto = (
+            next(
+                (i for i in range(titulo, detalle) if VERDICT_RE.match(lineas[i])),
+                None,
+            )
+            if titulo is not None and detalle is not None and titulo < detalle
+            else None
+        )
+        if veredicto is None:
+            cuerpo = [MARKER, bloque] + ([resto] if resto else [])
+            return "\n".join(cuerpo + (["", *nueva] if nueva else []))[
+                :GITHUB_COMMENT_MAX
+            ]
+        marcas = (SHA_PREFIX, COMPLETION_PREFIX)
+        previo = [linea for linea in lineas[:titulo] if not linea.startswith(marcas)]
+        while previo and not previo[0]:
+            previo.pop(0)
+        while previo and not previo[-1]:
+            previo.pop()
+        region = lineas[veredicto:detalle]
+        nuevos = []
+        if "## Nuevos en este push" in region and "## Siguen abiertos" in region:
+            tramo = region[
+                region.index("## Nuevos en este push") : region.index(
+                    "## Siguen abiertos"
+                )
+            ]
+            nuevos = [
+                m.group(1) for linea in tramo if (m := re.search(r" · (\S+)$", linea))
+            ]
+        explicaciones = []
+        for linea in region:
+            if linea.startswith(EXPLICACION_PREFIX):
+                explicaciones.append([linea])
+            elif explicaciones:
+                explicaciones[-1].append(linea)
+        if nueva:
+            explicaciones = [
+                e
+                for e in explicaciones
+                if e[0].split(" · ")[0] != nueva[0].split(" · ")[0]
+            ]
+            explicaciones.append(nueva)
+        conservadas = [linea for linea in lineas[:titulo] if linea.startswith(marcas)]
+        # Con un aviso previo, la forma de revision_visible ante un fallo: el
+        # aviso pegado a los marcadores, para que el próximo fallo lo reemplace.
+        cabecera = (
+            [MARKER, bloque, *conservadas, *previo, ""]
+            if previo
+            else [MARKER, *conservadas, bloque]
+        )
+        cuerpo = [
+            *cabecera,
+            lineas[titulo],
+            *lineas[titulo + 1 : veredicto],
+            verdict_for(merged),
+            "",
+            *sections_for(merged, nuevos),
+        ]
+        for e in explicaciones[-EXPLICACIONES_VISIBLES:]:
+            while e and not e[-1]:
+                e = e[:-1]
+            cuerpo += ["", *e]
+        cuerpo += ["", *lineas[detalle:]]
+        return "\n".join(cuerpo)[:GITHUB_COMMENT_MAX]
 
     return armar
 

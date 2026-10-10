@@ -2254,6 +2254,29 @@ class Workflows(unittest.TestCase):
         self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
         self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
 
+    def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
+        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        pasos = (
+            worker.split("jobs:")[1].split("\n  avisar:")[0].split("\n      - name: ")
+        )
+        nombres = [p.split("\n")[0] for p in pasos[1:]]
+        paso = {p.split("\n")[0]: p for p in pasos[1:]}
+        self.assertEqual(
+            nombres[:4],
+            [
+                "checkout del código confiable del worker",
+                "validar entradas",
+                "traer el PR como datos",
+                "preparar solicitud y paquete",
+            ],
+        )
+        # prepare_review lee HEAD_SHA y BASE_SHA con git: en la raíz del checkout
+        # confiable esos objetos no existen y la solicitud caía siempre al plan full.
+        self.assertIn("working-directory: pr", paso["preparar solicitud y paquete"])
+        self.assertIn(
+            'review.py" execute-request', paso["preparar solicitud y paquete"]
+        )
+
     def test_el_cierre_del_worker_conoce_proveedor_y_secretos_a_redactar(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
@@ -3086,6 +3109,33 @@ class Workflows(unittest.TestCase):
         )
         self.assertEqual((salida, resumen), ("reviewed=true\n", ""))
 
+    def test_el_publicador_deriva_del_artifact_lo_mismo_que_reviewed(self):
+        # El publicador corre en otro workflow: no lee outputs de pasos del
+        # worker, solo el result.json que viaja como artifact.
+        casos = {
+            "con motivo": ({review.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
+            "motivo vacío": ({review.ERROR_KEY: ""}, "reviewed=false\n"),
+            "revisado": (
+                {"result": "ok\nCOVERAGE: complete", "subtype": "success"},
+                "reviewed=true\n",
+            ),
+        }
+        for nombre, (resultado, esperado) in casos.items():
+            with self.subTest(caso=nombre):
+                with tempfile.TemporaryDirectory() as work:
+                    w = Path(work)
+                    (w / "request-package.json").write_text(
+                        json.dumps({"request_id": 1, "pr_head_sha": "c" * 40})
+                    )
+                    (w / "result.json").write_text(json.dumps(resultado))
+                    with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(w / "out")}):
+                        review.cmd_close_result(argparse.Namespace(work=work))
+                    salida = (w / "out").read_text()
+                    artifact = json.loads((w / "result.json").read_text())
+                fallo = review.fallo_de_resultado(artifact, 77, 1)
+                self.assertEqual(salida, esperado)
+                self.assertEqual(fallo is None, esperado == "reviewed=true\n")
+
     def test_close_result_conserva_costo_y_alcance(self):
         with tempfile.TemporaryDirectory() as work:
             (Path(work) / "request-package.json").write_text(
@@ -3286,6 +3336,7 @@ class Workflows(unittest.TestCase):
                         "workflow_run": {
                             "id": 77,
                             "name": "ai-review-worker",
+                            "path": ".github/workflows/ai-review-worker.yml",
                             "head_branch": "main",
                             "head_sha": "f" * 40,
                             "run_attempt": 1,

@@ -56,7 +56,18 @@ jobs:
           for sha in "$HEAD_SHA" "$BASE_SHA"; do
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ai-review: SHA inválido" >&2; exit 1; }
           done
+      - name: traer el PR como datos
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          git fetch --no-tags origin "+${HEAD_SHA}:refs/ai-review/head"
+          git fetch --no-tags origin "${BASE_SHA}"
+          git worktree add --detach pr refs/ai-review/head
+      # En pr: el plan de la solicitud lee HEAD_SHA y BASE_SHA con git. El código
+      # que corre sigue siendo el del checkout confiable ($GITHUB_WORKSPACE).
       - name: preparar solicitud y paquete
+        working-directory: pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -69,14 +80,6 @@ jobs:
           python "$GITHUB_WORKSPACE/review.py" execute-request \
             --request-id "$REQUEST_ID" \
             --work "${RUNNER_TEMP}/ai-review"
-      - name: traer el PR como datos
-        env:
-          HEAD_SHA: ${{ inputs.head_sha }}
-          BASE_SHA: ${{ inputs.base_sha }}
-        run: |
-          git fetch --no-tags origin "+${HEAD_SHA}:refs/ai-review/head"
-          git fetch --no-tags origin "${BASE_SHA}"
-          git worktree add --detach pr refs/ai-review/head
       - name: preparar contexto
         working-directory: pr
         env:
