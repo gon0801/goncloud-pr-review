@@ -3573,6 +3573,99 @@ class Workflows(unittest.TestCase):
         self.assertEqual(publicado.snapshot.pending_requests, [])
         self.assertEqual(publicado.snapshot.completion, domain.COMPLETE_CLAIM)
 
+    RESOLUCION_93 = json.loads(
+        (ROOT / "tests" / "fixtures" / "t16_ronda3_resolucion.json").read_text()
+    )
+
+    def _reconciliar_resolucion(self, prev_sha_del_worker):
+        """Memoria con el F1 real del #93 abierto y revisado en el push previo;
+        el worker 38025265430 lo declara resuelto con su delta real."""
+        import review_domain as domain
+
+        observacion = self.RESOLUCION_93["observacion_f1"]
+        previo = self.RESOLUCION_93["manifest"]["prev_sha"]
+        f1 = domain.Finding(
+            id="F1",
+            title=observacion["title"],
+            severity="Medium",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path=observacion["file"], line=98),
+        )
+        base = self._estado_pendiente()
+        estado = replace(
+            base,
+            revision=replace(base.revision, head_sha=previo),
+            findings=[f1],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            self._resultado_de_corrida(tmp, 77)
+            artefacto = json.loads((Path(tmp) / "result.json").read_text())
+            manifest = dict(self.RESOLUCION_93["manifest"])
+            if prev_sha_del_worker is None:
+                manifest.pop("prev_sha")
+            else:
+                manifest["prev_sha"] = prev_sha_del_worker
+            artefacto.update(
+                {
+                    "observaciones": [observacion],
+                    "manifest": manifest,
+                    "model_ok": True,
+                    "result": "F1 resuelto.\nCOVERAGE: complete",
+                }
+            )
+            (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+            errores = io.StringIO()
+            with contextlib.redirect_stderr(errores):
+                patches, _ = self._reconciliar(
+                    estado,
+                    tmp,
+                    "workflow_dispatch",
+                    WORKER_RUN_ID="77",
+                    WORKER_ATTEMPT="1",
+                )
+        publicado = domain.read_snapshot(patches[-1][1])
+        self.assertIsInstance(publicado, domain.Valid)
+        f1_final = {f.id: f for f in publicado.snapshot.findings}["F1"]
+        return f1_final, errores.getvalue()
+
+    def test_el_coordinador_resuelve_con_el_delta_del_worker(self):
+        """Ronda 3 (#93): sin delta en los hechos del coordinador, el
+        «resolved» del modelo nunca se verificaba y F1 seguía abierto."""
+        import review_domain as domain
+
+        f1, _ = self._reconciliar_resolucion(self.RESOLUCION_93["manifest"]["prev_sha"])
+        self.assertIsInstance(f1.status, domain.StatusResolved)
+        self.assertEqual(f1.status.at_sha, "c" * 40)
+
+    def test_un_delta_de_otra_base_no_verifica_resoluciones(self):
+        import review_domain as domain
+
+        for prev_sha in ("9" * 40, None):
+            with self.subTest(prev_sha=prev_sha):
+                f1, errores = self._reconciliar_resolucion(prev_sha)
+                self.assertIsInstance(f1.status, domain.StatusOpen)
+                self.assertIn("sin delta verificable del worker", errores)
+
+    def test_con_el_mismo_delta_resuelve_igual_que_la_ruta_directa(self):
+        import review_domain as domain
+
+        observacion = self.RESOLUCION_93["observacion_f1"]
+        previo = {
+            "findings": [{**observacion, "id": "F1", "state": "open"}],
+            "next": 2,
+        }
+        directa, _ = review.merge_findings(
+            previo,
+            {"findings": [observacion]},
+            changed_files=self.RESOLUCION_93["manifest"]["changed_files"],
+            reverted_files=[],
+            dismiss_ids=[],
+            dismiss_all=False,
+        )
+        f1, _ = self._reconciliar_resolucion(self.RESOLUCION_93["manifest"]["prev_sha"])
+        self.assertEqual(directa["findings"][0]["state"], "resolved")
+        self.assertIsInstance(f1.status, domain.StatusResolved)
+
     def test_el_resultado_del_worker_publica_la_revision_visible(self):
         import review_domain as domain
 
