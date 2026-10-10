@@ -62,7 +62,9 @@ def consulta(*args, expr):
 
 def plantilla(nombre):
     texto = (pathlib.Path(here) / "templates" / nombre).read_text()
-    ancla = "        with:\n          persist-credentials: false"
+    # Última clave del primer checkout (el confiable): el paso central va justo
+    # después, aunque ese checkout tenga otras claves antes (fetch-depth).
+    ancla = "          persist-credentials: false"
     paso_central = (
         "      - name: checkout del CLI confiable del repo central\n"
         "        uses: actions/checkout@v4\n"

@@ -1,0 +1,24 @@
+{
+ "run_id": 38025265430,
+ "pr": 93,
+ "observacion_f1": {
+  "id": "F1",
+  "file": "docs/reviewer-rollout.md",
+  "files": [
+   "docs/reviewer-rollout.md"
+  ],
+  "line": 98,
+  "severity": "Medium",
+  "title": "El Estado del piloto sigue diciendo que el central volvio al revisor directo",
+  "state": "resolved"
+ },
+ "manifest": {
+  "prev_sha": "831984508b4e3e210faa0784e5a23ff2c2127c23",
+  "changed_files": [
+   "Plans.md",
+   "docs/evidence/reviewer/T16-piloto-2.md",
+   "docs/reviewer-rollout.md"
+  ],
+  "mode": "full"
+ }
+}

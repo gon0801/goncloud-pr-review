@@ -50,6 +50,9 @@ jobs:
       - name: checkout del código confiable del worker
         uses: actions/checkout@v4
         with:
+          # Historia completa: con profundidad 1 la base del PR queda como raíz
+          # superficial y git merge-base falla en cuanto main avanza tras el fork.
+          fetch-depth: 0
           persist-credentials: false
       - name: validar entradas
         env:
