@@ -1399,6 +1399,29 @@ def cmd_install(args):
         return
 
 
+def hallazgo_a_explicar(work):
+    """«F7 (High · `ruta:24` · título)» si el paquete del worker es una solicitud
+    de explicación; None en una revisión o en la ruta directa (sin paquete)."""
+    paquete = Path(work) / "request-package.json"
+    if not paquete.exists():
+        return None
+    datos = json.loads(paquete.read_text())
+    fid = datos.get("finding_id")
+    if datos.get("kind") != "explain" or not fid:
+        return None
+    previo = Path(work) / "prev.json"
+    estado = json.loads(previo.read_text()).get("state") if previo.exists() else None
+    hallazgo = next(
+        (f for f in (estado or {}).get("findings", []) if f.get("id") == fid), None
+    )
+    if hallazgo is None:
+        return fid
+    return (
+        f"{fid} ({hallazgo['severity']} · `{hallazgo['file']}:{hallazgo['line']}` · "
+        f"{hallazgo['title']})"
+    )
+
+
 def build_prompt(manifest, work, max_turns):
     prompt = (
         f"Review pull request #{env('PR_NUMBER')} in {env('REPO')}.\n"
@@ -1411,6 +1434,14 @@ def build_prompt(manifest, work, max_turns):
         f"- The repository at the PR head is your working directory.\n"
         f"Write the review in this language: {os.environ.get('LANGUAGE', 'es')}."
     )
+    explicar = hallazgo_a_explicar(work)
+    if explicar:
+        return prompt + (
+            f"\n- This request is NOT a review: a maintainer asked you to EXPLAIN finding "
+            f"{explicar}. Explain in depth what happens, why it matters and how to fix it, "
+            f"citing the code. Do not review the rest of the PR, do not report other "
+            f"findings, and do not emit a findings block or a COVERAGE line."
+        )
     if manifest.get("mode") != "incremental" and manifest.get("has_prev_findings"):
         prompt += (
             f"\n- This PR already has findings from an earlier review: {work}/prev_findings.md. "
@@ -2196,6 +2227,18 @@ def _login_de(comentario):
     return comentario.get("login") or (user or {}).get("login")
 
 
+def cuerpo_con_cabecera(bloque, resto):
+    """MARKER, sha=, completion= y después el bloque, el orden de compose:
+    reviewed_completion exige esas dos líneas justo tras el marcador."""
+    lineas = resto.split("\n") if resto else []
+    cabecera = []
+    while lineas and lineas[0].startswith((SHA_PREFIX, COMPLETION_PREFIX)):
+        cabecera.append(lineas.pop(0))
+    cuerpo = "\n".join([MARKER, *cabecera, bloque])
+    cola = "\n".join(lineas)
+    return f"{cuerpo}\n{cola}" if cola else cuerpo
+
+
 def publish_checkpoint(decision, observado, adaptador, login=None, visible=None):
     """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
     bloque y conserva el resto (la prosa puede citar otros), salvo que
@@ -2230,9 +2273,7 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
             trabajo=decision.work_after_commit,
         )
     if visible is None:
-
-        def visible(bloque, resto):
-            return f"{MARKER}\n{bloque}\n{resto}" if resto else f"{MARKER}\n{bloque}"
+        visible = cuerpo_con_cabecera
 
     if observado is None:
         cuerpo = visible(bloque, "")
@@ -3096,8 +3137,8 @@ def revision_visible(artifact, snapshot, previos, head):
     def armar(bloque, resto):
         if ERROR_KEY in artifact:
             banner = caution_banner(artifact[ERROR_KEY], head, has_previous=bool(resto))
-            return (
-                f"{MARKER}\n{bloque}\n" + insert_caution_banner(resto, banner).rstrip()
+            return cuerpo_con_cabecera(
+                bloque, insert_caution_banner(resto, banner).rstrip()
             )
         proveedor = artifact.get("review_provider")
         if proveedor not in PROVIDERS:
