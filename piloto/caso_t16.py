@@ -18,3 +18,7 @@ def leer_config(ruta):
 def mediana(valores):
     ordenados = sorted(valores)
     return ordenados[len(ordenados) // 2]
+
+
+def dividir_todo(valores, divisor):
+    return [v / divisor for v in valores if divisor == 0]
