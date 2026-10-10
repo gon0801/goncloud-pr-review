@@ -31,6 +31,7 @@ from review_domain import (
     SEVERITIES,
     derive_next,
     find_findings_block,
+    find_model_findings_block,
     finding_number,
     normalize_severity,
     one_line,
@@ -38,6 +39,7 @@ from review_domain import (
     same_issue,
     sanitize_finding,
     strip_findings_block,
+    strip_model_findings_block,
     unique_paths,
 )
 from review_context import (
@@ -111,6 +113,7 @@ __all__ = [
     "excluded_by",
     "files_matching_base",
     "find_findings_block",
+    "find_model_findings_block",
     "finding_number",
     "grep_files",
     "is_ancestor",
@@ -127,6 +130,7 @@ __all__ = [
     "sanitize_finding",
     "serialize_findings",
     "strip_findings_block",
+    "strip_model_findings_block",
     "trim_utf8",
     "unique_paths",
 ]
@@ -661,7 +665,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         )
 
     if findings is not None:
-        review = strip_findings_block(review, last=True)
+        review = strip_model_findings_block(review)
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
@@ -722,7 +726,7 @@ def compose_with_findings(
         findings.get("new_ids", []),
         findings["block"],
     )
-    review = strip_model_verdict(strip_findings_block(review, last=True))
+    review = strip_model_verdict(strip_model_findings_block(review))
     sections = sections_for(merged, new_ids)
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
@@ -900,6 +904,16 @@ def soft_fail(result_path, reason):
 def set_output(key, value):
     with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
         fh.write(f"{key}={value}\n")
+
+
+def avisar_bloque_sin_cierre(texto):
+    """El bloque del modelo se recuperó sin su ` -->`: se publica, pero queda a la vista."""
+    found = find_model_findings_block(texto)
+    if found is not None and not found[3]:
+        print(
+            "::warning::ai-review: el bloque de hallazgos del modelo venía sin cierre `-->`; "
+            "se recuperó del JSON completo"
+        )
 
 
 def informar_revision(revisado):
@@ -1399,7 +1413,8 @@ def build_prompt(manifest, work, max_turns):
             f"\n- INCREMENTAL review since {manifest['prev_sha'][:7]}: the rest of the PR is already "
             f"reviewed. Verify each OPEN finding in {work}/prev_findings.md against the new diff and "
             f"look for NEW bugs only in: {listed or '(no files in scope)'}. "
-            f"Emit the updated findings block before COVERAGE."
+            f"Emit the updated findings block right before COVERAGE, as one line that starts with "
+            f"`<!-- ai-review:findings=` and ends with ` -->`."
         )
     return prompt
 
@@ -2316,6 +2331,7 @@ def cmd_publish(args):
     name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
     name = result.get("review_provider", name)
+    avisar_bloque_sin_cierre(result.get("result") or "")
     manifest = json.loads((work / "manifest.json").read_text())
     comments = fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
@@ -2979,6 +2995,7 @@ def cmd_close_result(args):
         for n in ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
     ]
     texto = redact(resultado.get("result") or "", secretos)
+    avisar_bloque_sin_cierre(texto)
     modelo = parse_model_findings(
         texto, conservar_anclas=politica_de_identidad() == "anchors"
     )
