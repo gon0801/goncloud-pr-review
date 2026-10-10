@@ -16,7 +16,8 @@ repo central.
 > #416); el CLI es el mismo entre esos dos commits. En goncloud-Orbit el check
 > requerido `review` de `master` pasó a `reconcile`. El recordatorio del bloque
 > (#98) se comprueba en las revisiones reales. Para instalar o re-fijar otro
-> repo: skill `instalar-revisor` (`install.sh --coordinado`, sin bandera).
+> repo: la skill de usuario `instalar-revisor` (`~/.claude/skills/`, reemplaza a
+> `revisor-ia`, que instalaba el modo directo), que corre `install.sh --coordinado`.
 
 ## Qué instala el modo coordinado
 
