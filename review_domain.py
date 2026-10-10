@@ -381,10 +381,10 @@ def find_model_findings_block(text):
         found = _closed_block_at(text, start)
         if found is not None:
             return (start, *found, True)
+        # raw_decode no salta espacios iniciales; json.loads del camino cerrado sí.
+        body = re.compile(r"\s*").match(text, start + len(FINDINGS_PREFIX)).end()
         try:
-            data, end = json.JSONDecoder().raw_decode(
-                text, start + len(FINDINGS_PREFIX)
-            )
+            data, end = json.JSONDecoder().raw_decode(text, body)
         except ValueError:
             continue
         if isinstance(data, dict) and isinstance(data.get("findings"), list):

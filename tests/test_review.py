@@ -5924,6 +5924,19 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         )
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
+    def test_espacio_tras_el_prefijo_y_sin_cierre_conserva_los_hallazgos(self):
+        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        for espacio in (" ", "\n"):
+            with self.subTest(espacio=repr(espacio)):
+                texto = prosa.replace(
+                    review.FINDINGS_PREFIX, review.FINDINGS_PREFIX + espacio
+                )
+                state = review.parse_model_findings(texto)
+                self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
+                self.assertEqual(
+                    review.strip_model_findings_block(texto), "Detalle del cambio."
+                )
+
     def test_json_truncado_no_se_acepta(self):
         truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
         self.assertIsNone(review.parse_model_findings(truncado))
@@ -6024,7 +6037,8 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
         self.assertNotIn("no entregó su bloque", body)
         self.assertIn(
-            "::warning::ai-review: el bloque de hallazgos del modelo venía sin cierre",
+            "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
+            "tras el JSON",
             proc.stdout,
         )
 

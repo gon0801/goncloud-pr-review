@@ -911,8 +911,8 @@ def avisar_bloque_sin_cierre(texto):
     found = find_model_findings_block(texto)
     if found is not None and not found[3]:
         print(
-            "::warning::ai-review: el bloque de hallazgos del modelo venía sin cierre `-->`; "
-            "se recuperó del JSON completo"
+            "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
+            "tras el JSON; se recuperó del JSON completo"
         )
 
 
