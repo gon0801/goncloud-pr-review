@@ -80,7 +80,7 @@ Dos corridas del worker en el #85, con opencode-go: $0.1433 (12 turnos) y
 $0.1210 (10 turnos), **$0.2643** en total. El worker del #86 y
 el del #87 corrieron durante la ventana activa y no se suman al piloto.
 
-## Decisión
+## Decisión de la ronda 2 (histórica; la sustituye la ronda 3, abajo)
 
 El modo coordinado no se despliega. La ronda 3 exige los arreglos de
 T16-piloto-2 en `main` (pérdida, gate, identidad, memoria del worker,

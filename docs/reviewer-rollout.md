@@ -100,8 +100,10 @@ ejecutó en el PR #65. Ronda 1 del piloto (`docs/evidence/reviewer/T16-piloto.md
 la cadena funciona tras seis arreglos pero sin capa visible; volvió a current
 (#77). Ronda 2 (`docs/evidence/reviewer/T16-piloto-2.md`): con capa visible
 (#79, #83) el publicador perdía 5 de 6 hallazgos por revisión; el central
-volvió al revisor directo (#86). Los consumidores (summonaikit-claude,
-goncloud-openclaw, goncloud-Orbit) siguen bloqueados por el piloto. El corte y
+volvió al revisor directo (#86). Ronda 3 (mismo documento): con #87, #88 y #89
+el central reactivó el coordinado (#90) y pasaron los casos 1 a 5; sigue activo
+en el central. Los consumidores (summonaikit-claude, goncloud-openclaw,
+goncloud-Orbit) quedan a decisión del operador después de #92. El corte y
 el retorno mecánicos son los que describe el procedimiento de T11 de arriba.
 
 ## Qué hay congelado hoy
