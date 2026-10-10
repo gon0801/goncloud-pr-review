@@ -507,15 +507,17 @@ def strip_findings_block(text, *, last=False):
 def strip_model_findings_block(text):
     """The model's prose without its block, closed or not."""
     text = text or ""
+    if FINDINGS_PREFIX not in text:
+        return text
     found = find_model_findings_block(text)
     if found is not None:
         start, end, _, _ = found
-        return (text[:start] + text[end:]).strip()
-    start = text.rfind(FINDINGS_PREFIX)
-    if start >= 0:
+        text = text[:start] + text[end:]
+    last = text.rfind(FINDINGS_PREFIX)
+    if last >= 0 and "-->" not in text[last:]:
         # Unreadable block: an open `<!--` would hide the rest of the comment on GitHub.
-        return text[:start].strip()
-    return text
+        text = text[:last]
+    return text.strip()
 
 
 # Lectura compatible (legado + esquema 2) y migración.

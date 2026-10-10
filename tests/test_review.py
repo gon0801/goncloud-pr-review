@@ -5955,6 +5955,14 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
             review.strip_model_findings_block(truncado), "Detalle del cambio."
         )
 
+    def test_un_bloque_ilegible_tras_uno_valido_no_queda_abierto(self):
+        citado = block_of(make_finding("F9", title="Citado del PR"))
+        truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
+        self.assertEqual(
+            review.strip_model_findings_block(f"Antes.\n{citado}\n{truncado}"),
+            "Antes.\n\nDetalle del cambio.",
+        )
+
     def test_el_ultimo_bloque_sin_cierre_gana_a_uno_citado_antes(self):
         citado = block_of(make_finding("F9", title="Citado del PR"))
         texto = f"{citado}\ntexto\n" + review.split_coverage(BLOQUE_SIN_CIERRE)[0]
