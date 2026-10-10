@@ -3109,6 +3109,33 @@ class Workflows(unittest.TestCase):
         )
         self.assertEqual((salida, resumen), ("reviewed=true\n", ""))
 
+    def test_el_publicador_deriva_del_artifact_lo_mismo_que_reviewed(self):
+        # El publicador corre en otro workflow: no lee outputs de pasos del
+        # worker, solo el result.json que viaja como artifact.
+        casos = {
+            "con motivo": ({review.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
+            "motivo vacío": ({review.ERROR_KEY: ""}, "reviewed=false\n"),
+            "revisado": (
+                {"result": "ok\nCOVERAGE: complete", "subtype": "success"},
+                "reviewed=true\n",
+            ),
+        }
+        for nombre, (resultado, esperado) in casos.items():
+            with self.subTest(caso=nombre):
+                with tempfile.TemporaryDirectory() as work:
+                    w = Path(work)
+                    (w / "request-package.json").write_text(
+                        json.dumps({"request_id": 1, "pr_head_sha": "c" * 40})
+                    )
+                    (w / "result.json").write_text(json.dumps(resultado))
+                    with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(w / "out")}):
+                        review.cmd_close_result(argparse.Namespace(work=work))
+                    salida = (w / "out").read_text()
+                    artifact = json.loads((w / "result.json").read_text())
+                fallo = review.fallo_de_resultado(artifact, 77, 1)
+                self.assertEqual(salida, esperado)
+                self.assertEqual(fallo is None, esperado == "reviewed=true\n")
+
     def test_close_result_conserva_costo_y_alcance(self):
         with tempfile.TemporaryDirectory() as work:
             (Path(work) / "request-package.json").write_text(

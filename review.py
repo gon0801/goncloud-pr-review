@@ -2634,14 +2634,15 @@ def _comandos_de_comentarios(comentarios, login, cursor):
 
 
 def fallo_de_resultado(artifact, run_id, attempt):
-    motivo = (artifact or {}).get(ERROR_KEY)
-    if not motivo:
+    # La presencia de la clave decide, como reviewed= en el worker y el aviso
+    # de revision_visible: un motivo vacío sigue siendo un fallo.
+    if ERROR_KEY not in (artifact or {}):
         return None
     return review_domain.ReportFailed(
-        request_id=(artifact or {}).get("request_id"),
+        request_id=artifact.get("request_id"),
         run_id=run_id,
         attempt=attempt,
-        motivo=motivo,
+        motivo=artifact[ERROR_KEY] or "el worker falló sin motivo",
         retryable=True,
     )
 
