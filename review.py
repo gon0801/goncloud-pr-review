@@ -2888,15 +2888,16 @@ def hechos_con_delta_del_worker(facts, artifact, current):
 
 
 def hechos_con_recortes_del_worker(facts, artifact):
-    """El recorte por tamaño que el worker ya aplicó, plegado en las omisiones
-    con el mismo formato de la ruta directa: sin él, el «complete» que declara
-    el modelo acredita archivos que nadie leyó. El manifest viaja en el
-    artifact autenticado y el dominio baja la cobertura con cualquier omisión."""
+    """Las omisiones que el worker ya aplicó (archivos fuera por tamaño del
+    diff o por encoding), plegadas en las omisiones con el mismo formato de la
+    ruta directa: sin él, el «complete» que declara el modelo acredita
+    archivos que nadie leyó. El manifest viaja en el artifact autenticado y el
+    dominio baja la cobertura con cualquier omisión."""
     excluidos = (artifact.get("manifest") or {}).get("excluded") or []
     recortes = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
         for e in excluidos
-        if e.get("reason") == "budget"
+        if e.get("reason") in ("budget", "encoding")
     )
     if not recortes:
         return facts
