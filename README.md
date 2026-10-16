@@ -105,7 +105,7 @@ Los logs de cada paso llevan el prefijo `ai-review:`.
 ```bash
 bash scripts/check.sh          # piso: pre-commit + particion + bateria completa
 bash scripts/install-hooks.sh  # pre-push con el mismo piso
-python3 scripts/verify_sticky.py --body-file sticky.md  # verifica un comentario publicado
+python3 scripts/verify_sticky.py --body-file sticky.md  # requiere Python 3.10+; verifica un comentario publicado
 ```
 
 CI corre las pruebas y `actionlint`. Este repo se revisa a sí mismo con `.github/workflows/ai-review.yml`, que usa la action local (`uses: ./`).
