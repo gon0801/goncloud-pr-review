@@ -3869,6 +3869,47 @@ class Workflows(unittest.TestCase):
         self.assertEqual(publicado.snapshot.pending_requests, [])
         self.assertEqual([f.id for f in publicado.snapshot.findings], ["F2"])
 
+    def test_el_recorte_del_worker_degrada_la_revision_del_coordinador(self):
+        """La omisión del manifest del worker degrada la marca schema 3 que
+        publica cmd_reconcile, por tamaño del diff y por encoding."""
+        import review_domain as domain
+
+        for motivo, ruta in (("budget", "grande.bin"), ("encoding", "latin1.py")):
+            with self.subTest(motivo=motivo):
+                with tempfile.TemporaryDirectory() as tmp:
+                    self._resultado_de_corrida(tmp, 77)
+                    artefacto = json.loads((Path(tmp) / "result.json").read_text())
+                    artefacto.update(
+                        {
+                            "result": "Sin hallazgos.\nCOVERAGE: complete",
+                            "subtype": "success",
+                            "model_ok": True,
+                            "review_provider": "opencode-go",
+                            "observaciones": [],
+                            "manifest": {
+                                "reviewed": ["a.py"],
+                                "excluded": [{"path": ruta, "reason": motivo}],
+                            },
+                        }
+                    )
+                    (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+                    patches, _ = self._reconciliar(
+                        self._estado_pendiente(),
+                        tmp,
+                        "workflow_dispatch",
+                        WORKER_RUN_ID="77",
+                        WORKER_ATTEMPT="1",
+                    )
+                cuerpo = patches[-1][1]
+                lineas = cuerpo.split("\n")
+                self.assertEqual(
+                    lineas[2],
+                    f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->",
+                )
+                publicado = domain.read_snapshot(cuerpo, last=False)
+                self.assertIsInstance(publicado, domain.Valid)
+                self.assertEqual(publicado.snapshot.completion, domain.PARTIAL)
+
     def test_un_resultado_de_un_head_viejo_no_acredita_en_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._resultado_de_corrida(tmp, 77)
