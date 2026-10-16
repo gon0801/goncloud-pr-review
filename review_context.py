@@ -960,7 +960,7 @@ def prepare_review(
         Obligation(ruta=ruta)
         for ruta in dict.fromkeys(list(rutas_plan) + rutas_abiertas(current))
     )
-    if any(om.causa == "presupuesto" for om in omisiones):
+    if any(om.causa in ("presupuesto", "budget") for om in omisiones):
         cobertura = PARTIAL
     elif not entregados:
         cobertura = UNKNOWN
