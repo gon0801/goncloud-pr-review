@@ -101,7 +101,7 @@ def comentario_publico(artifact, decision, head):
     )
 
 
-class RecorteBudgetDegradalaMarca(unittest.TestCase):
+class RecorteBudgetDegradaLaMarca(unittest.TestCase):
     """H3 (SUA-05 4.3): un archivo excluido por `budget` baja la cobertura a
     PARTIAL por la ruta de producción coordinada, el bloque schema 3 y la
     marca pública; el aviso visible se queda."""
