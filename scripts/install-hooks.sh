@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Instala los ganchos de .githooks en el gancho real de ESTE checkout
-# (solo este worktree; no toca la config global ni otros worktrees).
+# Instala el pre-push de .githooks SOLO para ESTE checkout (worktree):
+# usa core.hooksPath por worktree (extensions.worktreeConfig), asi no toca
+# los ganchos del checkout principal ni de otros worktrees.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-dest="$(git rev-parse --git-dir)/hooks"
-mkdir -p "$dest"
-for hook in .githooks/*; do
-  nombre="$(basename "$hook")"
-  ln -sf "$PWD/$hook" "$dest/$nombre"
-  echo "install-hooks: $nombre -> $dest/$nombre"
-done
+git config extensions.worktreeConfig true
+git config --worktree core.hooksPath "$PWD/.githooks"
+echo "install-hooks: core.hooksPath(worktree) = $(git config --worktree core.hooksPath)"

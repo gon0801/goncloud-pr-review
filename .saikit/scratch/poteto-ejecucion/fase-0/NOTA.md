@@ -49,3 +49,14 @@ Base: origin/main @ cc7edd9. Rama: poteto/fase-0-piso.
 - `scripts/check.sh` (nuevo, el comando unico)
 - `scripts/install-hooks.sh` + `.githooks/pre-push` (nuevos)
 - `.saikit/scratch/poteto-ejecucion/fase-0/` (esta evidencia)
+
+## Incidente (declarado): el pre-push no corrio en los dos primeros pushes
+- El gancho se instalo como symlink en el hooks dir del worktree
+  (`.../.git/worktrees/prr-poteto/hooks/`), que este git ignora en
+  worktrees enlazados: lo probe con un gancho `exit 1` y el push paso
+  igual (inc. un tag de prueba, ya borrado del remoto).
+- Ademas el `cd` del gancho estaba mal (`dirname $0` lleva al gitdir).
+- Fix (via FASE 1): `cd "$(git rev-parse --show-toplevel)"` +
+  `scripts/install-hooks.sh` con `core.hooksPath` por worktree
+  (`extensions.worktreeConfig`), verificado con sonda: el push se
+  bloquea con HOOK-PROBE-RAN. No toca otros checkouts.
