@@ -3869,6 +3869,61 @@ class Workflows(unittest.TestCase):
         self.assertEqual(publicado.snapshot.pending_requests, [])
         self.assertEqual([f.id for f in publicado.snapshot.findings], ["F2"])
 
+    def test_el_recorte_del_worker_degrada_la_revision_del_coordinador(self):
+        """La omisión del manifest del worker degrada la marca schema 3 que
+        publica cmd_reconcile, por tamaño del diff y por encoding; un excluido
+        que el revisor sí dejó fuera por contrato (binario) no degrada."""
+        import review_domain as domain
+
+        casos = (
+            ("budget", "grande.log", "partial", "quedaron fuera por tamaño del diff"),
+            ("encoding", "latin1.py", "partial", "no se pudieron leer como UTF-8"),
+            ("binario", "imagen.png", "complete", None),
+        )
+        for motivo, ruta, marcador, aviso in casos:
+            with self.subTest(motivo=motivo):
+                with tempfile.TemporaryDirectory() as tmp:
+                    self._resultado_de_corrida(tmp, 77)
+                    artefacto = json.loads((Path(tmp) / "result.json").read_text())
+                    artefacto.update(
+                        {
+                            "result": "Sin hallazgos.\nCOVERAGE: complete",
+                            "subtype": "success",
+                            "model_ok": True,
+                            "review_provider": "opencode-go",
+                            "observaciones": [],
+                            "manifest": {
+                                "reviewed": ["a.py"],
+                                "excluded": [{"path": ruta, "reason": motivo}],
+                            },
+                        }
+                    )
+                    (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
+                    patches, _ = self._reconciliar(
+                        self._estado_pendiente(),
+                        tmp,
+                        "workflow_dispatch",
+                        WORKER_RUN_ID="77",
+                        WORKER_ATTEMPT="1",
+                    )
+                cuerpo = patches[-1][1]
+                lineas = cuerpo.split("\n")
+                self.assertEqual(
+                    lineas[2],
+                    f"{review.COMPLETION_PREFIX}{'c' * 40}:{marcador} -->",
+                )
+                if aviso is None:
+                    self.assertNotIn("quedaron fuera", cuerpo)
+                    self.assertNotIn("UTF-8", cuerpo)
+                else:
+                    self.assertIn(f"1 archivo(s) {aviso}", cuerpo)
+                publicado = domain.read_snapshot(cuerpo, last=False)
+                self.assertIsInstance(publicado, domain.Valid)
+                self.assertEqual(
+                    publicado.snapshot.completion,
+                    domain.PARTIAL if marcador == "partial" else domain.COMPLETE_CLAIM,
+                )
+
     def test_un_resultado_de_un_head_viejo_no_acredita_en_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._resultado_de_corrida(tmp, 77)
@@ -7916,42 +7971,50 @@ class CableadoIdentidad(unittest.TestCase):
             head = (
                 base  # delta real vacío y calculado: la única omisión es la exclusión
             )
-            manifest = {
-                "base": base,
-                "head": head,
-                "mode": "full",
-                "reason": "no-prev",
-                "reviewed": ["a.py"],
-                "excluded": [{"path": "gen/big.js", "reason": "budget"}],
-            }
-            sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
-            bloque = (
-                domain.FINDINGS_PREFIX
-                + '{"findings": [], "next": 1}'
-                + domain.FINDINGS_SUFFIX
-            )
-            resultado = {
-                "result": f"{bloque}\n\nCOVERAGE: complete\n",
-                "subtype": "success",
-            }
-            cwd = os.getcwd()
-            os.chdir(repo)
-            try:
-                out = review.build_findings(
-                    resultado, manifest, sticky, "o/r", 1, "bot", []
-                )
-            finally:
-                os.chdir(cwd)
-        self.assertEqual(
-            out["completion"],
-            domain.PARTIAL,
-            "archivo excluido por budget: omisión obligatoria, no complete",
-        )
-        cuerpo = review.compose(
-            resultado, manifest, sha=head, provider="opencode-go", findings=out
-        )
-        self.assertIn(f"{review.COMPLETION_PREFIX}{head[:7]}", cuerpo)
-        self.assertIn(":partial -->", cuerpo)
+            for motivo in ("budget", "encoding"):
+                with self.subTest(motivo=motivo):
+                    manifest = {
+                        "base": base,
+                        "head": head,
+                        "mode": "full",
+                        "reason": "no-prev",
+                        "reviewed": ["a.py"],
+                        "excluded": [{"path": "latin1.py", "reason": motivo}],
+                    }
+                    sticky = {
+                        "body": domain.encode_snapshot(self._memoria_v2_chica(domain))
+                    }
+                    bloque = (
+                        domain.FINDINGS_PREFIX
+                        + '{"findings": [], "next": 1}'
+                        + domain.FINDINGS_SUFFIX
+                    )
+                    resultado = {
+                        "result": f"{bloque}\n\nCOVERAGE: complete\n",
+                        "subtype": "success",
+                    }
+                    cwd = os.getcwd()
+                    os.chdir(repo)
+                    try:
+                        out = review.build_findings(
+                            resultado, manifest, sticky, "o/r", 1, "bot", []
+                        )
+                    finally:
+                        os.chdir(cwd)
+                    self.assertEqual(
+                        out["completion"],
+                        domain.PARTIAL,
+                        "archivo excluido: omisión obligatoria, no complete",
+                    )
+                    cuerpo = review.compose(
+                        resultado,
+                        manifest,
+                        sha=head,
+                        provider="opencode-go",
+                        findings=out,
+                    )
+                    self.assertIn(f"{review.COMPLETION_PREFIX}{head[:7]}", cuerpo)
+                    self.assertIn(":partial -->", cuerpo)
 
     def test_bloque_ausente_no_confirma_cobertura(self):
         """model_ok falso (sin bloque) degrada la cobertura completa."""
