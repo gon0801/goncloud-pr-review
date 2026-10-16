@@ -1,0 +1,194 @@
+........................................................................./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpjofw9_7w/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpjofw9_7w/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:504: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpjofw9_7w/llamadas.log' mode='r' encoding='utf-8'>
+  registro = open(self.registro_ruta).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpbgavwjeg/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpbgavwjeg/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpxt38ki2u/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpxt38ki2u/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmphbj_3l66/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmphbj_3l66/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpys8r2yfy/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpys8r2yfy/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+F/Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp7n2jg8ky/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp7n2jg8ky/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpvqpc2fb9/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpvqpc2fb9/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp_61dxdom/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp_61dxdom/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpllbq___x/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpllbq___x/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpkti1570i/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpkti1570i/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpyhmuu_90/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpyhmuu_90/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:673: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpyhmuu_90/llamadas.log' mode='r' encoding='utf-8'>
+  self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpbtujfiku/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpbtujfiku/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp4gl93nu2/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp4gl93nu2/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpt151qdzf/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpt151qdzf/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpcj_mqce5/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpcj_mqce5/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp7azzypod/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmp7azzypod/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpzlomu_6d/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpzlomu_6d/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:519: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpzlomu_6d/llamadas.log' mode='r' encoding='utf-8'>
+  self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/dn/dev/wt/prr-poteto/tests/test_install.py:381: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpm0gs8khg/estado.json' mode='w' encoding='utf-8'>
+  json.dump(self.estado, open(self.estado_ruta, "w"), indent=1)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:410: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpm0gs8khg/estado.json' mode='r' encoding='utf-8'>
+  self.estado = json.load(open(self.estado_ruta))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/dn/dev/wt/prr-poteto/tests/test_install.py:519: ResourceWarning: unclosed file <_io.TextIOWrapper name='/var/folders/hp/sc_3c6qs7nvdswl_x3w5sdbr0000gn/T/tmpm0gs8khg/llamadas.log' mode='r' encoding='utf-8'>
+  self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........................................................................ai-review: memoria desborde (17638 bytes para 8000) conservada sin modificar (Keep)
+......................ai-review: memoria desborde (11056 bytes para 8000) conservada sin modificar (Keep)
+.ai-review: memoria desborde (11056 bytes para 8000) conservada sin modificar (Keep)
+...........................................................................................ai-review: memoria desborde (8506 bytes para 8000) conservada sin modificar (Keep)
+ai-review: memoria desborde (8506 bytes para 8000) conservada sin modificar (Keep)
+...ai-review: memoria inválida (bloque de hallazgos corrupto: JSON o cierre ausentes) conservada sin modificar (Keep)
+................................................................................................s...........................................ai-review: resultado rechazado (workflow del run incorrecto)
+.ai-review: resultado rechazado (SHA del workflow no es el código confiable)
+..................ai-review: issue_comment 'deleted' no admite comandos
+..ai-review: sin delta verificable del worker (prev_sha None contra el último revisado ccccccc); las resoluciones del modelo quedan sin verificar
+..........................................ai-review: no se pudo consultar el PR ('head'); queda pendiente para el próximo evento
+..ai-review: no se pudo consultar el PR ('head'); queda pendiente para el próximo evento
+....ai-review: resultado rechazado (workflow del run incorrecto)
+.............................................................................................................ai-review: memoria versión 9 conservada sin modificar (Keep)
+..........................
+======================================================================
+FAIL: test_el_retiro_atomico_restaura_el_escritor_anterior (test_install.CompatibleRollback.test_el_retiro_atomico_restaura_el_escritor_anterior)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dn/dev/wt/prr-poteto/tests/test_install.py", line 826, in test_el_retiro_atomico_restaura_el_escritor_anterior
+    self.assertIn("gon0801/goncloud-pr-review@" + "c" * 40, restituido)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'gon0801/goncloud-pr-review@cccccccccccccccccccccccccccccccccccccccc' not found in '# Revisión automática de PRs con IA (repo central: gon0801/goncloud-pr-review).\n# Desactivar sin tocar código: gh variable set AI_REVIEW_DISABLED --body true\nname: AI review\n\non:\n  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n\npermissions:\n  contents: read\n  pull-requests: write\n\nconcurrency:\n  group: ai-review-${{ github.event.pull_request.number }}\n  cancel-in-progress: true\n\njobs:\n  review:\n    if: >-\n      !github.event.pull_request.draft\n      && github.event.pull_request.head.repo.full_name == github.repository\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    steps:\n      # Skip everything (including checkout) when disabled, so a failed checkout\n      # can never turn the disabled check red. Case-insensitive, like the action.\n      - name: Check disabled\n        id: check\n        env:\n          DISABLED: ${{ vars.AI_REVIEW_DISABLED }}\n        run: |\n          if [ "${DISABLED,,}" = "true" ]; then\n            echo "skip=true" >> "$GITHUB_OUTPUT"\n          else\n            echo "skip=false" >> "$GITHUB_OUTPUT"\n          fi\n      - uses: actions/checkout@v7\n        if: steps.check.outputs.skip != \'true\'\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n          fetch-depth: 0\n          persist-credentials: false\n      - uses: gon0801\\/goncloud-pr-review@cccccccccccccccccccccccccccccccccccccccc\n        if: steps.check.outputs.skip != \'true\'\n        with:\n          api_key: ${{ secrets.AI_REVIEW_API_KEY }}\n          fallback_api_key: ${{ secrets.DEEPSEEK_API_KEY }}\n          disabled: ${{ vars.AI_REVIEW_DISABLED }}\n'
+
+----------------------------------------------------------------------
+Ran 627 tests in 90.285s
+
+FAILED (failures=1, skipped=1)
+ai-review: comentario 8 actualizado
+ai-review: comentario creado
+ai-review: claude-code 2.1.282 ya instalado (caché); se omite npm
+ai-review: claude-code 2.1.282 ya instalado (caché); se omite npm
+::warning::ai-review: no se pudo instalar LiteLLM para el respaldo (Command 'pip' returned non-zero exit status 1.)
+ai-review: la caché de litellm no sirve con este Python; se reconstruye
+ai-review: la caché de litellm no sirve con este Python; se reconstruye
+ai-review: litellm 1.102.1 ya instalado (caché); se omite pip
+ai-review: comentario 9 actualizado
+ai-review: comentario 9 actualizado
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 0)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+::warning::ai-review: falta el secret AI_REVIEW_API_KEY en este repo
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: checkpoint publicado sin trabajo nuevo
+M1 medición (bytes UTF-8 de estado enriquecido): {1: 903, 3: 2011, 10: 5897, 60: 33947}
+ai-review: comentario 9 actualizado

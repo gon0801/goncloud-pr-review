@@ -1,0 +1,51 @@
+# FASE 0: piso determinista (evidencia)
+
+Base: origin/main @ cc7edd9. Rama: poteto/fase-0-piso.
+
+## Hallazgo 1 (bug real, causa raiz): install.sh rompe el `uses:` en macOS
+- `scripts/install.sh:342` usaba `\/` en el REEMPLAZO de `${content//.../...}`.
+- En bash 5 (ubuntu/CI) `\/` colapsa a `/`; en bash 3.2 (macOS) queda literal.
+- Efecto: el retiro al modo directo (camino del revert #86) instalaba
+  `uses: gon0801\/goncloud-pr-review@<sha>` (ref invalida) en macOS.
+- CI nunca lo vio (solo corre ubuntu). Sin comando unico local ni pre-push,
+  nadie lo corria en Mac.
+- Fix: la barra llega por variable (`$ref`); patron intacto, vale en 3.2 y 5.x.
+- Prueba: `tests/test_install.py::CompatibleRollback::test_el_retiro_atomico_restaura_el_escritor_anterior`
+  (ya existia: reproduce en 2 s, estaba en rojo solo en macOS).
+- Antes: `scripts/install.sh` con `\/` (copia en install.sh.antes).
+- Despues: 19/19 OK (fix-install-19ok.log).
+
+## Hallazgo 2: la bateria no corria en Python >= 3.11
+- `tests/` sin `__init__.py`: `unittest discover -s tests` muere en 3.11+
+  ("Start directory is not importable"). En el Mac (brew python 3.14) era el
+  caso; por eso quality-kit no pudo instalar el pre-push.
+- Fix: `tests/__init__.py` vacio. IDs estables (`test_x.Clase...`), sharding
+  intacto (314+313=627, verify OK).
+
+## El comando unico: `bash scripts/check.sh`
+1. Elige python >= 3.10 (el de sistema en macOS es 3.9 y no sirve).
+2. `pre-commit run --all-files` (candados quality-kit; falta => error con pista).
+3. `run_test_shard.py --verify-partition 2` (union == bateria).
+4. Bateria completa (`unittest discover -s tests`).
+- Evidencia: check-verde-627ok.log (pre-commit OK, 627 OK, `check: OK`).
+- CI (`ci.yml`: shards 0/2+1/2 con union lock + actionlint) queda como esta:
+  el comando local corre el superconjunto (toda la bateria + pre-commit).
+
+## Pre-push
+- `.githooks/pre-push` (fuente versionada) + `scripts/install-hooks.sh`
+  (un comando lo enlaza al hooks dir de ESTE checkout).
+- Instalado en este worktree. Sin `--no-verify`: lo rojo se arregla, no se salta.
+
+## Huecos #84/#86 cerrados
+- #84 metio el writer coordinado; #86 revirtio al directo. El camino de retiro
+  (directo con ACTION_SHA) estaba roto en macOS sin que CI lo viera: ese era el
+  hueco. Ahora lo cubre la prueba de retiro dentro del piso (corre siempre).
+- Los invariantes no-perder-hallazgos del coordinado (#88) corren en verde
+  dentro de la misma bateria (test_review_coordinator.py OK en check-verde).
+
+## Archivos del cambio
+- `scripts/install.sh` (fix `\/`, +4/-1)
+- `tests/__init__.py` (nuevo, vacio)
+- `scripts/check.sh` (nuevo, el comando unico)
+- `scripts/install-hooks.sh` + `.githooks/pre-push` (nuevos)
+- `.saikit/scratch/poteto-ejecucion/fase-0/` (esta evidencia)
