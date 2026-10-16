@@ -15,12 +15,15 @@ Base: origin/main @ cc7edd9. Rama: poteto/fase-0-piso.
 - Antes: `scripts/install.sh` con `\/` (copia en install.sh.antes).
 - Despues: 19/19 OK (fix-install-19ok.log).
 
-## Hallazgo 2: la bateria no corria en Python >= 3.11
-- `tests/` sin `__init__.py`: `unittest discover -s tests` muere en 3.11+
-  ("Start directory is not importable"). En el Mac (brew python 3.14) era el
-  caso; por eso quality-kit no pudo instalar el pre-push.
-- Fix: `tests/__init__.py` vacio. IDs estables (`test_x.Clase...`), sharding
-  intacto (314+313=627, verify OK).
+## Hallazgo 2: el `__init__.py` que faltaba (corregido tras revision F5)
+- Precision: `unittest discover -s tests` (plano) SI corre en 3.14 sin
+  `__init__.py` (probado en main pristino: 627 pruebas, 1 fallo = el bug
+  de install.sh). Lo que muere sin `__init__.py` es la forma con top-level
+  explicito (`discover -s tests -t .`: "Start directory is not importable"),
+  que es la que usa el runner de quality-kit; por eso no pudo instalar el
+  pre-push en el Mac.
+- Fix: `tests/__init__.py` vacio (habilita ambas formas). IDs estables
+  (`test_x.Clase...`), sharding intacto (314+313=627, verify OK).
 
 ## El comando unico: `bash scripts/check.sh`
 1. Elige python >= 3.10 (el de sistema en macOS es 3.9 y no sirve).
@@ -76,3 +79,15 @@ Base: origin/main @ cc7edd9. Rama: poteto/fase-0-piso.
   se elimina por archivo muerto.
 - La prueba que lo habria atrapado no existe como unitaria: la verificacion
   es el propio push con el gancho en verde (camino real con GIT_DIR).
+
+## Revision del revisor sobre #116 (F1-F5, una ronda)
+- F1 Medium (cd del gancho en worktrees): ya resuelto en el stack (gancho
+  comun condicional + show-toplevel, verificado con pushes reales en verde).
+- F2 Low (instalador pisa gancho previo): fix en `scripts/install-hooks.sh`
+  (respaldo con fecha antes de reemplazar).
+- F3 Low (check.sh sin actionlint): corre si esta instalado; si no, aviso y
+  el job workflows de CI queda como respaldo documentado.
+- F4 Low (la prueba solo discrimina en bash 3.2): anotado: la prueba corre
+  en verde en todas partes; solo FALLA (atrapa el bug) en bash 3.2/macOS.
+  CI-ubuntu no puede atrapar esta clase; el candado real es el pre-push en Mac.
+- F5 Low (causa del `__init__.py`): correccion arriba en Hallazgo 2.

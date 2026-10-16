@@ -53,6 +53,14 @@ else
   echo "check: pre-commit omitido (--no-precommit); solo CI puede pagarlo, nunca un push local"
 fi
 
+if command -v actionlint >/dev/null 2>&1; then
+  echo "check: actionlint"
+  actionlint -color
+  actionlint -color templates/ai-review-publish.yml templates/ai-review-worker.yml
+else
+  echo "check: actionlint no instalado; los workflows los cubre CI (job workflows)"
+fi
+
 echo "check: particion determinista (union == bateria, sin duplicados)"
 "$PY" scripts/run_test_shard.py --verify-partition 2
 
