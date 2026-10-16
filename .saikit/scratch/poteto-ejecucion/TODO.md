@@ -23,7 +23,7 @@ Skills how/why/architect/swarm/interrogate no disponibles aqui; se sigue sin ell
 
 ## Fases
 - [x] FASE 0 piso determinista: PR #116 (rama poteto/fase-0-piso, 2 commits): suite verde + scripts/check.sh unico + pre-push + CI; cierra huecos #84/#86.
-- [>] FASE 1 tipos/invariantes (en curso) para no perder hallazgos (complete/partial marker).
-- [ ] FASE 2 skill de verificacion (codigo).
+- [x] FASE 1 tipos/invariantes: PR #117 apilado sobre #116 para no perder hallazgos (complete/partial marker).
+- [>] FASE 2 skill de verificacion (en curso; sin skillverif aqui, se entrega codigo)
 - [ ] FASE 3 minima prosa.
 - [ ] Reporte final para main.
