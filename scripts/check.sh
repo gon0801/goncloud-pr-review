@@ -14,6 +14,14 @@ done
 
 cd "$(dirname "$0")/.."
 
+# Sin entorno git heredado: bajo un gancho git exporta GIT_DIR, y el
+# hospedador de agentes a veces filtra GIT_* propias (techo de
+# descubrimiento, dir explicito). Con cualquiera de ellas, los `git`
+# de las pruebas en repos temporales mueren (128) y la bateria
+# miente en verde o en rojo segun el turno. Se barre todo GIT_*:
+# check.sh siempre trabaja sobre su propio arbol por descubrimiento.
+while IFS= read -r linea; do unset "${linea%%=*}"; done < <(env | grep ^GIT_ || true)
+
 # En macOS las herramientas viven en brew, fuera del PATH mínimo.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 

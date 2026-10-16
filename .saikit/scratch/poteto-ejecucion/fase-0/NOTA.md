@@ -60,3 +60,19 @@ Base: origin/main @ cc7edd9. Rama: poteto/fase-0-piso.
   `scripts/install-hooks.sh` con `core.hooksPath` por worktree
   (`extensions.worktreeConfig`), verificado con sonda: el push se
   bloquea con HOOK-PROBE-RAN. No toca otros checkouts.
+
+## Incidente 2 (declarado): GIT_DIR filtrado rompe 60+ pruebas bajo el gancho
+- El primer push con gancho real (FASE 1) freno bien, pero en rojo:
+  61 errores + 2 fallos. Causa raiz: git exporta GIT_DIR al gancho y los
+  `git` de las pruebas en repos temporales mueren con
+  "this operation must be run in a work tree".
+- Fix: barrido de TODO `GIT_*` arriba de `scripts/check.sh` (el hospedador
+  a veces filtra techo de descubrimiento u otras; el barrido nominal no
+  alcanzaba). Un solo lugar, protege todas las entradas.
+- El gancho por worktree murio en el intento: `extensions.worktreeConfig`
+  rompe este clon (bare=true en config comun) y el hooks dir del worktree
+  lo ignora git. Gancho final: uno condicional en los ganchos comunes
+  (solo corre donde hay scripts/check.sh; resto sale 0). `.githooks/`
+  se elimina por archivo muerto.
+- La prueba que lo habria atrapado no existe como unitaria: la verificacion
+  es el propio push con el gancho en verde (camino real con GIT_DIR).
