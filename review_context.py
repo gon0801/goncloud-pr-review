@@ -963,7 +963,7 @@ def prepare_review(
     # Diagnóstico y consistencia con la ruta directa: PreparedReview.cobertura
     # no tiene consumidor de producción (la degradación real la decide el
     # dominio con las omisiones plegadas en los hechos).
-    if any(om.causa in ("presupuesto", "budget") for om in omisiones):
+    if any(om.causa in ("presupuesto", "budget", "encoding") for om in omisiones):
         cobertura = PARTIAL
     elif not entregados:
         cobertura = UNKNOWN
