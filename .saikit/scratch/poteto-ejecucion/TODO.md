@@ -27,3 +27,5 @@ Skills how/why/architect/swarm/interrogate no disponibles aqui; se sigue sin ell
 - [ ] FASE 2 skill de verificacion (codigo).
 - [ ] FASE 3 minima prosa.
 - [ ] Reporte final para main.
+- [x] Ronda revision F1-F5 del revisor: PR #120 (base fase-1). CI verde en los 5 PRs.
+- [x] Reporte final para main.
