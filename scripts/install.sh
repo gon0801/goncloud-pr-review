@@ -339,7 +339,10 @@ PY
   else
     content="$(cat "$here/templates/ai-review.yml")"
     if [ -n "${ACTION_SHA:-}" ]; then
-      content="${content//gon0801\/goncloud-pr-review@main/gon0801\/goncloud-pr-review@$ACTION_SHA}"
+      # El `\/` en el reemplazo queda literal en bash 3.2 (macOS) y rompe
+      # el `uses:`; la barra llega por variable para que valga en 3.2 y 5.x.
+      ref="gon0801/goncloud-pr-review@$ACTION_SHA"
+      content="${content//gon0801\/goncloud-pr-review@main/$ref}"
     fi
     if [ -n "${EXCLUDE:-}" ]; then
       content+=$'\n          exclude: |'
