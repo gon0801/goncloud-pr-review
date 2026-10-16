@@ -27,6 +27,7 @@ from review_domain import (
     PARTIAL,
     RESOLVED,
     UNKNOWN,
+    is_complete,
 )
 
 DEFAULT_EXCLUDES = [
@@ -704,7 +705,7 @@ def decidir_modo(repo, current, head, base_sha, digest):
     if revision is None or not revision.head_sha:
         return "full", "memoria: no hay revisión previa registrada", None
     previous_head = revision.head_sha
-    if current.completion != COMPLETE_CLAIM:
+    if not is_complete(current.completion):
         return "full", "cobertura: la revisión previa no fue completa", previous_head
     modo, motivo = decide_mode(repo, previous_head, head)
     if modo == "full":

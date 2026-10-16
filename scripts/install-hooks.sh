@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Instala los ganchos de .githooks en el gancho real de ESTE checkout
-# (solo este worktree; no toca la config global ni otros worktrees).
+# Instala el pre-push en los ganchos COMUNES del clon (los worktrees
+# enlazados no miran su propio hooks dir). El gancho es condicional:
+# solo corre donde existe scripts/check.sh; en los demas checkouts
+# sale 0 sin hacer nada.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-dest="$(git rev-parse --git-dir)/hooks"
-mkdir -p "$dest"
-for hook in .githooks/*; do
-  nombre="$(basename "$hook")"
-  ln -sf "$PWD/$hook" "$dest/$nombre"
-  echo "install-hooks: $nombre -> $dest/$nombre"
-done
+comun="$(git rev-parse --absolute-git-dir)"
+case "$comun" in
+  */worktrees/*) comun="$(git rev-parse --path-format=absolute --git-common-dir)" ;;
+esac
+cat > "$comun/hooks/pre-push" <<'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+top="$(git rev-parse --show-toplevel)"
+if [ -x "$top/scripts/check.sh" ]; then
+  cd "$top" && bash scripts/check.sh
+fi
+HOOK
+chmod +x "$comun/hooks/pre-push"
+echo "install-hooks: $comun/hooks/pre-push (condicional a scripts/check.sh)"

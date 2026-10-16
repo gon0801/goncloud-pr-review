@@ -3597,3 +3597,38 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
                     [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
                     self._resumen(coordinada),
                 )
+
+
+class FronteraDeCobertura(unittest.TestCase):
+    """El marcador complete/partial se parsea en la frontera y nunca nace
+    completo de una entrada desconocida (candado FASE 1: no perder hallazgos
+    por un marcador ambiguo)."""
+
+    def test_parse_acepta_los_dos_vocabulario(self):
+        self.assertEqual(domain.parse_coverage("complete"), domain.COMPLETE_CLAIM)
+        self.assertEqual(
+            domain.parse_coverage(domain.COMPLETE_CLAIM), domain.COMPLETE_CLAIM
+        )
+        self.assertEqual(domain.parse_coverage("partial"), domain.PARTIAL)
+        self.assertEqual(domain.parse_coverage(domain.PARTIAL), domain.PARTIAL)
+
+    def test_parse_degrada_lo_desconocido_a_unknown(self):
+        for valor in (None, "", "COMPLETE", "full", "completo", "complete_claim "):
+            with self.subTest(valor=valor):
+                self.assertEqual(domain.parse_coverage(valor), domain.UNKNOWN)
+
+    def test_solo_el_claim_completo_es_completo(self):
+        self.assertTrue(domain.is_complete(domain.COMPLETE_CLAIM))
+        for valor in ("complete", domain.COMPLETE_CLAIM):
+            with self.subTest(valor=valor):
+                self.assertTrue(domain.is_complete(domain.parse_coverage(valor)))
+        for valor in ("partial", domain.PARTIAL, domain.UNKNOWN, None, "", "full"):
+            with self.subTest(valor=valor):
+                self.assertFalse(domain.is_complete(domain.parse_coverage(valor)))
+        self.assertFalse(domain.is_complete(domain.PARTIAL))
+        self.assertFalse(domain.is_complete(domain.UNKNOWN))
+
+    def test_marker_nunca_rinde_complete_sin_claim(self):
+        self.assertEqual(domain.marker_of(domain.COMPLETE_CLAIM), "complete")
+        self.assertEqual(domain.marker_of(domain.PARTIAL), "partial")
+        self.assertEqual(domain.marker_of(domain.UNKNOWN), "partial")
