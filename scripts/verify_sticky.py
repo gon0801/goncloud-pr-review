@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--expect-sha", default="", help="sha que debe declarar")
     args = ap.parse_args()
     if args.body_file:
-        body = Path(args.body_file).read_text()
+        body = Path(args.body_file).read_text(encoding="utf-8")
     elif args.body is not None:
         body = args.body
     elif not sys.stdin.isatty():
