@@ -960,6 +960,9 @@ def prepare_review(
         Obligation(ruta=ruta)
         for ruta in dict.fromkeys(list(rutas_plan) + rutas_abiertas(current))
     )
+    # Diagnóstico y consistencia con la ruta directa: PreparedReview.cobertura
+    # no tiene consumidor de producción (la degradación real la decide el
+    # dominio con las omisiones plegadas en los hechos).
     if any(om.causa in ("presupuesto", "budget") for om in omisiones):
         cobertura = PARTIAL
     elif not entregados:
