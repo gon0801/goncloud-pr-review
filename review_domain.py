@@ -35,6 +35,29 @@ SEVERITIES = ("Critical", "High", "Medium", "Low")
 OPEN, RESOLVED, DISMISSED = "open", "resolved", "dismissed"
 FINDING_ID_RE = re.compile(r"^F(\d+)$")
 COMPLETE_CLAIM, PARTIAL, UNKNOWN = "complete_claim", "partial", "unknown"
+
+
+def parse_coverage(value):
+    """Frontera del marcador complete/partial: acepta el vocabulario del
+    comentario ("complete"/"partial") y el del snapshot; cualquier otra
+    entrada degrada a UNKNOWN, nunca a completo."""
+    if value == COMPLETE_CLAIM or value == "complete":
+        return COMPLETE_CLAIM
+    if value == PARTIAL or value == "partial":
+        return PARTIAL
+    return UNKNOWN
+
+
+def is_complete(coverage):
+    """Unico predicado de revision previa completa."""
+    return coverage == COMPLETE_CLAIM
+
+
+def marker_of(coverage):
+    """Snapshot hacia marcador del comentario. UNKNOWN nunca rinde complete."""
+    return "complete" if coverage == COMPLETE_CLAIM else "partial"
+
+
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -1772,13 +1795,10 @@ def _cobertura_persistida(report, plan):
     """
     if report.rechazadas_forma:
         return UNKNOWN
-    claim = report.claimed_coverage
-    if claim in ("complete", COMPLETE_CLAIM):
-        resultado = COMPLETE_CLAIM
-    elif claim in ("partial", PARTIAL):
-        resultado = PARTIAL
-    else:
+    claim = parse_coverage(report.claimed_coverage)
+    if claim == UNKNOWN:
         return UNKNOWN
+    resultado = claim
     if (
         not report.runtime_terminado
         or getattr(report.facts, "omissions", ())

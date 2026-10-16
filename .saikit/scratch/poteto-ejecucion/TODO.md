@@ -22,8 +22,8 @@ Skills how/why/architect/swarm/interrogate no disponibles aqui; se sigue sin ell
 - Smallest safe decomposition: un worker (esta sesion); las fases son unidades verificables chicas, un commit/PR por fase.
 
 ## Fases
-- [ ] FASE 0 piso determinista: suite verde + scripts/check.sh unico + pre-push + CI; cierra huecos #84/#86.
-- [ ] FASE 1 tipos/invariantes para no perder hallazgos (complete/partial marker).
+- [x] FASE 0 piso determinista: PR #116 (rama poteto/fase-0-piso, 2 commits): suite verde + scripts/check.sh unico + pre-push + CI; cierra huecos #84/#86.
+- [>] FASE 1 tipos/invariantes (en curso) para no perder hallazgos (complete/partial marker).
 - [ ] FASE 2 skill de verificacion (codigo).
 - [ ] FASE 3 minima prosa.
 - [ ] Reporte final para main.

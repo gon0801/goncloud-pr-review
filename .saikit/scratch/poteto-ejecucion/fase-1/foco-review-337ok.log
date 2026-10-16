@@ -1,0 +1,46 @@
+..........................................................................ai-review: memoria desborde (17638 bytes para 8000) conservada sin modificar (Keep)
+......................ai-review: memoria desborde (11056 bytes para 8000) conservada sin modificar (Keep)
+.ai-review: memoria desborde (11056 bytes para 8000) conservada sin modificar (Keep)
+...........................................................................................ai-review: memoria desborde (8506 bytes para 8000) conservada sin modificar (Keep)
+ai-review: memoria desborde (8506 bytes para 8000) conservada sin modificar (Keep)
+...ai-review: memoria inválida (bloque de hallazgos corrupto: JSON o cierre ausentes) conservada sin modificar (Keep)
+................................................................................................s...........................................ai-review: resultado rechazado (workflow del run incorrecto)
+.ai-review: resultado rechazado (SHA del workflow no es el código confiable)
+.....
+----------------------------------------------------------------------
+Ran 337 tests in 69.213s
+
+OK (skipped=1)
+ai-review: comentario 8 actualizado
+ai-review: comentario creado
+ai-review: claude-code 2.1.282 ya instalado (caché); se omite npm
+ai-review: claude-code 2.1.282 ya instalado (caché); se omite npm
+::warning::ai-review: no se pudo instalar LiteLLM para el respaldo (Command 'pip' returned non-zero exit status 1.)
+ai-review: la caché de litellm no sirve con este Python; se reconstruye
+ai-review: la caché de litellm no sirve con este Python; se reconstruye
+ai-review: litellm 1.102.1 ya instalado (caché); se omite pip
+ai-review: comentario 9 actualizado
+ai-review: comentario 9 actualizado
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 0)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: paquete de la solicitud 1 preparado (run 55 attempt 2)
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+::warning::ai-review: falta el secret AI_REVIEW_API_KEY en este repo
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+ai-review: 1 archivo(s) a revisar, 0 excluido(s), diff 121 bytes (full/no-prev)
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: checkpoint publicado sin trabajo nuevo
+ai-review: 1 solicitud(es) confirmada(s) y despachada(s)
+ai-review: checkpoint publicado sin trabajo nuevo

@@ -623,7 +623,7 @@ def scope_lines(result, manifest, provider):
 def _marcador_cobertura(warnings, findings):
     derivada = findings.get("completion") if findings else None
     if derivada is not None:
-        return "complete" if derivada == review_domain.COMPLETE_CLAIM else "partial"
+        return review_domain.marker_of(derivada)
     return "partial" if warnings else "complete"
 
 
@@ -1038,7 +1038,9 @@ def cmd_prepare(args):
         # A sticky from before findings memory existed: without the previous findings an
         # incremental pass would drop them, so review the whole PR once to rebuild state.
         mode, reason = "full", "no-state"
-    if mode == "incremental" and prev.get("completion") != "complete":
+    if mode == "incremental" and not review_domain.is_complete(
+        review_domain.parse_coverage(prev.get("completion"))
+    ):
         mode, reason = "full", "incomplete-prev"
     if mode == "incremental":
         # T16 f13 (docs/evidence/reviewer/D0-C0.md): el incremental medido en la
@@ -1086,11 +1088,7 @@ def cmd_prepare(args):
                     policy_digest=digest,
                 ),
                 next_id=1,
-                completion=(
-                    review_domain.COMPLETE_CLAIM
-                    if prev.get("completion") == "complete"
-                    else review_domain.PARTIAL
-                ),
+                completion=review_domain.parse_coverage(prev.get("completion")),
                 findings=[],
                 command_cursor=0,
             )
