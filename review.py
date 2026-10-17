@@ -306,17 +306,35 @@ def unreviewed_de(texto):
     return set(lista)
 
 
-def libro_fusionado(previo, manifest, texto, repo):
+def pasada_acredita(result, model_ok):
+    """Una pasada acredita cobertura solo si su resultado es utilizable
+    entero: COVERAGE declarada, runtime terminado y hallazgos del modelo
+    válidos; si no, no agrega nada al libro."""
+    if ERROR_KEY in (result or {}):
+        return False
+    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
+    return (
+        cobertura is not None
+        and (result or {}).get("subtype") != "error_max_turns"
+        and bool(model_ok)
+    )
+
+
+def libro_fusionado(previo, manifest, result, repo, model_ok):
     """El libro tras una pasada: lo cubierto ahora con su blob en head, más lo
     cubierto antes que sigue intacto; todo lo demás queda fuera."""
     head = manifest["head"]
-    _, cobertura, _ = split_coverage(texto)
-    revisados = manifest.get("reviewed") or []
-    if cobertura == "complete":
-        cubiertos = revisados
-    elif cobertura == "partial":
-        sin = unreviewed_de(texto)
-        cubiertos = [] if sin is None else [p for p in revisados if p not in sin]
+    texto = (result or {}).get("result") or ""
+    if pasada_acredita(result, model_ok):
+        _, cobertura, _ = split_coverage(texto)
+        revisados = manifest.get("reviewed") or []
+        if cobertura == "complete":
+            cubiertos = revisados
+        elif cobertura == "partial":
+            sin = unreviewed_de(texto)
+            cubiertos = [] if sin is None else [p for p in revisados if p not in sin]
+        else:
+            cubiertos = []
     else:
         cubiertos = []
     fused = {
@@ -328,9 +346,9 @@ def libro_fusionado(previo, manifest, texto, repo):
     return fused
 
 
-def libro_actualizado(sticky, manifest, result, repo):
+def libro_actualizado(sticky, manifest, result, repo, model_ok):
     previo = libro_de((sticky or {}).get("body") or "")[1] or {}
-    return libro_fusionado(previo, manifest, (result or {}).get("result") or "", repo)
+    return libro_fusionado(previo, manifest, result, repo, model_ok)
 
 
 def redact(text, secrets):
@@ -2749,7 +2767,13 @@ def cmd_publish(args):
         else:
             revisado = True
             libro = (
-                libro_actualizado(sticky, manifest, result, _repo_actual())
+                libro_actualizado(
+                    sticky,
+                    manifest,
+                    result,
+                    _repo_actual(),
+                    findings.get("model_ok", True),
+                )
                 if manifest.get("head")
                 else None
             )
@@ -3480,7 +3504,7 @@ def cmd_close_result(args):
                 else {}
             ).get("covered") or {}
             paquete["covered"] = libro_fusionado(
-                previo, datos, texto, GitRepository(Path.cwd())
+                previo, datos, resultado, GitRepository(Path.cwd()), modelo is not None
             )
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)

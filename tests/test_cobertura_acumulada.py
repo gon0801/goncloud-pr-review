@@ -200,7 +200,7 @@ class LibroPublicado(unittest.TestCase):
                 sorted(manifest["reviewed"]), ["a.py", "b.py", "c.py", "d.py"]
             )
             result = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo = publicar(work, head1, manifest, result, repo=repo)
@@ -255,7 +255,7 @@ class Continuacion(unittest.TestCase):
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
@@ -272,7 +272,7 @@ class Continuacion(unittest.TestCase):
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
@@ -303,7 +303,7 @@ class Continuacion(unittest.TestCase):
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
@@ -320,7 +320,7 @@ class Continuacion(unittest.TestCase):
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
@@ -447,11 +447,14 @@ class FalloCerrado(unittest.TestCase):
                 [e for e in manifest1["excluded"] if e["reason"] == "budget"],
                 [{"path": "d.py", "reason": "budget"}],
             )
-            result1 = {"result": texto_pasada("complete"), "subtype": "success"}
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=[]),
+                "subtype": "success",
+            }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
-        self.assertIn(f"<!-- ai-review:completion={head1}:partial -->", cuerpo1)
-        _, libro = libro_del(cuerpo1)
-        self.assertNotIn("d.py", libro)
+            self.assertIn(f"<!-- ai-review:completion={head1}:partial -->", cuerpo1)
+            _, libro = libro_del(cuerpo1)
+            self.assertNotIn("d.py", libro)
         self.assertEqual(sorted(libro), ["a.py", "b.py", "c.py"])
 
     def test_f_sticky_sin_libro_o_con_libro_de_otro_head_va_full(self):
@@ -596,7 +599,7 @@ class PresupuestoContinuacion(unittest.TestCase):
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=["c.py"]),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
