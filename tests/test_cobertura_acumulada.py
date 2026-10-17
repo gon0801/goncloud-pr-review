@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+import review_domain as domain  # noqa: E402
 
 COVERED = "<!-- ai-review:covered="
 UNREVIEWED = "<!-- ai-review:unreviewed="
@@ -67,7 +68,7 @@ def preparar(repo, work, base, head, prev):
         os.environ,
         HEAD_SHA=head,
         BASE_SHA=base,
-        EXTRA_EXCLUDES="",
+        EXTRA_EXCLUDES=os.environ.get("EXTRA_EXCLUDES_TEST", ""),
         MAX_DIFF_BYTES=os.environ.get("MAX_DIFF_BYTES_TEST", "1500000"),
         GITHUB_EVENT_PATH=str(event),
     )
@@ -389,15 +390,98 @@ class Continuacion(unittest.TestCase):
         por_id = {f["id"]: f for f in estado2["findings"]}
         self.assertEqual(por_id["F1"]["state"], "open")
 
-
-class FalloCerrado(unittest.TestCase):
-    def test_d_parcial_sin_bloque_unreviewed_no_avanza(self):
+    def test_f1_borrado_pendiente_vuelve_al_alcance_y_se_acredita(self):
+        """F1: un borrado pendiente entra a la continuación (su diff es la
+        eliminación), se acredita con el centinela del libro y no vuelve."""
         with tempfile.TemporaryDirectory() as tmp:
             repo, base, head1 = Escenario().escenario(tmp)
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             result1 = {
-                "result": texto_pasada("partial", unreviewed=None),
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            (repo / "c.py").unlink()
+            (repo / "d.py").write_text("d3\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+            work2 = Path(tmp, "work2")
+            manifest2 = preparar(repo, work2, base, head2, prev)
+            self.assertEqual(
+                (manifest2["mode"], manifest2["reason"]), ("continuation", "")
+            )
+            self.assertEqual(sorted(manifest2["reviewed"]), ["c.py", "d.py"])
+            self.assertIn("c.py", (work2 / "diff.patch").read_text())
+            result2 = {
+                "result": texto_pasada("complete", hallazgos=[]),
+                "subtype": "success",
+            }
+            cuerpo2 = publicar(
+                work2, head2, manifest2, result2, body=cuerpo1, repo=repo
+            )
+            self.assertIn(f"<!-- ai-review:completion={head2}:complete -->", cuerpo2)
+            _, libro = libro_del(cuerpo2)
+            self.assertEqual(libro["c.py"], "deleted")
+            self.assertEqual(libro["d.py"], blob(repo, head2, "d.py"))
+            self.assertEqual(libro["a.py"], blob(repo, head2, "a.py"))
+            (repo / "d.py").write_text("d4\n")
+            head3 = commit(repo, "pasada-3")
+            prev3, _ = pasar_gate(Path(tmp, "gate"), head3, cuerpo2)
+            manifest3 = preparar(repo, Path(tmp, "work3"), base, head3, prev3)
+            self.assertEqual(sorted(manifest3["reviewed"]), ["d.py"])
+
+    def test_f3_reversion_en_continuacion_resuelve_por_ruta_legada(self):
+        """F3: la reversión al contenido base resuelve el hallazgo en la ruta
+        legada aunque el modelo no lo marque resuelto."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            f1 = {
+                "id": "F-new",
+                "file": "d.py",
+                "line": 1,
+                "files": [],
+                "severity": "Critical",
+                "title": "bug en d",
+                "state": "open",
+            }
+            result1 = {
+                "result": texto_pasada("partial", unreviewed=["c.py"], hallazgos=[f1]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            self.assertEqual(bloque_del(cuerpo1)["findings"][0]["state"], "open")
+            (repo / "d.py").write_text("d1\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+            work2 = Path(tmp, "work2")
+            manifest2 = preparar(repo, work2, base, head2, prev)
+            self.assertEqual(manifest2["mode"], "continuation")
+            f1_abierto = dict(f1, id="F1", state="open")
+            result2 = {
+                "result": texto_pasada("complete", hallazgos=[f1_abierto]),
+                "subtype": "success",
+            }
+            cuerpo2 = publicar(
+                work2, head2, manifest2, result2, body=cuerpo1, repo=repo
+            )
+        por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
+        self.assertEqual(por_id["F1"]["state"], "resolved")
+
+
+class FalloCerrado(unittest.TestCase):
+    def test_d_parcial_sin_bloque_unreviewed_no_avanza(self):
+        """F4: la pasada lleva bloque de hallazgos válido, así que la única
+        razón del libro vacío es el unreviewed ausente (la mutación «sin
+        bloque => todo cubierto» debe ponerla roja)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            result1 = {
+                "result": texto_pasada("partial", unreviewed=None, hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
@@ -419,6 +503,10 @@ class FalloCerrado(unittest.TestCase):
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             texto = (
                 "**Veredicto:** parcial.\n"
+                + review.FINDINGS_PREFIX
+                + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
+                + review.FINDINGS_SUFFIX
+                + "\n"
                 + UNREVIEWED
                 + '["c.py"\nCOVERAGE: partial | sin terminar'
             )
@@ -432,6 +520,32 @@ class FalloCerrado(unittest.TestCase):
         self.assertEqual(
             sorted(manifest2["reviewed"]), ["a.py", "b.py", "c.py", "d.py"]
         )
+
+    def test_f2_pasada_con_imitacion_en_fence_no_acredita_nada(self):
+        """F2 extremo a extremo: la imitación fabricada en un fence no
+        acredita el alcance de la pasada parcial."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            texto = (
+                "**Veredicto:** parcial.\n"
+                + review.FINDINGS_PREFIX
+                + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
+                + review.FINDINGS_SUFFIX
+                + "\n"
+                + UNREVIEWED
+                + '["c.py"] -->\n```\n'
+                + UNREVIEWED
+                + "[] -->\n```\nCOVERAGE: partial | faltó c.py"
+            )
+            result1 = {"result": texto, "subtype": "success"}
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {}, "una declaración ambigua no acredita nada")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
+            manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
+        self.assertNotEqual(manifest2["mode"], "continuation")
 
     def test_e_complete_con_excluido_por_budget_es_partial_y_no_lo_anota(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -590,6 +704,33 @@ class Unreviewed(unittest.TestCase):
             + '["real.py"] -->\nCOVERAGE: partial'
         )
         self.assertEqual(review.unreviewed_de(texto), {"real.py"})
+
+    def test_f2_imitacion_en_bloque_de_codigo_anula_la_declaracion(self):
+        """F2: con más de un bloque en línea propia no hay declaración
+        (fail-closed), aunque la imitación venga en un fence citado."""
+        real = UNREVIEWED + '["c.py"] -->'
+        texto = (
+            "**Veredicto:** parcial.\n"
+            + review.FINDINGS_PREFIX
+            + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+            + "\n"
+            + real
+            + "\n```\n"
+            + UNREVIEWED
+            + "[] -->\n```\nCOVERAGE: partial | faltó c.py"
+        )
+        self.assertIsNone(review.unreviewed_de(texto))
+
+    def test_f2_bloque_fuera_de_posicion_no_declara(self):
+        bloque = UNREVIEWED + '["c.py"] -->'
+        texto = (
+            "**Veredicto:** parcial.\n"
+            + bloque
+            + "\nprosa que se interpone\nCOVERAGE: partial | faltó c.py"
+        )
+        self.assertIsNone(review.unreviewed_de(texto))
+        self.assertIsNone(review.unreviewed_de("solo prosa\n" + bloque))
 
 
 class PresupuestoContinuacion(unittest.TestCase):
@@ -768,6 +909,120 @@ class AcreditacionDePasada(unittest.TestCase):
                 paquete["covered"],
                 {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abcd"},
             )
+
+
+def bloque_v3(completion=domain.PARTIAL):
+    snap = domain.Snapshot(
+        schema=3,
+        generation=1,
+        revision=None,
+        next_id=1,
+        completion=completion,
+        findings=[],
+        command_cursor=0,
+    )
+    return domain.encode_snapshot(snap, domain.StorageBudget()).block
+
+
+def sticky_v3(head, completion, libro, bloque):
+    cabecera = (
+        f"{review.MARKER}\n"
+        f"{review.SHA_PREFIX}{head} -->\n"
+        f"{review.COMPLETION_PREFIX}{head}:{completion} -->\n"
+    )
+    linea_libro = ""
+    if libro is not None:
+        linea_libro = (
+            COVERED + head + ":" + json.dumps(libro, separators=(",", ":")) + " -->\n"
+        )
+    return cabecera + linea_libro + bloque + "\n### Revisión automática"
+
+
+class ContinuacionTerminal(unittest.TestCase):
+    def test_cr_filtro_no_impide_la_continuacion_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "locks").mkdir()
+            for f in "abcd":
+                (repo / f"{f}.py").write_text(f"{f}1\n")
+            (repo / "locks" / "x.lock").write_text("lock1\n")
+            base = commit(repo, "base")
+            for f in "abcd":
+                (repo / f"{f}.py").write_text(f"{f}2\n")
+            (repo / "locks" / "x.lock").write_text("lock2\n")
+            head1 = commit(repo, "pasada-1")
+            work1 = Path(tmp, "work1")
+            with mock.patch.dict(os.environ, {"EXTRA_EXCLUDES_TEST": "locks/**"}):
+                manifest1 = preparar(
+                    repo, work1, base, head1, {"sha": None, "state": None}
+                )
+            self.assertEqual(
+                [
+                    e["reason"]
+                    for e in manifest1["excluded"]
+                    if e["path"].endswith(".lock")
+                ],
+                ["filtro locks/**"],
+            )
+            sticky1 = sticky_v3(
+                head1,
+                "partial",
+                {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abd"},
+                bloque_v3(),
+            )
+            (repo / "d.py").write_text("d3\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, sticky1)
+            work2 = Path(tmp, "work2")
+            with mock.patch.dict(os.environ, {"EXTRA_EXCLUDES_TEST": "locks/**"}):
+                manifest2 = preparar(repo, work2, base, head2, prev)
+            self.assertEqual(manifest2["mode"], "continuation")
+            result2 = {
+                "result": texto_pasada("partial", unreviewed=[], hallazgos=[]),
+                "subtype": "success",
+            }
+            cuerpo2 = publicar(
+                work2, head2, manifest2, result2, body=sticky1, repo=repo
+            )
+            self.assertIn(f"<!-- ai-review:completion={head2}:partial -->", cuerpo2)
+            _, libro = libro_del(cuerpo2)
+            self.assertEqual(
+                libro,
+                {f"{f}.py": blob(repo, head2, f"{f}.py") for f in "abcd"},
+            )
+            prev3, salida = pasar_gate(Path(tmp, "gate"), head2, cuerpo2, attempt="2")
+            self.assertEqual(salida, ("skip", "false"))
+            work3 = Path(tmp, "work3")
+            with mock.patch.dict(os.environ, {"EXTRA_EXCLUDES_TEST": "locks/**"}):
+                manifest3 = preparar(repo, work3, base, head2, prev3)
+            self.assertEqual(
+                (manifest3["mode"], manifest3["reason"]), ("continuation", "")
+            )
+            self.assertEqual(manifest3["reviewed"], [])
+            result3 = {"result": "", "subtype": "success"}
+            cuerpo3 = publicar(
+                work3, head2, manifest3, result3, body=cuerpo2, repo=repo
+            )
+        self.assertIn(f"<!-- ai-review:completion={head2}:complete -->", cuerpo3)
+
+    def test_cr_close_result_terminal_con_filtro(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            paquete = AcreditacionDePasada().paquete_hermes(
+                repo,
+                Path(tmp, "work"),
+                head1,
+                base,
+                {"result": "", "subtype": "success"},
+                manifest={
+                    "head": head1,
+                    "base": base,
+                    "reviewed": [],
+                    "excluded": [{"path": "locks/x.lock", "reason": "filtro locks/**"}],
+                    "mode": "continuation",
+                },
+            )
+            self.assertEqual(paquete["cobertura"], domain.COMPLETE_CLAIM)
 
 
 if __name__ == "__main__":

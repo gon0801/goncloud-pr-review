@@ -122,7 +122,7 @@ class VerificadorDeStickies(unittest.TestCase):
             "<!-- ai-review:covered="
             + SHA_A
             + ":"
-            + json.dumps({"a.py": SHA_B})
+            + json.dumps({"a.py": SHA_B, "viejo.py": "deleted"})
             + " -->"
         )
         rc, salida = self.correr(self.sticky_con_libro("partial", legado(), linea))
