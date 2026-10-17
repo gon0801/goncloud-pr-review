@@ -11,6 +11,8 @@ Chequeos (falla cerrado: lo que no se puede verificar, no pasa):
   3. coherencia: el marcador rinde lo que el snapshot declara
      (marker_of(snapshot.completion) == marcador).
   4. sha esperado: si se pide, coincide con el de la cabecera.
+  5. libro: si el cuerpo trae línea covered=, debe leerse y ser del head
+     de la cabecera (los comentarios históricos sin línea pasan).
 
 Sale 0 si todo pasa; 1 si algo falla. Solo stdlib.
 """
@@ -72,6 +74,15 @@ def main():
                 )
             else:
                 print("verify_sticky: ok: marcador coherente con snapshot")
+
+    if not errores and any(
+        linea.startswith(review.COVERED_PREFIX) for linea in body.splitlines()
+    ):
+        _, libro = review.libro_de(body)
+        if libro is None:
+            falla(errores, "libro de cobertura ausente, corrupto o de otro head")
+        else:
+            print(f"verify_sticky: ok: libro de cobertura con {len(libro)} entrada(s)")
 
     if args.expect_sha:
         if sha != args.expect_sha:

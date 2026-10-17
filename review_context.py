@@ -30,6 +30,10 @@ from review_domain import (
     is_complete,
 )
 
+# Centinela del libro de cobertura: un archivo borrado cuyo diff (la
+# eliminación) ya fue entregado y acreditado por una pasada.
+LIBRO_BORRADO = "deleted"
+
 DEFAULT_EXCLUDES = [
     "*.lock",
     "package-lock.json",
@@ -615,6 +619,10 @@ def files_matching_base(repo, paths, base, head):
 
 def delta_real(repo, desde, head):
     """Delta real desde..head: (rutas decodificables, omisiones, calculado)."""
+    if desde == head:
+        # El diff de un commit consigo mismo es vacío por definición; no
+        # consultarlo evita que un delta re-run dependa del repositorio local.
+        return (), (), True
     try:
         proc = repo.run("diff", "--name-only", "-z", desde, head, check=False)
     except Exception:
@@ -695,17 +703,27 @@ def delta_real_con_renombres(repo, previous_head, head):
     return tuple(rutas), tuple(renombres), omisiones, True
 
 
-def decidir_modo(repo, current, head, base_sha, digest):
+def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
     """(modo, motivo, previous_head) según la memoria y el target (D0).
 
     Incremental exige revisión previa completa, head distinto y ancestro,
-    y la misma base y política con que se creó la memoria.
+    y la misma base y política con que se creó la memoria. Una parcial con
+    libro de cobertura continúa donde el libro quedó.
     """
     revision = current.revision if current is not None else None
     if revision is None or not revision.head_sha:
         return "full", "memoria: no hay revisión previa registrada", None
     previous_head = revision.head_sha
     if not is_complete(current.completion):
+        if (
+            current.completion == PARTIAL
+            and cobertura_previa
+            and revision.base_sha == base_sha
+            and revision.policy_digest == digest
+        ):
+            modo, motivo = decide_mode(repo, previous_head, head)
+            if modo == "incremental" or motivo == "same-sha":
+                return "continuation", "", previous_head
         return "full", "cobertura: la revisión previa no fue completa", previous_head
     modo, motivo = decide_mode(repo, previous_head, head)
     if modo == "full":
@@ -849,6 +867,7 @@ def prepare_review(
     request,
     current,
     policy,
+    cobertura_previa=None,
     selectivo=False,
     contexto_max_bytes=CONTEXTO_SELECTIVO_MAX_BYTES,
     busqueda_max_bytes=None,
@@ -859,7 +878,9 @@ def prepare_review(
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
 
-    modo, motivo, previous_head = decidir_modo(repo, current, head, base, digest)
+    modo, motivo, previous_head = decidir_modo(
+        repo, current, head, base, digest, cobertura_previa
+    )
     delta_rutas, renombres, omis_delta, delta_calculado = delta_real_con_renombres(
         repo, previous_head, head
     )
@@ -910,8 +931,26 @@ def prepare_review(
             omisiones.append(Omission(ruta=diagnostico, causa="encoding"))
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
-    rutas_plan = list(delta_rutas) if modo == "incremental" else historicas
-    candidatas = delta_rutas if modo == "incremental" else historicas
+    if modo == "incremental":
+        rutas_plan = list(delta_rutas)
+        candidatas = delta_rutas
+    elif modo == "continuation":
+        # Alcance de la continuación: lo pendiente del libro más lo que cambió.
+        # Un borrado (blob None) es pendiente salvo que ya esté acreditado
+        # con el centinela del libro.
+        previa = cobertura_previa or {}
+        candidatas = []
+        for ruta in historicas:
+            blob = repo.blob_at(head, ruta)
+            if blob is None:
+                if previa.get(ruta) != LIBRO_BORRADO:
+                    candidatas.append(ruta)
+            elif blob != previa.get(ruta):
+                candidatas.append(ruta)
+        rutas_plan = list(candidatas)
+    else:
+        rutas_plan = historicas
+        candidatas = historicas
     a_revisar = []
     for ruta in candidatas:
         patron = excluded_by(ruta, patrones)
@@ -933,7 +972,11 @@ def prepare_review(
             hechos_omisiones.append(f"archivo excluido (encoding): {ruta}")
             continue
         chunk_bytes = len(chunk.encode("utf-8"))
-        if usados + chunk_bytes > presupuesto and entregados:
+        # En continuación no hay excepción histórica del primer archivo: lo que
+        # no cabe queda excluido y la pasada degrada, igual que con los demás.
+        if usados + chunk_bytes > presupuesto and (
+            entregados or modo == "continuation"
+        ):
             causa = "presupuesto" if policy.strict_budget else "budget"
             omisiones.append(Omission(ruta=ruta, causa=causa))
             hechos_omisiones.append(f"archivo excluido ({causa}): {ruta}")
