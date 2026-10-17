@@ -8,6 +8,7 @@ sticky real (solo lectura de GitHub) y las pruebas de capacidad del perfil
 ampliado.
 """
 
+import argparse
 import importlib.util
 import json
 import os
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -832,7 +834,9 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
         self.assertEqual(len(falso.patches), 1)
         cuerpo = falso.leer()[0]["body"]
         carga = domain.read_snapshot(cuerpo)
-        self.assertIsInstance(carga, domain.Valid, "el sticky conserva su memoria")
+        self.assertIsInstance(
+            carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
+        )
         self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
         self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
 
@@ -860,6 +864,120 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(carga.block, domain.encode_snapshot(snapshot).block)
+
+
+class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
+    """cmd_publish con un estado que produce un comentario sin espacio (el
+    fijo pasa de 60000 aun sin libro: ~86 hallazgos con rutas y títulos
+    largos, bloque legado de ~38 KB + secciones de ~33 KB): sin
+    cuerpo_publicable parchaba el cuerpo de aviso de compose sobre el sticky
+    (memoria borrada) y marcaba revisado. Con el guard: Keep+banner; sin
+    sticky previo no se crea nada."""
+
+    def _sticky_legado(self):
+        bloque = review.serialize_findings({"findings": [], "next": 1})
+        self.assertIsInstance(bloque, str)
+        return {
+            "id": 55,
+            "user": "github-actions[bot]",
+            "body": (
+                review.MARKER
+                + "\n"
+                + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
+                + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+                + bloque
+            ),
+        }
+
+    def _correr(self, comments, cuantos=86):
+        hallazgos = [
+            {
+                "file": f"src/{'m' * 195}_{i}.py",
+                "line": i,
+                "severity": "Medium",
+                "title": f"Problema {i}: " + "f" * 145,
+                "state": "open",
+            }
+            for i in range(1, cuantos + 1)
+        ]
+        resultado = {
+            "result": review.FINDINGS_PREFIX
+            + json.dumps({"findings": hallazgos, "next": 200}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX,
+            "review_provider": "opencode-go",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps(resultado))
+            (work / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "full",
+                        "reason": "no-prev",
+                        "reviewed": ["a.py"],
+                        "excluded": [],
+                    }
+                )
+            )
+            salida = Path(tmp) / "salida.txt"
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "REPO": "x/y",
+                        "PR_NUMBER": "1",
+                        "HEAD_SHA": "c" * 40,
+                        "GITHUB_OUTPUT": str(salida),
+                    },
+                ),
+                mock.patch.object(review, "fetch_all_comments", return_value=comments),
+                mock.patch.object(review, "_repo_actual", return_value=None),
+                mock.patch.object(review, "libro_actualizado", return_value=None),
+            ):
+                llamadas = []
+
+                def falso_sh(*args, **kwargs):
+                    llamadas.append(list(args))
+
+                    class Hecho:
+                        stdout = ""
+
+                    return Hecho()
+
+                with mock.patch.object(review, "sh", falso_sh):
+                    review.cmd_publish(argparse.Namespace(work=str(work)))
+            cuerpo = json.loads((work / "comment.json").read_text())["body"]
+            revisado = salida.read_text().strip() if salida.exists() else ""
+            return cuerpo, llamadas, revisado
+
+    def test_con_sticky_conserva_el_bloque_y_avisa(self):
+        sticky = self._sticky_legado()
+        cuerpo, llamadas, revisado = self._correr([sticky])
+        self.assertEqual(len(llamadas), 1, "solo el PATCH del banner")
+        self.assertIn("PATCH", llamadas[0])
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(
+            carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
+        )
+        self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
+        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn("reviewed=false", revisado)
+
+    def test_sin_sticky_previo_no_crea_nada(self):
+        cuerpo, llamadas, revisado = self._correr([])
+        self.assertEqual(llamadas, [], "sin sticky no se crea comentario")
+        self.assertIn("reviewed=false", revisado)
+
+    def test_un_comentario_que_cabe_sigue_publicando(self):
+        sticky = self._sticky_legado()
+        cuerpo, llamadas, revisado = self._correr([sticky], cuantos=3)
+        self.assertEqual(len(llamadas), 1)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(carga, domain.Legacy)
+        self.assertEqual(len(carga.raw["findings"]), 3)
+        self.assertEqual(carga.snapshot.findings[-1].id, "F3")
+        self.assertNotIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn("reviewed=true", revisado)
 
 
 class ElCaminoLegadoTambienPublica(unittest.TestCase):
