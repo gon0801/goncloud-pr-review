@@ -2661,11 +2661,14 @@ def _avisar_sin_espacio(decision, observado, adaptador):
 
 def cuerpo_publicable(cuerpo, bloque):
     """Una sola fuente de verdad para "no cabe": un cuerpo solo es
-    publicable si read_snapshot lo lee y trae EXACTAMENTE el bloque
-    codificado. El aviso de capacidad (sin bloque) o un marcador partido no
-    se escriben nunca: borrarían o romperían la memoria del sticky."""
+    publicable si read_snapshot lo lee (Valid o Legacy: el formato legado es
+    memoria legítima) y trae EXACTAMENTE el bloque codificado. El aviso de
+    capacidad (sin bloque) o un marcador partido no se escriben nunca:
+    borrarían o romperían la memoria del sticky."""
     carga = review_domain.read_snapshot(cuerpo or "")
-    return isinstance(carga, review_domain.Valid) and carga.block == bloque
+    if isinstance(carga, (review_domain.Valid, review_domain.Legacy)):
+        return carga.block == bloque
+    return False
 
 
 def _login_de(comentario):
@@ -2858,6 +2861,7 @@ def cmd_publish(args):
     sticky = sticky_from_comments(comments, login)
 
     revisado = False
+    escribir = True
     if ERROR_KEY in result:
         # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
         reason = result[ERROR_KEY]
@@ -2917,26 +2921,22 @@ def cmd_publish(args):
                 ],
             )
         else:
-            revisado = True
-            libro = (
-                libro_actualizado(
-                    sticky,
-                    manifest,
-                    result,
-                    _repo_actual(),
-                    findings.get("model_ok", True),
-                )
-                if manifest.get("head")
-                else None
-            )
-            body = redact(
+            cuerpo = redact(
                 compose(
                     result,
                     manifest,
                     sha=head,
                     provider=name,
                     findings=findings,
-                    libro=libro,
+                    libro=libro_actualizado(
+                        sticky,
+                        manifest,
+                        result,
+                        _repo_actual(),
+                        findings.get("model_ok", True),
+                    )
+                    if manifest.get("head")
+                    else None,
                     budget=review_domain.StorageBudget(),
                 ),
                 [
@@ -2945,12 +2945,38 @@ def cmd_publish(args):
                     os.environ.get("GH_TOKEN", ""),
                 ],
             )
-            summary_text = summary_of(body)
+            if not cuerpo_publicable(cuerpo, findings["block"]):
+                # El fijo del comentario no cabe (ni sin libro): el cuerpo no
+                # trae el bloque y escribirlo borraría la memoria. Keep + banner
+                # como en el desborde; sin sticky previo no se crea nada.
+                revisado = False
+                banner = caution_banner(
+                    "comentario sin espacio para el estado; el checkpoint "
+                    "previo se conserva y esta versión no la modifica",
+                    head,
+                    has_previous=bool(sticky),
+                )
+                if sticky:
+                    cuerpo = insert_caution_banner(sticky["body"], banner)
+                else:
+                    escribir = False
+                    print(
+                        "ai-review: comentario sin espacio para el estado; "
+                        "no se crea sticky"
+                    )
+                body = cuerpo
+                summary_text = banner
+            else:
+                revisado = True
+                body = cuerpo
+                summary_text = summary_of(body)
 
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
 
-    if sticky:
+    if not escribir:
+        print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
+    elif sticky:
         sh(
             "gh",
             "api",
