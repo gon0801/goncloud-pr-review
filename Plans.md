@@ -126,6 +126,7 @@ Autorización de David (2026-10-05): ejecutar T01 a T15 por loop, con merges por
 | Issue [#103](https://github.com/gon0801/goncloud-pr-review/issues/103) | Higiene de pruebas: discriminantes, fragilidad y duplicación (11 puntos no bloqueantes) | abierta |
 | Issue [#104](https://github.com/gon0801/goncloud-pr-review/issues/104) | Evaluación v2 (E2): normalización, adjudicación y recolección (14 puntos no bloqueantes) | abierta |
 | PRR-capacidad r1 (encargo 2026-10-17) | Capacidad del sticky: perfil ampliado activado por omisión (estado 40000, comentario 60000), compactación de cerrados al desbordar y aviso visible de desborde en el camino coordinador (falla medida en el PR #20 de goncloud-hermes) | en rama local `fix/perfil-ampliado` (2deaa28, evidencia en S1.md "Activación"); falta PR y prueba de comentario real |
+| PRR-capacidad seguimiento (2026-10-17) | `cmd_publish` (camino clásico) no valida con `cuerpo_publicable` antes de parchar: si compose le devolviera el cuerpo de aviso de capacidad (fijo > 60000 aun sin libro), borraría la memoria del sticky. Hoy casi inalcanzable (el desborde de estado lo intercepta build_findings con Keep+banner); reutilizar el guard + 1 prueba | pendiente |
 
 Las filas cerradas de esta tabla están en [plans-historico.md](docs/evidence/reviewer/plans-historico.md).
 
