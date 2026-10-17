@@ -455,31 +455,47 @@ class FalloCerrado(unittest.TestCase):
         self.assertEqual(sorted(libro), ["a.py", "b.py", "c.py"])
 
     def test_f_sticky_sin_libro_o_con_libro_de_otro_head_va_full(self):
-        bloque = review.serialize_findings({"findings": [], "next": 1})
-        cabecera = (
-            f"{review.MARKER}\n"
-            f"{review.SHA_PREFIX}{'1' * 40} -->\n"
-            f"{review.COMPLETION_PREFIX}{'1' * 40}:partial -->\n"
-        )
-        cuerpo_sin_libro = cabecera + bloque + "\n### Revisión"
-        libro_otro = json.dumps({"a.py": "0" * 40}, separators=(",", ":"))
-        cuerpo_libro_ajeno = (
-            cabecera
-            + COVERED
-            + "2" * 40
-            + ":"
-            + libro_otro
-            + " -->\n"
-            + bloque
-            + "\n### Revisión"
-        )
+        """El sha del sticky debe ser un ancestro real: si no, decide_mode cae
+        en rebase y el caso no discrimina la validación del libro."""
         with tempfile.TemporaryDirectory() as tmp:
-            repo, base, head1 = Escenario().escenario(tmp)
+            repo = hacer_repo(tmp)
+            for f in "abcd":
+                (repo / f"{f}.py").write_text(f"{f}1\n")
+            base = commit(repo, "base")
+            for f in "abcd":
+                (repo / f"{f}.py").write_text(f"{f}2\n")
+            prev = commit(repo, "pasada-parcial")
+            for f in "abcd":
+                (repo / f"{f}.py").write_text(f"{f}3\n")
+            head1 = commit(repo, "pasada-siguiente")
+            bloque = review.serialize_findings({"findings": [], "next": 1})
+            cabecera = (
+                f"{review.MARKER}\n"
+                f"{review.SHA_PREFIX}{prev} -->\n"
+                f"{review.COMPLETION_PREFIX}{prev}:partial -->\n"
+            )
+            cuerpo_sin_libro = cabecera + bloque + "\n### Revisión"
+            libro_otro = json.dumps({"a.py": "0" * 40}, separators=(",", ":"))
+            cuerpo_libro_ajeno = (
+                cabecera
+                + COVERED
+                + "2" * 40
+                + ":"
+                + libro_otro
+                + " -->\n"
+                + bloque
+                + "\n### Revisión"
+            )
             for i, cuerpo in enumerate((cuerpo_sin_libro, cuerpo_libro_ajeno)):
                 with self.subTest(caso=i):
-                    prev, _ = pasar_gate(Path(tmp, f"gate{i}"), head1, cuerpo)
-                    manifest = preparar(repo, Path(tmp, f"work{i}"), base, head1, prev)
-                    self.assertNotEqual(manifest["mode"], "continuation")
+                    self.assertEqual(review.libro_de(cuerpo), (None, None))
+                    gate = pasar_gate(Path(tmp, f"gate{i}"), head1, cuerpo)[0]
+                    self.assertIsNone(gate.get("covered"))
+                    manifest = preparar(repo, Path(tmp, f"work{i}"), base, head1, gate)
+                    self.assertEqual(
+                        (manifest["mode"], manifest["reason"]),
+                        ("full", "incomplete-prev"),
+                    )
                     self.assertEqual(
                         sorted(manifest["reviewed"]),
                         ["a.py", "b.py", "c.py", "d.py"],
