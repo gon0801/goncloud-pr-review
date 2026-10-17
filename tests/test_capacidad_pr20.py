@@ -305,8 +305,8 @@ class RoundtripDelEstadoCompacto(unittest.TestCase):
         self.assertEqual(resuelta.title, "Resuelto con ancla localizada")
         self.assertEqual(resuelta.primary_anchor.path, "src/a.py")
         self.assertEqual(resuelta.primary_anchor.range, (10, 20))
-        self.assertEqual(resuelta.evidence, ())
-        self.assertEqual(resuelta.related_anchors, ())
+        self.assertEqual(list(resuelta.evidence), [])
+        self.assertEqual(list(resuelta.related_anchors), [])
         self.assertIsNone(resuelta.cause_hint)
         self.assertEqual(s.findings[2].status.at_sha, "9" * 40)
         descartada = s.findings[3]
@@ -406,6 +406,7 @@ class ElParserDeGleeElStickyNuevo(unittest.TestCase):
     def _merge(self):
         spec = importlib.util.spec_from_file_location("merge_de_g", MERGE_PY)
         modulo = importlib.util.module_from_spec(spec)
+        sys.modules["merge_de_g"] = modulo
         spec.loader.exec_module(modulo)
         return modulo
 
@@ -528,8 +529,8 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
         )
         carga = domain.read_snapshot(f"{review.MARKER}\n{bloque}")
         self.assertIsInstance(carga, domain.Legacy)
-        self.assertEqual(len(carga.raw["findings"]), 55)
-        self.assertEqual(carga.raw["next"], 56)
+        self.assertEqual(len(carga.raw["findings"]), 62)
+        self.assertEqual(carga.raw["next"], 63)
 
 
 if __name__ == "__main__":

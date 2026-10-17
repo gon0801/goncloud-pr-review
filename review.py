@@ -2507,7 +2507,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
         dismiss_all=dismiss_all,
     )
     merged["seen"] = last_seen
-    bloque = serialize_findings(merged)
+    bloque = review_domain.serialize_findings(
+        merged, max_bytes=review_domain.StorageBudget().max_bytes
+    )
     if isinstance(bloque, review_domain.CapacityExceeded):
         motivo = f"desborde ({bloque.needed} bytes para {bloque.limit})"
         print(
@@ -2563,9 +2565,32 @@ def _cuerpo_con_checkpoint(decision):
         decision.snapshot, review_domain.StorageBudget()
     )
     if isinstance(encoded, review_domain.CapacityExceeded):
-        return None
-    bloque = encoded.block if decision.snapshot.schema == 3 else encoded
-    return bloque
+        return encoded
+    return encoded.block if decision.snapshot.schema == 3 else encoded
+
+
+def _avisar_desborde(desborde, decision, observado, adaptador):
+    """El comentario informa el desborde en el sticky EXISTENTE (la
+    arquitectura exige conservar el checkpoint y avisar). Sin sticky no se
+    crea comentario: un MARKER sin bloque válido secuestraría el sticky
+    futuro. El PATCH es lo mejor posible: si falla, manda el Unconfirmed."""
+    if observado is None:
+        return False
+    revision = decision.snapshot.revision
+    banner = caution_banner(
+        f"memoria de desborde ({desborde.needed} bytes para {desborde.limit}) "
+        "conservada; esta versión no la modifica",
+        revision.head_sha if revision else "",
+        has_previous=True,
+    )
+    try:
+        adaptador.parchar(
+            observado["id"],
+            insert_caution_banner(observado.get("body") or "", banner),
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _login_de(comentario):
@@ -2597,9 +2622,13 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     """
     if not isinstance(decision, review_domain.Commit):
         return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
-    bloque = _cuerpo_con_checkpoint(decision)
-    if bloque is None:
-        return Unconfirmed("desborde de memoria: se conserva el checkpoint previo")
+    encoded = _cuerpo_con_checkpoint(decision)
+    if isinstance(encoded, review_domain.CapacityExceeded):
+        motivo = "desborde de memoria: se conserva el checkpoint previo"
+        if _avisar_desborde(encoded, decision, observado, adaptador):
+            motivo += "; aviso publicado en el comentario"
+        return Unconfirmed(motivo)
+    bloque = encoded
     marcados = [
         c
         for c in adaptador.leer()
@@ -2821,6 +2850,7 @@ def cmd_publish(args):
                     provider=name,
                     findings=findings,
                     libro=libro,
+                    budget=review_domain.StorageBudget(),
                 ),
                 [
                     os.environ.get("API_KEY", ""),
@@ -3590,6 +3620,7 @@ def revision_visible(artifact, snapshot, previos, head):
                 "completion": snapshot.completion,
             },
             libro=artifact.get("covered"),
+            budget=review_domain.StorageBudget(),
         )
 
     return armar

@@ -7440,7 +7440,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
         base = domain.encode_snapshot(snapshot("x"))
         fijo = len(base.encode("utf-8")) - 1
-        titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
+        tope = domain.StorageBudget().max_bytes
+        titulo = "x" * (tope - fijo)
         bloque = domain.encode_snapshot(snapshot(titulo))
         self.assertIsInstance(bloque, str, "el sticky queda justo en el límite")
         de_mas = domain.encode_snapshot(snapshot(titulo + "x"))
@@ -7459,7 +7460,11 @@ class PersistenciaSinPerdida(unittest.TestCase):
         # B2: el estado fusionado (sticky legado con descartado y acentos +
         # hallazgos nuevos del modelo) no cabe íntegro -> Keep: bloque anterior
         # idéntico, sha=/completion= sin avanzar, banner y descartes intactos.
+        # El sticky legado se dimensiona al máximo que cabe en el perfil
+        # activo; la ronda nueva de hallazgos es lo que desborda.
+        import review_domain as domain
 
+        tope = domain.StorageBudget().max_bytes
         findings = [
             {
                 "id": "F1",
@@ -7470,7 +7475,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 "state": "dismissed",
             }
         ]
-        for i in range(2, 51):
+        i = 1
+        while True:
+            i += 1
             findings.append(
                 {
                     "id": f"F{i}",
@@ -7481,10 +7488,17 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     "state": "open",
                 }
             )
-        bloque_sticky = review.serialize_findings(
-            {"findings": findings, "next": 51, "seen": 7}
+            intento = domain.serialize_findings(
+                {"findings": findings, "next": i + 1, "seen": 7}, max_bytes=tope
+            )
+            if not isinstance(intento, str):
+                findings.pop()
+                break
+        bloque_sticky = domain.serialize_findings(
+            {"findings": findings, "next": i, "seen": 7}, max_bytes=tope
         )
         self.assertIsInstance(bloque_sticky, str)
+        self.assertLess(len(bloque_sticky.encode("utf-8")), tope)
         sticky_body = (
             review.MARKER
             + "\n"
@@ -7621,7 +7635,11 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
 
 class DesbordeSinMemoriaPrevia(unittest.TestCase):
-    """M1 r3 (B3): desborde sin sticky o con sticky de sólo aviso no truena."""
+    """M1 r3 (B3): desborde sin sticky o con sticky de sólo aviso no truena.
+
+    Sin memoria previa, el desborde del perfil activo exige un bloque del
+    modelo muy grande: 120 abiertos con títulos largos y archivos relacionados
+    (~45KB), porque los abiertos nunca se compactan."""
 
     def modelo_de_60(self):
         hallazgos = [
@@ -7630,10 +7648,18 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                 "file": f"src/nuevo_{i}.py",
                 "line": i,
                 "severity": "Medium",
-                "title": f"bug nuevo z ñ {i} en el flujo de cobro de la pasarela de pagos con reintentos y reembolsos",
+                "title": f"bug nuevo z ñ {i} "
+                + "en el flujo de cobro de la pasarela de pagos con reintentos y reembolsos"
+                * 2,
                 "state": "open",
+                "files": [
+                    f"src/relacionado_a_{i}.py",
+                    f"src/relacionado_b_{i}.py",
+                    f"src/relacionado_c_{i}.py",
+                    f"src/relacionado_d_{i}.py",
+                ],
             }
-            for i in range(1, 61)
+            for i in range(1, 121)
         ]
         return {
             "result": review.FINDINGS_PREFIX
@@ -9099,13 +9125,31 @@ class ConservacionAlDesbordar(unittest.TestCase):
                 primary_anchor=domain.AnchorLegacy(path="src/c.py", line=3),
             ),
         ]
+        # Abiertos con evidencia pesada: los cerrados compactorían, los
+        # abiertos no, así que el desborde del perfil es honesto.
+        for i in range(3, 13):
+            hallazgos.append(
+                domain.Finding(
+                    id=f"F{i}",
+                    title=f"abierto con evidencia pesada {i}",
+                    severity="Medium",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(
+                        path=f"src/pesado_{i}.py", line=i
+                    ),
+                    evidence=[
+                        domain.EvidenceUnverified(text="x" * 1000),
+                        domain.EvidenceUnverified(text="y" * 1000),
+                    ],
+                )
+            )
         snapshot = domain.Snapshot(
             schema=2,
             generation=4,
             revision=domain.Revision(
                 base_sha="b" * 40, head_sha="d" * 40, policy_digest="d" * 64
             ),
-            next_id=3,
+            next_id=13,
             completion=domain.PARTIAL,
             findings=hallazgos,
             command_cursor=31,

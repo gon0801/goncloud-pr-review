@@ -253,10 +253,12 @@ class FronteraDeLectura(unittest.TestCase):
     def test_v2_capacidad_excedida(self):
         original = snapshot_v2()
         original.findings[0].title = "x" * 9000
-        resultado = domain.encode_snapshot(original)
+        resultado = domain.encode_snapshot(
+            original, domain.StorageBudget(max_bytes=domain.FINDINGS_MAX_BYTES)
+        )
         self.assertIsInstance(resultado, domain.CapacityExceeded)
-        self.assertEqual(resultado.limit, 8000)
-        self.assertGreater(resultado.needed, 8000)
+        self.assertEqual(resultado.limit, domain.FINDINGS_MAX_BYTES)
+        self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
 
 class EscrituraCompatible(unittest.TestCase):
@@ -588,22 +590,26 @@ class PresupuestosEnBytes(unittest.TestCase):
         )
 
     def test_v2_en_el_limite_exacto_y_un_byte_encima(self):
-        base = domain.encode_snapshot(self.snapshot_con_titulo("x"))
+        tope = domain.StorageBudget(max_bytes=domain.FINDINGS_MAX_BYTES)
+        base = domain.encode_snapshot(self.snapshot_con_titulo("x"), tope)
         self.assertIsInstance(base, str)
         fijo = len(base.encode("utf-8")) - 1
         titulo = "x" * (domain.FINDINGS_MAX_BYTES - fijo)
-        bloque = domain.encode_snapshot(self.snapshot_con_titulo(titulo))
+        bloque = domain.encode_snapshot(self.snapshot_con_titulo(titulo), tope)
         self.assertIsInstance(bloque, str)
         self.assertEqual(
             len(bloque.encode("utf-8")), domain.FINDINGS_MAX_BYTES, "justo en el límite"
         )
-        de_mas = domain.encode_snapshot(self.snapshot_con_titulo(titulo + "x"))
+        de_mas = domain.encode_snapshot(self.snapshot_con_titulo(titulo + "x"), tope)
         self.assertIsInstance(de_mas, domain.CapacityExceeded, "un byte por encima")
         self.assertEqual(de_mas.needed, domain.FINDINGS_MAX_BYTES + 1)
 
     def test_v2_unicode_cuenta_bytes_y_no_caracteres(self):
         # 4200 'ñ' son 4200 caracteres pero 8400 bytes: el tope es en bytes.
-        resultado = domain.encode_snapshot(self.snapshot_con_titulo("ñ" * 4200))
+        resultado = domain.encode_snapshot(
+            self.snapshot_con_titulo("ñ" * 4200),
+            domain.StorageBudget(max_bytes=domain.FINDINGS_MAX_BYTES),
+        )
         self.assertIsInstance(resultado, domain.CapacityExceeded)
         self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
@@ -716,13 +722,15 @@ class MedicionDelEstadoEnriquecido(unittest.TestCase):
                 if isinstance(r, domain.CapacityExceeded)
                 else len(r.encode("utf-8"))
             )
-        # lo que trae una revisión típica chica sí cabe en el bloque v2...
+        # lo que trae una revisión típica chica cabe en el tope legado...
         self.assertLessEqual(tamanios[3], domain.FINDINGS_MAX_BYTES)
-        # ...pero el tope de 60 hallazgos enriquecidos NO cabe: por eso la
-        # escritura v2 sigue desactivada por defecto y la decisión de
-        # almacenamiento queda documentada como pendiente en M1.md.
+        # ...y el tope de 60 hallazgos enriquecidos (33947 bytes medidos en
+        # M1) cabe en el perfil ampliado ya activo: esa medición fue la que
+        # decidió STATE_BYTES_PROPOSED=40000.
+        self.assertLessEqual(tamanios[60], domain.STATE_BYTES_PROPOSED)
         self.assertIsInstance(
-            domain.encode_snapshot(self.enriquecido(60)), domain.CapacityExceeded
+            domain.encode_snapshot(self.enriquecido(60)),
+            str,
         )
         print(f"M1 medición (bytes UTF-8 de estado enriquecido): {tamanios}")
 
