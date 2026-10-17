@@ -791,6 +791,45 @@ def prosa_en_presupuesto(armar, prosa, budget):
     return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
 
 
+def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
+    """El cuerpo del comentario cuando el fijo no cabe: aviso visible, sin
+    bloque de estado y sin marcar sha ni cobertura (el camino del desborde
+    de memoria, también para un comentario sin espacio). Nunca corta a
+    ciegas: un marcador oculto partido rompería el estado del próximo push."""
+
+    def recorte():
+        return (
+            review[:disponible]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
+
+    partes = [
+        MARKER,
+        aviso,
+        "",
+        "",
+        "",
+        ALCANCE_INICIO,
+        "",
+        *scope_lines(result, manifest, provider),
+        "",
+        "</details>",
+    ]
+    overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
+    disponible = max(0, GITHUB_COMMENT_MAX - overhead)
+    partes[3] = (recorte() if len(review) > disponible else review) or (
+        "_El revisor no devolvió texto._"
+    )
+    return "\n".join(partes)
+
+
+AVISO_SIN_ESPACIO = (
+    "> [!CAUTION]\n> **Comentario sin espacio para el estado:** el cuerpo fijo "
+    "del sticky no cabe en el presupuesto del comentario (con y sin libro de "
+    "cobertura); esta revisión no se marca como revisada ni confirma cobertura."
+)
+
+
 def compose(result, manifest, *, sha, provider, findings=None, budget=None, libro=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
@@ -875,6 +914,20 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
         prosa = prosa_en_presupuesto(armar, review, budget)
         if prosa is not None:
             return armar(prosa)[:GITHUB_COMMENT_MAX]
+        if linea_libro is not None:
+            # El estado manda sobre el libro: la línea es prescindible (sin
+            # ella la siguiente pasada revisa full, que es seguro) y el corte
+            # a ciegas podría partir el bloque de estado.
+            def armar_sin_libro(prosa):
+                cuerpo = [p for p in parts if p is not linea_libro]
+                return "\n".join(cuerpo + [prosa, ""] + scope)
+
+            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
+            if prosa is not None:
+                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
+        return _cuerpo_de_aviso_de_capacidad(
+            result, manifest, provider, review, AVISO_SIN_ESPACIO
+        )
     if len(review) > COMMENT_LIMIT:
         review = (
             review[:COMMENT_LIMIT]
@@ -912,27 +965,7 @@ def compose_with_findings(
             f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
             "bytes; esta revisión no se marca como revisada ni confirma cobertura."
         )
-        partes = [
-            MARKER,
-            aviso,
-            "",
-            "",
-            "",
-            ALCANCE_INICIO,
-            "",
-            *scope_lines(result, manifest, provider),
-            "",
-            "</details>",
-        ]
-        overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
-        disponible = max(0, GITHUB_COMMENT_MAX - overhead)
-        if len(review) > disponible:
-            review = (
-                review[:disponible]
-                + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-            )
-        partes[3] = review or "_El revisor no devolvió texto._"
-        return "\n".join(partes)
+        return _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso)
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
@@ -983,12 +1016,28 @@ def compose_with_findings(
     def armar(prosa):
         return "\n".join(parts[:i_prosa] + [prosa] + parts[i_prosa + 1 :])
 
-    # El checkpoint confirmado jamás se recorta: va en el fijo, y si el fijo no
-    # cabe en el presupuesto se rechaza y se publican los topes actuales.
+    # El checkpoint confirmado jamás se recorta: el estado manda sobre el
+    # libro (la línea es prescindible: sin ella la siguiente pasada revisa
+    # full), y si el fijo no cabe ni sin libro manda el aviso de capacidad,
+    # nunca el corte a ciegas que podría partir el bloque de estado.
     if budget is not None:
         prosa = prosa_en_presupuesto(armar, review, budget)
         if prosa is not None:
             return armar(prosa)[:GITHUB_COMMENT_MAX]
+        if linea_libro is not None:
+
+            def armar_sin_libro(prosa):
+                cuerpo = [p for p in parts if p is not linea_libro]
+                # sin libro la prosa vive en i_prosa - 1: ocupa ESE hueco y la
+                # cola sigue en i_prosa, o el fijo mediría la prosa completa.
+                return "\n".join(cuerpo[: i_prosa - 1] + [prosa] + cuerpo[i_prosa:])
+
+            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
+            if prosa is not None:
+                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
+        return _cuerpo_de_aviso_de_capacidad(
+            result, manifest, provider, review, AVISO_SIN_ESPACIO
+        )
     budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget_prosa:
         review = (
@@ -2507,7 +2556,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
         dismiss_all=dismiss_all,
     )
     merged["seen"] = last_seen
-    bloque = serialize_findings(merged)
+    bloque = review_domain.serialize_findings(
+        merged, max_bytes=review_domain.StorageBudget().max_bytes
+    )
     if isinstance(bloque, review_domain.CapacityExceeded):
         motivo = f"desborde ({bloque.needed} bytes para {bloque.limit})"
         print(
@@ -2563,9 +2614,61 @@ def _cuerpo_con_checkpoint(decision):
         decision.snapshot, review_domain.StorageBudget()
     )
     if isinstance(encoded, review_domain.CapacityExceeded):
-        return None
-    bloque = encoded.block if decision.snapshot.schema == 3 else encoded
-    return bloque
+        return encoded
+    return encoded.block if decision.snapshot.schema == 3 else encoded
+
+
+def _parchar_aviso(observado, adaptador, banner):
+    """El banner CAUTION va al sticky EXISTENTE, best-effort. Sin sticky no
+    se crea comentario: un MARKER sin bloque válido secuestraría el sticky
+    futuro. Si el PATCH falla, manda el Unconfirmed del llamador."""
+    if observado is None:
+        return False
+    try:
+        adaptador.parchar(
+            observado["id"],
+            insert_caution_banner(observado.get("body") or "", banner),
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _avisar_desborde(desborde, decision, observado, adaptador):
+    revision = decision.snapshot.revision
+    banner = caution_banner(
+        f"memoria de desborde ({desborde.needed} bytes para {desborde.limit}) "
+        "conservada; esta versión no la modifica",
+        revision.head_sha if revision else "",
+        has_previous=True,
+    )
+    return _parchar_aviso(observado, adaptador, banner)
+
+
+def _avisar_sin_espacio(decision, observado, adaptador):
+    """El comentario no trae el bloque de estado (no cabe el fijo del
+    sticky): el checkpoint previo se conserva y el sticky queda visible con
+    el aviso. Nunca se escribe un cuerpo sin bloque válido."""
+    revision = decision.snapshot.revision
+    banner = caution_banner(
+        "comentario sin espacio para el estado; el checkpoint previo se "
+        "conserva y esta versión no la modifica",
+        revision.head_sha if revision else "",
+        has_previous=True,
+    )
+    return _parchar_aviso(observado, adaptador, banner)
+
+
+def cuerpo_publicable(cuerpo, bloque):
+    """Una sola fuente de verdad para "no cabe": un cuerpo solo es
+    publicable si read_snapshot lo lee (Valid o Legacy: el formato legado es
+    memoria legítima) y trae EXACTAMENTE el bloque codificado. El aviso de
+    capacidad (sin bloque) o un marcador partido no se escriben nunca:
+    borrarían o romperían la memoria del sticky."""
+    carga = review_domain.read_snapshot(cuerpo or "")
+    if isinstance(carga, (review_domain.Valid, review_domain.Legacy)):
+        return carga.block == bloque
+    return False
 
 
 def _login_de(comentario):
@@ -2597,9 +2700,13 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     """
     if not isinstance(decision, review_domain.Commit):
         return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
-    bloque = _cuerpo_con_checkpoint(decision)
-    if bloque is None:
-        return Unconfirmed("desborde de memoria: se conserva el checkpoint previo")
+    encoded = _cuerpo_con_checkpoint(decision)
+    if isinstance(encoded, review_domain.CapacityExceeded):
+        motivo = "desborde de memoria: se conserva el checkpoint previo"
+        if _avisar_desborde(encoded, decision, observado, adaptador):
+            motivo += "; aviso publicado en el comentario"
+        return Unconfirmed(motivo)
+    bloque = encoded
     marcados = [
         c
         for c in adaptador.leer()
@@ -2625,6 +2732,10 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
 
     if observado is None:
         cuerpo = visible(bloque, "")
+        if not cuerpo_publicable(cuerpo, bloque):
+            return Unconfirmed(
+                "el comentario no trae el bloque de estado; no se crea sticky"
+            )
         try:
             adaptador.crear(cuerpo)
         except Exception as exc:
@@ -2652,6 +2763,14 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     )
     resto = strip_findings_block(resto, last=False).strip()
     cuerpo = visible(bloque, resto)
+    if not cuerpo_publicable(cuerpo, bloque):
+        motivo = (
+            "el comentario no trae el bloque de estado: se conserva el "
+            "checkpoint previo"
+        )
+        if _avisar_sin_espacio(decision, observado, adaptador):
+            motivo += "; aviso publicado en el comentario"
+        return Unconfirmed(motivo)
     try:
         adaptador.parchar(observado["id"], cuerpo)
     except Exception as exc:
@@ -2742,6 +2861,7 @@ def cmd_publish(args):
     sticky = sticky_from_comments(comments, login)
 
     revisado = False
+    escribir = True
     if ERROR_KEY in result:
         # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
         reason = result[ERROR_KEY]
@@ -2801,26 +2921,23 @@ def cmd_publish(args):
                 ],
             )
         else:
-            revisado = True
-            libro = (
-                libro_actualizado(
-                    sticky,
-                    manifest,
-                    result,
-                    _repo_actual(),
-                    findings.get("model_ok", True),
-                )
-                if manifest.get("head")
-                else None
-            )
-            body = redact(
+            cuerpo = redact(
                 compose(
                     result,
                     manifest,
                     sha=head,
                     provider=name,
                     findings=findings,
-                    libro=libro,
+                    libro=libro_actualizado(
+                        sticky,
+                        manifest,
+                        result,
+                        _repo_actual(),
+                        findings.get("model_ok", True),
+                    )
+                    if manifest.get("head")
+                    else None,
+                    budget=review_domain.StorageBudget(),
                 ),
                 [
                     os.environ.get("API_KEY", ""),
@@ -2828,12 +2945,38 @@ def cmd_publish(args):
                     os.environ.get("GH_TOKEN", ""),
                 ],
             )
-            summary_text = summary_of(body)
+            if not cuerpo_publicable(cuerpo, findings["block"]):
+                # El fijo del comentario no cabe (ni sin libro): el cuerpo no
+                # trae el bloque y escribirlo borraría la memoria. Keep + banner
+                # como en el desborde; sin sticky previo no se crea nada.
+                revisado = False
+                banner = caution_banner(
+                    "comentario sin espacio para el estado; el checkpoint "
+                    "previo se conserva y esta versión no la modifica",
+                    head,
+                    has_previous=bool(sticky),
+                )
+                if sticky:
+                    cuerpo = insert_caution_banner(sticky["body"], banner)
+                else:
+                    escribir = False
+                    print(
+                        "ai-review: comentario sin espacio para el estado; "
+                        "no se crea sticky"
+                    )
+                body = cuerpo
+                summary_text = banner
+            else:
+                revisado = True
+                body = cuerpo
+                summary_text = summary_of(body)
 
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
 
-    if sticky:
+    if not escribir:
+        print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
+    elif sticky:
         sh(
             "gh",
             "api",
@@ -3590,6 +3733,7 @@ def revision_visible(artifact, snapshot, previos, head):
                 "completion": snapshot.completion,
             },
             libro=artifact.get("covered"),
+            budget=review_domain.StorageBudget(),
         )
 
     return armar
