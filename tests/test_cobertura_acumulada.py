@@ -624,5 +624,148 @@ class PresupuestoContinuacion(unittest.TestCase):
             )
 
 
+class AcreditacionDePasada(unittest.TestCase):
+    """Una pasada solo acredita cobertura si su resultado es utilizable
+    entero: COVERAGE declarada, runtime terminado y hallazgos del modelo
+    válidos. Si no, no agrega nada al libro."""
+
+    def test_l_complete_sin_bloque_de_hallazgos_no_acredita(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=None),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            self.assertIn(f"<!-- ai-review:completion={head1}:partial -->", cuerpo1)
+            self.assertIsNotNone(linea_del_libro(cuerpo1))
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {}, "sin bloque utilizable la pasada no acredita")
+            (repo / "d.py").write_text("d3\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+            manifest2 = preparar(repo, Path(tmp, "work2"), base, head2, prev)
+            self.assertEqual(
+                (manifest2["mode"], manifest2["reason"]),
+                ("full", "incomplete-prev"),
+                "sin acreditación no hay continuación terminal",
+            )
+            self.assertEqual(
+                sorted(manifest2["reviewed"]), ["a.py", "b.py", "c.py", "d.py"]
+            )
+
+    def test_l_bloque_de_hallazgos_invalido_tampoco_acredita(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            texto = (
+                "**Veredicto:** ok.\n"
+                + review.FINDINGS_PREFIX
+                + '{"findings": ['
+                + review.FINDINGS_SUFFIX
+                + "\nCOVERAGE: complete"
+            )
+            result1 = {"result": texto, "subtype": "success"}
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {})
+
+    def test_m_error_max_turns_no_acredita(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=[]),
+                "subtype": "error_max_turns",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            self.assertIn(f"<!-- ai-review:completion={head1}:partial -->", cuerpo1)
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {})
+
+    def paquete_hermes(self, repo, work, head1, base, result, manifest=None):
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "request-package.json").write_text(
+            json.dumps(
+                {
+                    "request_id": 1,
+                    "kind": "review",
+                    "pr_head_sha": head1,
+                    "base_sha": base,
+                }
+            )
+        )
+        (work / "result.json").write_text(json.dumps(result))
+        datos = manifest or {
+            "head": head1,
+            "base": base,
+            "reviewed": ["a.py", "b.py", "c.py", "d.py"],
+            "excluded": [],
+            "mode": "full",
+        }
+        (work / "manifest.json").write_text(json.dumps(datos))
+        (work / "prev.json").write_text(
+            json.dumps(
+                {"sha": None, "state": None, "completion": None, "covered": None}
+            )
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "review.py"),
+                "close-result",
+                "--work",
+                str(work),
+            ],
+            cwd=repo,
+            env=dict(os.environ, FINDING_IDENTITY="current"),
+            check=True,
+            capture_output=True,
+        )
+        return json.loads((work / "result.json").read_text())
+
+    def test_n_close_result_sin_bloque_utilizable_no_acredita(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            paquete = self.paquete_hermes(
+                repo,
+                Path(tmp, "work"),
+                head1,
+                base,
+                {
+                    "result": "**Veredicto:** ok.\nCOVERAGE: complete",
+                    "subtype": "success",
+                },
+            )
+        self.assertEqual(paquete["covered"], {})
+
+    def test_n_close_result_con_bloque_valido_si_acredita(self):
+        bloque = (
+            review.FINDINGS_PREFIX
+            + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            paquete = self.paquete_hermes(
+                repo,
+                Path(tmp, "work"),
+                head1,
+                base,
+                {
+                    "result": f"**Veredicto:** ok.\n{bloque}\nCOVERAGE: complete",
+                    "subtype": "success",
+                },
+            )
+            self.assertEqual(
+                paquete["covered"],
+                {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abcd"},
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
