@@ -315,7 +315,11 @@ class RoundtripDelEstadoCompacto(unittest.TestCase):
             ["src/viejo.py"],
             "viajan para reabrir",
         )
-        self.assertIsNone(resuelta.cause_hint)
+        self.assertEqual(
+            resuelta.cause_hint,
+            "ya corregido",
+            "la causa viaja: match_finding desempata contra resueltos",
+        )
         self.assertEqual(s.findings[2].status.at_sha, "9" * 40)
         descartada = s.findings[3]
         self.assertEqual(descartada.status.command_id, 31)
@@ -413,6 +417,79 @@ class RoundtripDelEstadoCompacto(unittest.TestCase):
             reabierto.status,
             domain.StatusOpen,
             "la regresión en el archivo relacionado reabre la resolución",
+        )
+
+    def test_un_resuelto_compacto_se_reabre_por_cause_hint(self):
+        resuelto_a = domain.Finding(
+            id="F1",
+            title="Fuga en el cierre del pool",
+            severity="High",
+            status=domain.StatusResolved(at_sha="c" * 40),
+            primary_anchor=domain.AnchorLegacy(path="src/principal.py", line=3),
+            cause_hint="doble registro del cleanup",
+            evidence=[domain.EvidenceUnverified(text="cita del modelo")],
+        )
+        resuelto_b = domain.Finding(
+            id="F2",
+            title="Carrera en el pool gemelo",
+            severity="Medium",
+            status=domain.StatusResolved(at_sha="c" * 40),
+            primary_anchor=domain.AnchorLegacy(path="src/principal.py", line=40),
+            cause_hint="renombre a mitad de corrida",
+            evidence=[domain.EvidenceUnverified(text="y" * 100)],
+        )
+        snapshot = domain.Snapshot(
+            schema=3,
+            generation=2,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.PARTIAL,
+            findings=[resuelto_a, resuelto_b],
+            command_cursor=0,
+        )
+        compacto = domain.compactar_cerrados(snapshot)
+        self.assertEqual(
+            compacto.findings[0].cause_hint,
+            "doble registro del cleanup",
+            "la causa viaja en el compacto: match_finding la lee para desempatar",
+        )
+        observacion = domain.Observation(
+            title="Regresión distinta de ambos títulos",
+            severity="High",
+            primary_anchor=domain.AnchorLegacy(path="src/principal.py", line=99),
+            related_anchors=[],
+            cause_hint="doble registro del cleanup",
+            evidence=[],
+            claim=domain.OPEN,
+        )
+        revision = domain.Revision(
+            base_sha="b" * 40, head_sha="9" * 40, policy_digest="d" * 64
+        )
+        facts = domain.RepositoryFacts(
+            revision=revision,
+            changed_paths=("src/principal.py",),
+            delta_calculado=True,
+        )
+        self.assertEqual(
+            domain.match_finding(compacto.findings, observacion, facts),
+            domain.MatchExisting(id="F1"),
+        )
+        plan = domain.ReviewPlan(
+            revision=revision,
+            changed_paths=("src/principal.py",),
+            policy=domain.ReviewPolicy(finding_identity=domain.IDENTIDAD_ANCLAS),
+        )
+        report = domain.validar_reporte([observacion], domain.PARTIAL, facts)
+        decision = domain.accept_report(compacto, plan, report)
+        self.assertIsInstance(decision, domain.Replace)
+        reabierto = decision.snapshot.findings[0]
+        self.assertEqual(reabierto.id, "F1")
+        self.assertIsInstance(
+            reabierto.status,
+            domain.StatusOpen,
+            "la regresión con la misma causa reabre la resolución compacta",
         )
 
 
