@@ -53,6 +53,7 @@ from review_context import (
     INCREMENTAL_SMALL_BYTES,
     INCREMENTAL_SMALL_FILES,
     LARGE_DIFF_MAX_TURNS,
+    LIBRO_BORRADO,
     SearchComplete,
     SearchFailed,
     SearchTruncated,
@@ -269,7 +270,9 @@ def libro_de_linea(linea):
     for ruta, blob in libro.items():
         if not isinstance(ruta, str) or not ruta:
             return None, None
-        if not isinstance(blob, str) or not re.fullmatch(r"[0-9a-f]{40}", blob):
+        if not isinstance(blob, str) or not (
+            re.fullmatch(r"[0-9a-f]{40}", blob) or blob == LIBRO_BORRADO
+        ):
             return None, None
     return cabeza, libro
 
@@ -287,12 +290,21 @@ def libro_de(body):
 
 
 def unreviewed_de(texto):
-    """Lo que el modelo declaró no revisar; None si falta o no se lee."""
-    antes, _, _ = split_coverage(texto or "")
-    inicio = antes.rfind(UNREVIEWED_PREFIX)
-    if inicio < 0:
+    """Lo que el modelo declaró no revisar; None si falta o no se lee.
+
+    Vale solo un bloque en línea propia (columna 0), único en todo el texto,
+    inmediatamente antes de la línea COVERAGE y con JSON de lista de rutas:
+    cualquier desvío (imitaciones incluidas) anula la declaración."""
+    lineas = (texto or "").splitlines()
+    con_prefijo = [i for i, ln in enumerate(lineas) if ln.startswith(UNREVIEWED_PREFIX)]
+    if len(con_prefijo) != 1:
         return None
-    segmento = antes[inicio + len(UNREVIEWED_PREFIX) :].split("\n", 1)[0]
+    i = con_prefijo[0]
+    if i + 1 >= len(lineas):
+        return None
+    if not lineas[i + 1].strip().strip("`*").upper().startswith("COVERAGE:"):
+        return None
+    segmento = lineas[i][len(UNREVIEWED_PREFIX) :]
     if not segmento.endswith(" -->"):
         return None
     try:
@@ -321,9 +333,14 @@ def pasada_acredita(result, model_ok):
 
 
 def libro_fusionado(previo, manifest, result, repo, model_ok):
-    """El libro tras una pasada: lo cubierto ahora con su blob en head, más lo
-    cubierto antes que sigue intacto; todo lo demás queda fuera."""
+    """El libro tras una pasada: lo cubierto ahora con su blob en head (o el
+    centinela del borrado), más lo cubierto antes que sigue intacto; el resto
+    queda fuera."""
     head = manifest["head"]
+    # Sin head verificable nada es reclamable: ni blobs (un None de blob_at
+    # puede ser un head que no resuelve, no un borrado) ni centinelas.
+    if not repo.cat_file_exists(f"{head}^{{commit}}"):
+        return {}
     texto = (result or {}).get("result") or ""
     if pasada_acredita(result, model_ok):
         _, cobertura, _ = split_coverage(texto)
@@ -337,12 +354,17 @@ def libro_fusionado(previo, manifest, result, repo, model_ok):
             cubiertos = []
     else:
         cubiertos = []
-    fused = {
-        p: b
-        for p, b in (previo or {}).items()
-        if p not in set(cubiertos) and repo.blob_at(head, p) == b
-    }
-    fused.update({p: b for p in cubiertos if (b := repo.blob_at(head, p))})
+    cubierto = set(cubiertos)
+    fused = {}
+    for p, b in (previo or {}).items():
+        if p in cubierto:
+            continue
+        blob = repo.blob_at(head, p)
+        if (blob is None and b == LIBRO_BORRADO) or blob == b:
+            fused[p] = b
+    for p in cubiertos:
+        blob = repo.blob_at(head, p)
+        fused[p] = blob if blob else LIBRO_BORRADO
     return fused
 
 
@@ -2248,6 +2270,25 @@ def cobertura_declarada(texto, modelo):
     return review_domain.UNKNOWN if modelo is None else mapeada
 
 
+def recortes_de_continuacion(manifest):
+    """Las entradas de excluded que degradan: presupuesto o encoding."""
+    return [
+        e
+        for e in ((manifest or {}).get("excluded") or [])
+        if e.get("reason") in ("budget", "encoding")
+    ]
+
+
+def continuacion_terminal(manifest):
+    """Continuación sin nada por leer: solo presupuesto y encoding degradan."""
+    manifest = manifest or {}
+    return (
+        manifest.get("mode") == "continuation"
+        and not manifest.get("reviewed")
+        and not recortes_de_continuacion(manifest)
+    )
+
+
 def actualizar_memoria_valida(
     load, result, manifest, repo, pr, login, comments, policy=None
 ):
@@ -2285,19 +2326,13 @@ def actualizar_memoria_valida(
     ]
     runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
     cobertura = cobertura_declarada((result or {}).get("result") or "", model)
-    if (
-        manifest.get("mode") == "continuation"
-        and not manifest.get("reviewed")
-        and not manifest.get("excluded")
-    ):
+    if continuacion_terminal(manifest):
         # Continuación terminal: el libro ya cubre el alcance y no queda nada
         # por leer; sin esto una pasada sin archivos degradaría a parcial.
         cobertura = review_domain.COMPLETE_CLAIM
-    excluidos = manifest.get("excluded", []) or []
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
-        for e in excluidos
-        if e.get("reason") in ("budget", "encoding")
+        for e in recortes_de_continuacion(manifest)
     )
 
     head = manifest.get("head")
@@ -2445,9 +2480,10 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             file=sys.stderr,
         )
         dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
-    has_previous_changes = manifest.get("mode") == "incremental" or manifest.get(
-        "reason"
-    ) in ("incomplete-prev", "forced-full-t16")
+    has_previous_changes = manifest.get("mode") in (
+        "incremental",
+        "continuation",
+    ) or manifest.get("reason") in ("incomplete-prev", "forced-full-t16")
     changed = review_domain.rutas_de_cambio(manifest)
     watched = {
         f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN
@@ -3473,12 +3509,7 @@ def cmd_close_result(args):
     manifiesto = work / "manifest.json"
     datos = json.loads(manifiesto.read_text()) if manifiesto.exists() else None
     cobertura = cobertura_declarada(texto, modelo)
-    if (
-        datos is not None
-        and datos.get("mode") == "continuation"
-        and not datos.get("reviewed")
-        and not datos.get("excluded")
-    ):
+    if datos is not None and continuacion_terminal(datos):
         # Continuación terminal: el libro ya cubre el alcance y no queda nada
         # por leer; sin esto una pasada sin archivos degradaría a parcial.
         cobertura = review_domain.COMPLETE_CLAIM

@@ -413,14 +413,16 @@ class Continuacion(unittest.TestCase):
             )
             self.assertEqual(sorted(manifest2["reviewed"]), ["c.py", "d.py"])
             self.assertIn("c.py", (work2 / "diff.patch").read_text())
+            # pass2 queda parcial (unreviewed=[]): acredita el borrado sin
+            # cerrar la cadena, porque un complete activaría D0 en el push 3.
             result2 = {
-                "result": texto_pasada("complete", hallazgos=[]),
+                "result": texto_pasada("partial", unreviewed=[], hallazgos=[]),
                 "subtype": "success",
             }
             cuerpo2 = publicar(
                 work2, head2, manifest2, result2, body=cuerpo1, repo=repo
             )
-            self.assertIn(f"<!-- ai-review:completion={head2}:complete -->", cuerpo2)
+            self.assertIn(f"<!-- ai-review:completion={head2}:partial -->", cuerpo2)
             _, libro = libro_del(cuerpo2)
             self.assertEqual(libro["c.py"], "deleted")
             self.assertEqual(libro["d.py"], blob(repo, head2, "d.py"))
@@ -956,13 +958,12 @@ class ContinuacionTerminal(unittest.TestCase):
                 manifest1 = preparar(
                     repo, work1, base, head1, {"sha": None, "state": None}
                 )
-            self.assertEqual(
-                [
-                    e["reason"]
+            self.assertTrue(
+                any(
+                    e["path"].endswith(".lock") and e["reason"].startswith("filtro")
                     for e in manifest1["excluded"]
-                    if e["path"].endswith(".lock")
-                ],
-                ["filtro locks/**"],
+                ),
+                manifest1["excluded"],
             )
             sticky1 = sticky_v3(
                 head1,

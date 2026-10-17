@@ -20,6 +20,8 @@ Ejemplo: el bot no termina de revisar `app.py`. El siguiente push solo cambia `o
 
 Reenviar el mismo evento sigue sin repetir el intento. Un re-run manual en el MISMO head tras una parcial con libro válido también continúa (revisa lo pendiente); en cualquier otro caso el re-run pide revisión completa, como antes.
 
+Los filtros deliberados y binarios no impiden la continuación terminal; solo presupuesto y encoding.
+
 ## Forma
 
 El publicador guarda un marcador de cobertura asociado al SHA del intento. Su valor es `complete` o `partial`. La ausencia de un marcador válido significa cobertura desconocida.
@@ -30,7 +32,7 @@ Cuando la revisión es parcial, el modelo declara lo que quedó sin revisar en `
 
 Una pasada acredita cobertura SOLO si su resultado es utilizable entero: COVERAGE declarada, runtime terminado (sin error_max_turns ni fallo de infraestructura) y bloque de hallazgos del modelo válido. Una sola función (`pasada_acredita`) decide, y la usan los dos caminos que escriben el libro (publicación clásica y close_result del worker); el marcador no puede discrepar porque esas mismas condiciones ya degradan el marcador a partial. Si la pasada no acredita, no agrega nada al libro; las entradas previas intactas se conservan. Esto cierra la burla: un complete sin bloque utilizable no puede meter su alcance en el libro y cobrarlo después con una continuación terminal.
 
-La publicación recalcula el libro: entradas previas cuyo blob sigue intacto más lo cubierto ahora (si la pasada acredita); los archivos borrados salen del libro. Sin turnos, bloque de hallazgos ausente, excluidos por presupuesto o encoding degradan el marcador a partial como siempre; el marcador sale complete solo cuando el libro cubre cada archivo revisable del diff completo con su blob actual.
+La publicación recalcula el libro: entradas previas cuyo blob sigue intacto más lo cubierto ahora (si la pasada acredita); un borrado entregado y acreditado se registra en el libro con el centinela "deleted" (no es 40-hex y verify_sticky/libro_de_linea lo aceptan); un borrado sin acreditar sigue pendiente y vuelve al alcance de la continuación. Sin turnos, bloque de hallazgos ausente, excluidos por presupuesto o encoding degradan el marcador a partial como siempre; el marcador sale complete solo cuando el libro cubre cada archivo revisable del diff completo con su blob actual.
 
 `gate` lee esa metadata y la entrega en `prev.json` junto con el SHA, los hallazgos y el libro. `prepare` solo permite la continuación cuando la cobertura anterior es parcial, hay libro válido y la base y la política coinciden con las de la memoria; en ese caso el alcance son los archivos del diff cuyo blob actual no coincide con el libro, la memoria de hallazgos viaja como en una recuperación parcial y la resolución de hallazgos sigue atada al delta real (un hallazgo solo pasa a resuelto si su archivo cambió, nunca por estar en el alcance). Las comprobaciones existentes de rebase y re-run siguen vigentes: tras una revisión COMPLETA el siguiente push sigue siendo `forced-full-t16` (decisión D0); el modo de continuación solo existe después de una parcial.
 

@@ -30,6 +30,10 @@ from review_domain import (
     is_complete,
 )
 
+# Centinela del libro de cobertura: un archivo borrado cuyo diff (la
+# eliminación) ya fue entregado y acreditado por una pasada.
+LIBRO_BORRADO = "deleted"
+
 DEFAULT_EXCLUDES = [
     "*.lock",
     "package-lock.json",
@@ -615,6 +619,10 @@ def files_matching_base(repo, paths, base, head):
 
 def delta_real(repo, desde, head):
     """Delta real desde..head: (rutas decodificables, omisiones, calculado)."""
+    if desde == head:
+        # El diff de un commit consigo mismo es vacío por definición; no
+        # consultarlo evita que un delta re-run dependa del repositorio local.
+        return (), (), True
     try:
         proc = repo.run("diff", "--name-only", "-z", desde, head, check=False)
     except Exception:
@@ -927,14 +935,18 @@ def prepare_review(
         rutas_plan = list(delta_rutas)
         candidatas = delta_rutas
     elif modo == "continuation":
-        # Alcance de la continuación: lo pendiente del libro más lo que cambió;
-        # los borrados (blob None) quedan fuera del alcance y del libro.
-        candidatas = [
-            ruta
-            for ruta in historicas
-            if (blob := repo.blob_at(head, ruta)) is not None
-            and blob != (cobertura_previa or {}).get(ruta)
-        ]
+        # Alcance de la continuación: lo pendiente del libro más lo que cambió.
+        # Un borrado (blob None) es pendiente salvo que ya esté acreditado
+        # con el centinela del libro.
+        previa = cobertura_previa or {}
+        candidatas = []
+        for ruta in historicas:
+            blob = repo.blob_at(head, ruta)
+            if blob is None:
+                if previa.get(ruta) != LIBRO_BORRADO:
+                    candidatas.append(ruta)
+            elif blob != previa.get(ruta):
+                candidatas.append(ruta)
         rutas_plan = list(candidatas)
     else:
         rutas_plan = historicas
