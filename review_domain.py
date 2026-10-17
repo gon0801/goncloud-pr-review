@@ -27,9 +27,9 @@ FINDINGS_PREFIX = "<!-- ai-review:findings="
 FINDINGS_SUFFIX = " -->"
 FINDINGS_MAX_BYTES = 8000
 
-# Perfil ampliado activo como presupuesto por omisión (S1): 40000 bytes de
-# estado y 60000 bytes/caracteres de comentario; sin StorageBudget explícito,
-# encode y compose usan estos topes.
+# Perfil ampliado activo como presupuesto por omisión del ESTADO: encode
+# usa 40000 sin StorageBudget explícito. El comentario completo (60000)
+# solo aplica donde compose recibe budget explícito.
 STATE_BYTES_PROPOSED = 40000
 COMMENT_MAX_BYTES = 60000
 COMMENT_MAX_CHARS = 60000
@@ -1284,9 +1284,8 @@ def encode_snapshot(snapshot, budget=None):
 
 
 def _encode_sin_perdida(snapshot, limite):
-    """Serialización v1/v2/v3 íntegra sin compactación (el cuerpo histórico
-    de encode_snapshot). v3 en checkpoint codificado con escapes JSON
-    reversibles; el bloque se relee para verificar el roundtrip."""
+    """Serialización v1/v2/v3 íntegra, la que comparten el intento directo y
+    el reintento compactado de encode_snapshot."""
     if snapshot.schema == 1:
         return serialize_findings(_legacy_raw_of_snapshot(snapshot), max_bytes=limite)
     if snapshot.schema == 2:

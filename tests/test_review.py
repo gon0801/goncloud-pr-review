@@ -7457,11 +7457,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
         return cuerpo
 
     def test_overflow_keeps_previous_snapshot_and_reviewed_sha(self):
-        # B2: el estado fusionado (sticky legado con descartado y acentos +
-        # hallazgos nuevos del modelo) no cabe íntegro -> Keep: bloque anterior
-        # idéntico, sha=/completion= sin avanzar, banner y descartes intactos.
         # El sticky legado se dimensiona al máximo que cabe en el perfil
-        # activo; la ronda nueva de hallazgos es lo que desborda.
+        # activo; la ronda nueva de hallazgos es lo que desborda: Keep con
+        # bloque anterior idéntico y sha=/completion= sin avanzar.
         import review_domain as domain
 
         tope = domain.StorageBudget().max_bytes
