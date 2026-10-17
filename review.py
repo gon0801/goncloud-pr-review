@@ -1028,9 +1028,9 @@ def compose_with_findings(
 
             def armar_sin_libro(prosa):
                 cuerpo = [p for p in parts if p is not linea_libro]
-                return "\n".join(
-                    cuerpo[: i_prosa - 1] + [prosa] + cuerpo[i_prosa - 1 :]
-                )
+                # sin libro la prosa vive en i_prosa - 1: ocupa ESE hueco y la
+                # cola sigue en i_prosa, o el fijo mediría la prosa completa.
+                return "\n".join(cuerpo[: i_prosa - 1] + [prosa] + cuerpo[i_prosa:])
 
             prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
             if prosa is not None:

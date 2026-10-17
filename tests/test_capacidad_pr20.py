@@ -646,7 +646,9 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
 
     def _resultado(self):
         return {
-            "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
+            "result": "COVERAGE: complete\n"
+            + "detalle del revisor " * 200
+            + "CENTINELA-DE-PROSA",
             "review_provider": "opencode-go",
             "model_ok": True,
         }
@@ -716,7 +718,50 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self.assertEqual(review.reviewed_completion(cuerpo), "complete")
         self.assertEqual(review.reviewed_sha(cuerpo), "c" * 40)
         self.assertIn("detalle del revisor", cuerpo)
+        self.assertEqual(
+            cuerpo.count("## Detalle del revisor"),
+            1,
+            "la prosa ocupa un solo hueco: el header no se duplica",
+        )
+        self.assertEqual(
+            cuerpo.count("CENTINELA-DE-PROSA"),
+            1,
+            "la prosa del revisor viaja una sola vez, no recortada y luego íntegra",
+        )
         self._sticky_verificado(cuerpo)
+
+    def test_prosa_que_no_cabe_entera_se_recorta_y_publica_el_estado(self):
+        snapshot, block = self._snapshot_grande()
+        resultado = {
+            "result": "COVERAGE: complete\n" + "detalle del revisor " * 1500,
+            "review_provider": "opencode-go",
+            "model_ok": True,
+        }
+        cuerpo = review.compose(
+            resultado,
+            self.MANIFEST,
+            sha="c" * 40,
+            provider="opencode-go",
+            findings=self._findings(block, snapshot),
+            budget=domain.StorageBudget(),
+            libro=self._libro_grande(),
+        )
+        self.assertLessEqual(len(cuerpo), domain.COMMENT_MAX_CHARS)
+        self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(
+            carga,
+            domain.Valid,
+            f"el estado cabría sin libro y prosa recortada: {carga!r}",
+        )
+        self.assertNotIn(review.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
+        self.assertIn(
+            "Revisión recortada al presupuesto de capacidad",
+            cuerpo,
+            "la prosa se recorta, el estado no",
+        )
+        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review.reviewed_sha(cuerpo), "c" * 40)
 
     def test_libro_chico_sigue_viajando(self):
         snapshot, block = self._snapshot_grande()
