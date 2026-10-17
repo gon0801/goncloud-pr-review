@@ -28,8 +28,8 @@ FIXTURES = ROOT / "tests" / "fixtures"
 
 
 def cargar_ronda():
-    body = (FIXTURES / "pr20-sticky-hermes.md").read_text()
-    ronda = json.loads((FIXTURES / "pr20-ronda-extra.json").read_text())
+    body = (FIXTURES / "pr20-sticky-hermes.md").read_text(encoding="utf-8")
+    ronda = json.loads((FIXTURES / "pr20-ronda-extra.json").read_text(encoding="utf-8"))
     return body, ronda
 
 
@@ -82,8 +82,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--salida", default="/tmp/sticky-pr20-armado.md")
     args = ap.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     cuerpo, snapshot = armar()
-    Path(args.salida).write_text(cuerpo)
+    Path(args.salida).write_text(cuerpo, encoding="utf-8")
     abiertos = sum(
         1 for f in snapshot.findings if isinstance(f.status, domain.StatusOpen)
     )

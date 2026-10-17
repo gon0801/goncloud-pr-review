@@ -10,7 +10,10 @@ ampliado.
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -459,6 +462,53 @@ class ElParserDeGleeElStickyNuevo(unittest.TestCase):
         marca = self._merge().parsear_bot(cuerpo)
         self.assertTrue(marca.bloque_valido)
         self.assertEqual(len(marca.hallazgos), 5)
+
+
+class ElScriptNoDependeDelLocale(unittest.TestCase):
+    """CodeRabbit cr:4303977195/cr:4303977204: read_text y write_text sin
+    encoding. Con un locale no UTF-8 el script debe armar exactamente el
+    mismo archivo, byte a byte."""
+
+    def _correr(self, entorno, salida):
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", ""),
+        }
+        env.update(entorno)
+        hecho = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "armar_sticky_pr20.py"),
+                "--salida",
+                str(salida),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        return hecho
+
+    def test_con_locale_c_arma_el_mismo_archivo_byte_a_byte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ruta_utf8 = Path(tmp) / "sticky-utf8.md"
+            ruta_c = Path(tmp) / "sticky-c.md"
+            utf8 = self._correr({"PYTHONUTF8": "1"}, ruta_utf8)
+            self.assertEqual(utf8.returncode, 0, utf8.stderr)
+            con_c = self._correr(
+                {
+                    "PYTHONUTF8": "0",
+                    "PYTHONCOERCECLOCALE": "0",
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                },
+                ruta_c,
+            )
+            self.assertEqual(con_c.returncode, 0, con_c.stderr)
+            self.assertEqual(
+                ruta_c.read_bytes(),
+                ruta_utf8.read_bytes(),
+                "el sticky armado no depende del locale",
+            )
 
 
 class ElCaminoLegadoTambienPublica(unittest.TestCase):
