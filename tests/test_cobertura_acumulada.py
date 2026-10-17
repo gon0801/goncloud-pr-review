@@ -723,6 +723,10 @@ class Unreviewed(unittest.TestCase):
             + "[] -->\n```\nCOVERAGE: partial | faltó c.py"
         )
         self.assertIsNone(review.unreviewed_de(texto))
+        texto_dos = (
+            "v\n" + real + "\n" + UNREVIEWED + "[] -->\nCOVERAGE: partial | faltó c.py"
+        )
+        self.assertIsNone(review.unreviewed_de(texto_dos))
 
     def test_f2_bloque_fuera_de_posicion_no_declara(self):
         bloque = UNREVIEWED + '["c.py"] -->'
