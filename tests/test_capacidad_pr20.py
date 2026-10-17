@@ -334,6 +334,82 @@ class RoundtripDelEstadoCompacto(unittest.TestCase):
         self.assertEqual(len(resuelta.evidence), 2)
         self.assertEqual(resuelta.cause_hint, "ya corregido")
 
+    def test_un_resuelto_compacto_se_reabre_por_su_ancla_relacionada(self):
+        resuelto = domain.Finding(
+            id="F1",
+            title="Fuga en el cierre del pool",
+            severity="High",
+            status=domain.StatusResolved(at_sha="c" * 40),
+            primary_anchor=domain.AnchorLegacy(path="src/principal.py", line=3),
+            related_anchors=[domain.AnchorLegacy(path="src/pruebas.py", line=None)],
+            evidence=[domain.EvidenceUnverified(text="cita del modelo")],
+        )
+        gorda = domain.Finding(
+            id="F2",
+            title="Abierta con evidencia pesada",
+            severity="Medium",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path="src/vivo.py", line=7),
+            evidence=[domain.EvidenceUnverified(text="x" * 400)],
+        )
+        snapshot = domain.Snapshot(
+            schema=3,
+            generation=2,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=3,
+            completion=domain.PARTIAL,
+            findings=[resuelto, gorda],
+            command_cursor=0,
+        )
+        integro = domain.encode_snapshot(snapshot)
+        compacto = domain.encode_snapshot(domain.compactar_cerrados(snapshot))
+        self.assertLess(len(compacto.block), len(integro.block))
+        presupuesto = domain.StorageBudget(
+            max_bytes=(len(integro.block) + len(compacto.block)) // 2
+        )
+        encoded = domain.encode_snapshot(snapshot, presupuesto)
+        self.assertIsInstance(encoded, domain.EncodedCheckpoint)
+        recargado = domain.read_snapshot(encoded.block).snapshot
+        self.assertEqual(
+            list(recargado.findings[0].related_anchors),
+            list(resuelto.related_anchors),
+            "las relacionadas viajan: _cambio_pertinente las lee",
+        )
+        observacion = domain.observation_de_entrada(
+            {
+                "file": "src/principal.py",
+                "line": 3,
+                "title": "Fuga en el cierre del pool",
+                "severity": "High",
+                "state": "open",
+            }
+        )
+        revision = domain.Revision(
+            base_sha="b" * 40, head_sha="9" * 40, policy_digest="d" * 64
+        )
+        facts = domain.RepositoryFacts(
+            revision=revision,
+            changed_paths=("src/pruebas.py",),
+            delta_calculado=True,
+        )
+        plan = domain.ReviewPlan(
+            revision=revision,
+            changed_paths=("src/pruebas.py",),
+            policy=domain.ReviewPolicy(),
+        )
+        report = domain.validar_reporte([observacion], domain.PARTIAL, facts)
+        decision = domain.accept_report(recargado, plan, report)
+        self.assertIsInstance(decision, domain.Replace)
+        reabierto = decision.snapshot.findings[0]
+        self.assertEqual(reabierto.id, "F1")
+        self.assertIsInstance(
+            reabierto.status,
+            domain.StatusOpen,
+            "la regresión en el archivo relacionado reabre la resolución",
+        )
+
 
 class StickiesViejosSeLeenSinPerdida(unittest.TestCase):
     """Los stickies escritos con el schema actual (y los legado y v2) siguen
