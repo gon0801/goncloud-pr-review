@@ -2703,10 +2703,14 @@ class CheckpointCapacity(unittest.TestCase):
             findings=findings,
             budget=chico,
         )
-        self.assertIn(
+        self.assertNotIn(
             encoded.block,
             comentario,
-            "el checkpoint confirmado viaja completo",
+            "el checkpoint confirmado jamás se recorta: si no cabe, no viaja",
+        )
+        self.assertIn(review.CAUTION_MARK, comentario, "aviso visible de capacidad")
+        self.assertIsNone(
+            review.reviewed_completion(comentario), "el presupuesto chico no confirma"
         )
 
     def test_estructura_con_budget_sin_duplicados(self):
@@ -2909,13 +2913,6 @@ class CheckpointCapacity(unittest.TestCase):
             ("genérico", None),
             ("hallazgos", self._hallazgos_chicos()),
         ):
-            sin = review.compose(
-                resultado,
-                manifest,
-                sha="e" * 40,
-                provider="opencode-go",
-                findings=findings,
-            )
             vacio = review.compose(
                 {"result": "COVERAGE: complete\n"},
                 manifest,
@@ -2940,8 +2937,8 @@ class CheckpointCapacity(unittest.TestCase):
                         findings=findings,
                         budget=presupuesto,
                     )
-                    if out == sin:
-                        continue  # el fijo no cabe: presupuesto rechazado, topes actuales
+                    if review.CAUTION_MARK in out:
+                        continue  # el fijo no cabe: aviso de capacidad, fail-closed
                     self.assertLessEqual(len(out), tope)
                     self.assertLessEqual(len(out.encode("utf-8")), tope)
 
@@ -2974,9 +2971,14 @@ class CheckpointCapacity(unittest.TestCase):
             resultado, manifest, sha="e" * 40, provider="opencode-go", findings=findings
         )
         self.assertGreater(len(sin), 20000)
-        self.assertEqual(
-            out, sin, "el presupuesto no cabe: se publican los topes actuales"
+        self.assertIn(
+            review.CAUTION_MARK,
+            out,
+            "el fijo no cabe: aviso de capacidad, jamás un corte a ciegas",
         )
+        self.assertNotIn(findings["block"], out)
+        self.assertIsNone(review.reviewed_completion(out))
+        self.assertLessEqual(len(out), review.GITHUB_COMMENT_MAX)
 
     def test_mensaje_sin_revisables_con_findings_vacios(self):
         findings = {"merged": [], "new_ids": [], "block": "", "model_ok": True}

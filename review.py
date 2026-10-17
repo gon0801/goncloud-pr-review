@@ -791,6 +791,45 @@ def prosa_en_presupuesto(armar, prosa, budget):
     return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
 
 
+def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
+    """El cuerpo del comentario cuando el fijo no cabe: aviso visible, sin
+    bloque de estado y sin marcar sha ni cobertura (el camino del desborde
+    de memoria, también para un comentario sin espacio). Nunca corta a
+    ciegas: un marcador oculto partido rompería el estado del próximo push."""
+
+    def recorte():
+        return (
+            review[:disponible]
+            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
+        )
+
+    partes = [
+        MARKER,
+        aviso,
+        "",
+        "",
+        "",
+        ALCANCE_INICIO,
+        "",
+        *scope_lines(result, manifest, provider),
+        "",
+        "</details>",
+    ]
+    overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
+    disponible = max(0, GITHUB_COMMENT_MAX - overhead)
+    partes[3] = (recorte() if len(review) > disponible else review) or (
+        "_El revisor no devolvió texto._"
+    )
+    return "\n".join(partes)
+
+
+AVISO_SIN_ESPACIO = (
+    "> [!CAUTION]\n> **Comentario sin espacio para el estado:** el cuerpo fijo "
+    "del sticky no cabe en el presupuesto del comentario (con y sin libro de "
+    "cobertura); esta revisión no se marca como revisada ni confirma cobertura."
+)
+
+
 def compose(result, manifest, *, sha, provider, findings=None, budget=None, libro=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
@@ -875,6 +914,20 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
         prosa = prosa_en_presupuesto(armar, review, budget)
         if prosa is not None:
             return armar(prosa)[:GITHUB_COMMENT_MAX]
+        if linea_libro is not None:
+            # El estado manda sobre el libro: la línea es prescindible (sin
+            # ella la siguiente pasada revisa full, que es seguro) y el corte
+            # a ciegas podría partir el bloque de estado.
+            def armar_sin_libro(prosa):
+                cuerpo = [p for p in parts if p is not linea_libro]
+                return "\n".join(cuerpo + [prosa, ""] + scope)
+
+            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
+            if prosa is not None:
+                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
+        return _cuerpo_de_aviso_de_capacidad(
+            result, manifest, provider, review, AVISO_SIN_ESPACIO
+        )
     if len(review) > COMMENT_LIMIT:
         review = (
             review[:COMMENT_LIMIT]
@@ -912,27 +965,7 @@ def compose_with_findings(
             f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
             "bytes; esta revisión no se marca como revisada ni confirma cobertura."
         )
-        partes = [
-            MARKER,
-            aviso,
-            "",
-            "",
-            "",
-            ALCANCE_INICIO,
-            "",
-            *scope_lines(result, manifest, provider),
-            "",
-            "</details>",
-        ]
-        overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
-        disponible = max(0, GITHUB_COMMENT_MAX - overhead)
-        if len(review) > disponible:
-            review = (
-                review[:disponible]
-                + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-            )
-        partes[3] = review or "_El revisor no devolvió texto._"
-        return "\n".join(partes)
+        return _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso)
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
         title += f" · incremental desde {manifest['prev_sha'][:7]}"
@@ -983,12 +1016,28 @@ def compose_with_findings(
     def armar(prosa):
         return "\n".join(parts[:i_prosa] + [prosa] + parts[i_prosa + 1 :])
 
-    # El checkpoint confirmado jamás se recorta: va en el fijo, y si el fijo no
-    # cabe en el presupuesto se rechaza y se publican los topes actuales.
+    # El checkpoint confirmado jamás se recorta: el estado manda sobre el
+    # libro (la línea es prescindible: sin ella la siguiente pasada revisa
+    # full), y si el fijo no cabe ni sin libro manda el aviso de capacidad,
+    # nunca el corte a ciegas que podría partir el bloque de estado.
     if budget is not None:
         prosa = prosa_en_presupuesto(armar, review, budget)
         if prosa is not None:
             return armar(prosa)[:GITHUB_COMMENT_MAX]
+        if linea_libro is not None:
+
+            def armar_sin_libro(prosa):
+                cuerpo = [p for p in parts if p is not linea_libro]
+                return "\n".join(
+                    cuerpo[: i_prosa - 1] + [prosa] + cuerpo[i_prosa - 1 :]
+                )
+
+            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
+            if prosa is not None:
+                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
+        return _cuerpo_de_aviso_de_capacidad(
+            result, manifest, provider, review, AVISO_SIN_ESPACIO
+        )
     budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
     if len(review) > budget_prosa:
         review = (
