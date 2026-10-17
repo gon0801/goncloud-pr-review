@@ -204,16 +204,18 @@ class LibroPublicado(unittest.TestCase):
                 "subtype": "success",
             }
             cuerpo = publicar(work, head1, manifest, result, repo=repo)
-        marcador = f"<!-- ai-review:completion={head1}:partial -->"
-        self.assertIn(marcador, cuerpo)
-        self.assertIsNotNone(linea_del_libro(cuerpo), "el sticky debe traer el libro")
-        cabeza, libro = libro_del(cuerpo)
-        self.assertEqual(cabeza, head1)
-        self.assertEqual(
-            libro,
-            {f"{f}.py": blob(Path(tmp, "repo"), head1, f"{f}.py") for f in "abd"},
-        )
-        self.assertNotIn("c.py", libro)
+            marcador = f"<!-- ai-review:completion={head1}:partial -->"
+            self.assertIn(marcador, cuerpo)
+            self.assertIsNotNone(
+                linea_del_libro(cuerpo), "el sticky debe traer el libro"
+            )
+            cabeza, libro = libro_del(cuerpo)
+            self.assertEqual(cabeza, head1)
+            self.assertEqual(
+                libro,
+                {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abd"},
+            )
+            self.assertNotIn("c.py", libro)
 
     def test_pasada_completa_escribe_el_libro_completo(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,13 +227,13 @@ class LibroPublicado(unittest.TestCase):
                 "subtype": "success",
             }
             cuerpo = publicar(work, head1, manifest, result, repo=repo)
-        marcador = f"<!-- ai-review:completion={head1}:complete -->"
-        self.assertIn(marcador, cuerpo)
-        _, libro = libro_del(cuerpo)
-        self.assertEqual(
-            libro,
-            {f"{f}.py": blob(Path(tmp, "repo"), head1, f"{f}.py") for f in "abcd"},
-        )
+            marcador = f"<!-- ai-review:completion={head1}:complete -->"
+            self.assertIn(marcador, cuerpo)
+            _, libro = libro_del(cuerpo)
+            self.assertEqual(
+                libro,
+                {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abcd"},
+            )
 
     def test_compose_sin_libro_no_renderiza_linea(self):
         result = {"result": texto_pasada("complete"), "subtype": "success"}
@@ -287,13 +289,13 @@ class Continuacion(unittest.TestCase):
             cuerpo2 = publicar(
                 work2, head2, manifest2, result2, body=cuerpo1, repo=repo
             )
-        self.assertIn(f"<!-- ai-review:completion={head2}:complete -->", cuerpo2)
-        cabeza, libro = libro_del(cuerpo2)
-        self.assertEqual(cabeza, head2)
-        self.assertEqual(
-            libro,
-            {f"{f}.py": blob(repo, head2, f"{f}.py") for f in "abcd"},
-        )
+            self.assertIn(f"<!-- ai-review:completion={head2}:complete -->", cuerpo2)
+            cabeza, libro = libro_del(cuerpo2)
+            self.assertEqual(cabeza, head2)
+            self.assertEqual(
+                libro,
+                {f"{f}.py": blob(repo, head2, f"{f}.py") for f in "abcd"},
+            )
 
     def test_c_un_cubierto_que_cambia_vuelve_al_alcance(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,10 +335,14 @@ class Continuacion(unittest.TestCase):
             repo, base, head1 = Escenario().escenario(tmp)
             work1 = Path(tmp, "work1")
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
-            result1 = {"result": texto_pasada("complete"), "subtype": "success"}
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=[]),
+                "subtype": "success",
+            }
             cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
             prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1)
             self.assertTrue(prev.get("covered"), "la completa dejó libro")
+            self.assertEqual(prev.get("completion"), "complete")
             (repo / "a.py").write_text("a3\n")
             head2 = commit(repo, "pasada-2")
             manifest2 = preparar(repo, Path(tmp, "work2"), base, head2, prev)
@@ -593,13 +599,13 @@ class PresupuestoContinuacion(unittest.TestCase):
             cuerpo2 = publicar(
                 work2, head2, manifest2, result2, body=cuerpo1, repo=repo
             )
-        self.assertIn(f"<!-- ai-review:completion={head2}:partial -->", cuerpo2)
-        _, libro = libro_del(cuerpo2)
-        self.assertNotIn("c.py", libro)
-        self.assertEqual(
-            libro,
-            {f"{f}.py": blob(repo, head2, f"{f}.py") for f in "abd"},
-        )
+            self.assertIn(f"<!-- ai-review:completion={head2}:partial -->", cuerpo2)
+            _, libro = libro_del(cuerpo2)
+            self.assertNotIn("c.py", libro)
+            self.assertEqual(
+                libro,
+                {f"{f}.py": blob(repo, head2, f"{f}.py") for f in "abd"},
+            )
 
 
 if __name__ == "__main__":
