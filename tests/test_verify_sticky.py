@@ -109,3 +109,40 @@ class VerificadorDeStickies(unittest.TestCase):
         self.assertEqual(rc, 0)
         rc, salida = self.correr(cuerpo, "--expect-sha", SHA_A)
         self.assertEqual(rc, 1, salida)
+
+    def sticky_con_libro(self, marker, bloque, linea_libro, sha=SHA_A):
+        return (
+            f"{review.MARKER}\n{review.SHA_PREFIX}{sha} -->\n"
+            f"{review.COMPLETION_PREFIX}{sha}:{marker} -->\n"
+            f"{linea_libro}\n{bloque}\ncola"
+        )
+
+    def test_k_sticky_con_libro_valido_pasa(self):
+        linea = (
+            "<!-- ai-review:covered="
+            + SHA_A
+            + ":"
+            + json.dumps({"a.py": SHA_B})
+            + " -->"
+        )
+        rc, salida = self.correr(self.sticky_con_libro("partial", legado(), linea))
+        self.assertEqual(rc, 0, salida)
+        self.assertIn("libro", salida)
+
+    def test_k_sticky_con_libro_corrupto_frena(self):
+        linea = "<!-- ai-review:covered=" + SHA_A + ':{"a.py": } -->'
+        rc, salida = self.correr(self.sticky_con_libro("partial", legado(), linea))
+        self.assertEqual(rc, 1, salida)
+        self.assertIn("libro", salida)
+
+    def test_k_sticky_con_libro_de_otro_head_frena(self):
+        linea = (
+            "<!-- ai-review:covered="
+            + SHA_B
+            + ":"
+            + json.dumps({"a.py": SHA_B})
+            + " -->"
+        )
+        rc, salida = self.correr(self.sticky_con_libro("partial", legado(), linea))
+        self.assertEqual(rc, 1, salida)
+        self.assertIn("libro", salida)
