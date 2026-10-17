@@ -511,6 +511,191 @@ class ElScriptNoDependeDelLocale(unittest.TestCase):
             )
 
 
+class ElEstadoMandaSobreElLibro(unittest.TestCase):
+    """El libro de cobertura (<30000) viaja ANTES del bloque de estado
+    (<40000): si el fijo no cabe en el presupuesto del comentario (60000),
+    la línea del libro se suelta (sin ella la siguiente pasada revisa full);
+    si ni sin libro cabe manda el aviso de capacidad, nunca el corte a
+    ciegas que parte el JSON del estado."""
+
+    MANIFEST = {
+        "mode": "full",
+        "reason": "no-prev",
+        "reviewed": ["src/modulo/paquete_1/nombre_largo_de_ruta.py"],
+        "excluded": [],
+    }
+
+    def _resultado(self):
+        return {
+            "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
+            "review_provider": "opencode-go",
+            "model_ok": True,
+        }
+
+    def _findings(self, block, snapshot):
+        return {
+            "merged": domain.hallazgos_legacy(snapshot),
+            "new_ids": [],
+            "block": block,
+            "model_ok": True,
+            "completion": domain.COMPLETE_CLAIM,
+        }
+
+    def _snapshot_grande(self):
+        hallazgos = [
+            domain.Finding(
+                id=f"F{i}",
+                title=(
+                    f"Fuga del pool de conexiones en el cierre del lote {i} "
+                    "con reintentos y reembolsos pendientes"
+                ),
+                severity="Medium",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLocated(
+                    path=f"src/modulo/paquete_{i}/nombre_largo_de_ruta.py",
+                    blob_sha="a" * 40,
+                    range=(10, 15),
+                    excerpt_digest="b" * 64,
+                ),
+                evidence=[domain.EvidenceUnverified(text="x" * 120)],
+            )
+            for i in range(1, 61)
+        ]
+        snapshot = domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=domain.Revision(
+                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            ),
+            next_id=61,
+            completion=domain.COMPLETE_CLAIM,
+            findings=hallazgos,
+            command_cursor=0,
+        )
+        encoded = domain.encode_snapshot(snapshot)
+        self.assertIsInstance(encoded, domain.EncodedCheckpoint)
+        self.assertGreater(len(encoded.block.encode("utf-8")), 36000)
+        self.assertLessEqual(len(encoded.block.encode("utf-8")), 40000)
+        return snapshot, encoded.block
+
+    def _libro_grande(self):
+        libro = {}
+        for i in range(400):
+            libro[f"src/paquete_{i}/modulo/ruta_bien_larga_de_archivo_{i:03d}.py"] = (
+                "a" * 40
+            )
+            linea = review.libro_a_linea("c" * 40, libro)
+            if linea is None:
+                libro.pop(next(reversed(libro)))
+                break
+        linea = review.libro_a_linea("c" * 40, libro)
+        self.assertIsNotNone(linea)
+        self.assertGreater(len(linea.encode("utf-8")), 28000, "libro cerca del tope")
+        return libro
+
+    def _sticky_verificado(self, cuerpo):
+        with tempfile.TemporaryDirectory() as tmp:
+            ruta = Path(tmp) / "sticky.md"
+            ruta.write_text(cuerpo, encoding="utf-8")
+            hecho = subprocess.run(
+                [sys.executable, "scripts/verify_sticky.py", "--body-file", str(ruta)],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(hecho.returncode, 0, hecho.stdout + hecho.stderr)
+
+    def test_libro_al_tope_y_estado_grande_publican_sin_libro(self):
+        snapshot, block = self._snapshot_grande()
+        libro = self._libro_grande()
+        cuerpo = review.compose(
+            self._resultado(),
+            self.MANIFEST,
+            sha="c" * 40,
+            provider="opencode-go",
+            findings=self._findings(block, snapshot),
+            budget=domain.StorageBudget(),
+            libro=libro,
+        )
+        self.assertLessEqual(len(cuerpo), domain.COMMENT_MAX_CHARS)
+        self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(
+            carga, domain.Valid, f"estado roto: {getattr(carga, 'reason', carga)}"
+        )
+        self.assertNotIn(review.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
+        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review.reviewed_sha(cuerpo), "c" * 40)
+        self.assertIn("detalle del revisor", cuerpo)
+        self._sticky_verificado(cuerpo)
+
+    def test_libro_chico_sigue_viajando(self):
+        snapshot, block = self._snapshot_grande()
+        libro = {"src/chico.py": "a" * 40}
+        cuerpo = review.compose(
+            self._resultado(),
+            self.MANIFEST,
+            sha="c" * 40,
+            provider="opencode-go",
+            findings=self._findings(block, snapshot),
+            budget=domain.StorageBudget(),
+            libro=libro,
+        )
+        self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(carga, domain.Valid)
+        cabeza, leido = review.libro_de(cuerpo)
+        self.assertEqual(cabeza, "c" * 40)
+        self.assertEqual(leido, libro)
+
+    def test_el_caso_del_pr20_con_libro_realista(self):
+        sticky = sticky_pr20()
+        decision = decision_de_ronda(sticky["body"], ronda_extra())
+        snapshot = decision.snapshot
+        block = domain.encode_snapshot(snapshot).block
+        libro = {f["file"]: "e" * 40 for f in domain.hallazgos_legacy(snapshot)}
+        cuerpo = review.compose(
+            dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
+            {
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": sorted(libro),
+                "excluded": [],
+            },
+            sha=ronda_extra()["head_sha"],
+            provider="opencode-go",
+            findings=self._findings(block, snapshot),
+            budget=domain.StorageBudget(),
+            libro=libro,
+        )
+        self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(len(carga.snapshot.findings), 24)
+        cabeza, leido = review.libro_de(cuerpo)
+        self.assertEqual(cabeza, ronda_extra()["head_sha"])
+        self.assertEqual(leido, libro)
+        self._sticky_verificado(cuerpo)
+
+    def test_ni_sin_libro_cabe_entonces_aviso_y_nunca_corte_a_ciegas(self):
+        snapshot, block = self._snapshot_grande()
+        cuerpo = review.compose(
+            self._resultado(),
+            self.MANIFEST,
+            sha="c" * 40,
+            provider="opencode-go",
+            findings=self._findings(block, snapshot),
+            budget=domain.StorageBudget(
+                comment_max_bytes=45000, comment_max_chars=45000
+            ),
+            libro=None,
+        )
+        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn("no cabe", cuerpo)
+        self.assertIsNone(review.reviewed_completion(cuerpo), "sin confirmación")
+        self.assertNotIn(review.FINDINGS_PREFIX, cuerpo, "nunca un bloque partido")
+        self.assertLessEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+
+
 class ElCaminoLegadoTambienPublica(unittest.TestCase):
     """El writer legado del publish clásico con el perfil ampliado: un estado
     legado que ayer no cabía en 8000 hoy publica."""
