@@ -1,0 +1,39 @@
+{
+  "head_sha": "5624b3600000000000000000000000000000000a",
+  "base_sha": "edd35be59254c9ca6a38cc507bffc6521264d94e",
+  "changed_paths": ["src/hermes/worker.py", "src/hermes/store.py"],
+  "result": "COVERAGE: complete\nRevisión de 5624b36: dos hallazgos nuevos en el worker y dos en el store.",
+  "model_block": {
+    "findings": [
+      {
+        "file": "src/hermes/worker.py",
+        "line": 88,
+        "severity": "High",
+        "title": "El reintentador del worker vuelve a despachar una unidad ya aceptada si el PATCH del store se pierde",
+        "state": "open"
+      },
+      {
+        "file": "src/hermes/worker.py",
+        "line": 140,
+        "severity": "Medium",
+        "title": "cancelar sobre el worker deja el artifact sin cerrar y el run en verde",
+        "state": "open"
+      },
+      {
+        "file": "src/hermes/store.py",
+        "line": 55,
+        "severity": "Medium",
+        "title": "la lectura del cursor del store no filtra por PR y mezcla eventos de otros pull requests",
+        "state": "open"
+      },
+      {
+        "file": "src/hermes/store.py",
+        "line": 210,
+        "severity": "Low",
+        "title": "el lote de eventos se ordena por created_at con segundos y desempata mal en el mismo segundo",
+        "state": "open"
+      }
+    ],
+    "next": 21
+  }
+}
