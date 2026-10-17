@@ -511,6 +511,40 @@ class ElScriptNoDependeDelLocale(unittest.TestCase):
             )
 
 
+def snapshot_grande():
+    """Estado válido cerca del techo del perfil (bloque de ~39 KB)."""
+    hallazgos = [
+        domain.Finding(
+            id=f"F{i}",
+            title=(
+                f"Fuga del pool de conexiones en el cierre del lote {i} "
+                "con reintentos y reembolsos pendientes"
+            ),
+            severity="Medium",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLocated(
+                path=f"src/modulo/paquete_{i}/nombre_largo_de_ruta.py",
+                blob_sha="a" * 40,
+                range=(10, 15),
+                excerpt_digest="b" * 64,
+            ),
+            evidence=[domain.EvidenceUnverified(text="x" * 120)],
+        )
+        for i in range(1, 61)
+    ]
+    return domain.Snapshot(
+        schema=3,
+        generation=1,
+        revision=domain.Revision(
+            base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+        ),
+        next_id=61,
+        completion=domain.COMPLETE_CLAIM,
+        findings=hallazgos,
+        command_cursor=0,
+    )
+
+
 class ElEstadoMandaSobreElLibro(unittest.TestCase):
     """El libro de cobertura (<30000) viaja ANTES del bloque de estado
     (<40000): si el fijo no cabe en el presupuesto del comentario (60000),
@@ -542,36 +576,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         }
 
     def _snapshot_grande(self):
-        hallazgos = [
-            domain.Finding(
-                id=f"F{i}",
-                title=(
-                    f"Fuga del pool de conexiones en el cierre del lote {i} "
-                    "con reintentos y reembolsos pendientes"
-                ),
-                severity="Medium",
-                status=domain.StatusOpen(),
-                primary_anchor=domain.AnchorLocated(
-                    path=f"src/modulo/paquete_{i}/nombre_largo_de_ruta.py",
-                    blob_sha="a" * 40,
-                    range=(10, 15),
-                    excerpt_digest="b" * 64,
-                ),
-                evidence=[domain.EvidenceUnverified(text="x" * 120)],
-            )
-            for i in range(1, 61)
-        ]
-        snapshot = domain.Snapshot(
-            schema=3,
-            generation=1,
-            revision=domain.Revision(
-                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
-            ),
-            next_id=61,
-            completion=domain.COMPLETE_CLAIM,
-            findings=hallazgos,
-            command_cursor=0,
-        )
+        snapshot = snapshot_grande()
         encoded = domain.encode_snapshot(snapshot)
         self.assertIsInstance(encoded, domain.EncodedCheckpoint)
         self.assertGreater(len(encoded.block.encode("utf-8")), 36000)
@@ -694,6 +699,87 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self.assertIsNone(review.reviewed_completion(cuerpo), "sin confirmación")
         self.assertNotIn(review.FINDINGS_PREFIX, cuerpo, "nunca un bloque partido")
         self.assertLessEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+
+
+class ElPasoTresNoBorraMemoria(unittest.TestCase):
+    """El paso 3 de la escalera (ni con ni sin libro cabe) deja a compose un
+    cuerpo SIN bloque. El escritor jamás lo publica: conserva el sticky, le
+    parcha el banner CAUTION y responde Unconfirmed; sin sticky previo no
+    crea nada. Una sola fuente de verdad: cuerpo_publicable."""
+
+    def _visible_sin_espacio(self, snapshot):
+        def visible(bloque, resto):
+            return review.compose(
+                {
+                    "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
+                    "review_provider": "opencode-go",
+                    "model_ok": True,
+                },
+                {
+                    "mode": "full",
+                    "reason": "no-prev",
+                    "reviewed": ["src/a.py"],
+                    "excluded": [],
+                },
+                sha=snapshot.revision.head_sha,
+                provider="opencode-go",
+                findings={
+                    "merged": domain.hallazgos_legacy(snapshot),
+                    "new_ids": [],
+                    "block": bloque,
+                    "model_ok": True,
+                    "completion": snapshot.completion,
+                },
+                budget=domain.StorageBudget(
+                    comment_max_bytes=45000, comment_max_chars=45000
+                ),
+            )
+
+        return visible
+
+    def test_con_sticky_observado_lo_conserva_y_avisa(self):
+        snapshot = snapshot_grande()
+        sticky = sticky_pr20()
+        falso = _ComentariosFalsos([sticky])
+        resultado = review.publish_checkpoint(
+            domain.Commit(snapshot=snapshot),
+            sticky,
+            falso,
+            visible=self._visible_sin_espacio(snapshot),
+        )
+        self.assertIsInstance(resultado, review.Unconfirmed)
+        self.assertEqual(falso.creaciones, [])
+        self.assertEqual(len(falso.patches), 1)
+        cuerpo = falso.leer()[0]["body"]
+        carga = domain.read_snapshot(cuerpo)
+        self.assertIsInstance(carga, domain.Valid, "el sticky conserva su memoria")
+        self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
+        self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
+
+    def test_sin_sticky_previo_no_crea_nada(self):
+        snapshot = snapshot_grande()
+        falso = _ComentariosFalsos([])
+        resultado = review.publish_checkpoint(
+            domain.Commit(snapshot=snapshot),
+            None,
+            falso,
+            visible=self._visible_sin_espacio(snapshot),
+        )
+        self.assertIsInstance(resultado, review.Unconfirmed)
+        self.assertEqual(falso.creaciones, [], "jamás un sticky sin bloque")
+        self.assertEqual(falso.comentarios, [])
+
+    def test_un_visible_normal_sigue_publicando(self):
+        snapshot = snapshot_grande()
+        sticky = sticky_pr20()
+        falso = _ComentariosFalsos([sticky])
+        resultado = review.publish_checkpoint(
+            domain.Commit(snapshot=snapshot), sticky, falso
+        )
+        self.assertIsInstance(resultado, review.PublishReceipt)
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(carga.block, domain.encode_snapshot(snapshot).block)
 
 
 class ElCaminoLegadoTambienPublica(unittest.TestCase):
