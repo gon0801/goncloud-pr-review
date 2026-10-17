@@ -309,7 +309,9 @@ class RoundtripDelEstadoCompacto(unittest.TestCase):
         self.assertEqual(resuelta.primary_anchor.path, "src/a.py")
         self.assertEqual(resuelta.primary_anchor.range, (10, 20))
         self.assertEqual(list(resuelta.evidence), [])
-        self.assertEqual(list(resuelta.related_anchors), [])
+        self.assertEqual(
+            list(resuelta.related_anchors), ["src/viejo.py"], "viajan para reabrir"
+        )
         self.assertIsNone(resuelta.cause_hint)
         self.assertEqual(s.findings[2].status.at_sha, "9" * 40)
         descartada = s.findings[3]

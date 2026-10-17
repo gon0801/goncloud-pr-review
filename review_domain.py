@@ -1242,24 +1242,22 @@ def _findings_json(snapshot, *, neutralizar=True):
 def compactar_cerrados(snapshot):
     """Los cerrados (resolved y dismissed) viajan livianos: conservan la
     identidad que la deduplicación y el re-render leen (id, título,
-    severidad, estado con at_sha/command_id y el ancla primaria íntegra) y
-    pierden cause_hint, evidence y related_anchors, que ningún consumidor
-    persistido les lee. Los abiertos van intactos. Pura e idempotente; sin
-    carga que tirar, devuelve el mismo objeto."""
+    severidad, estado con at_sha/command_id, el ancla primaria íntegra y las
+    anclas relacionadas, que _cambio_pertinente lee para reabrir una
+    resolución o resolverla por reversión) y pierden cause_hint y evidence,
+    que ningún consumidor persistido les lee. Los abiertos van intactos.
+    Pura e idempotente; sin carga que tirar, devuelve el mismo objeto."""
     cerrados = [f for f in snapshot.findings if not isinstance(f.status, StatusOpen)]
     if not cerrados:
         return snapshot
-    if all(
-        not f.related_anchors and f.cause_hint is None and not f.evidence
-        for f in cerrados
-    ):
+    if all(f.cause_hint is None and not f.evidence for f in cerrados):
         return snapshot
     compactos = []
     for f in snapshot.findings:
         if isinstance(f.status, StatusOpen):
             compactos.append(f)
             continue
-        compactos.append(replace(f, related_anchors=(), cause_hint=None, evidence=()))
+        compactos.append(replace(f, cause_hint=None, evidence=()))
     return replace(snapshot, findings=compactos)
 
 
