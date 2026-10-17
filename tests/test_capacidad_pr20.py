@@ -26,7 +26,6 @@ import review  # noqa: E402
 import review_domain as domain  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-MERGE_PY = Path("/Users/dn/dev/wt/agent-work-host/scripts/agent-work/merge.py")
 
 
 def sticky_pr20():
@@ -484,14 +483,18 @@ class StickiesViejosSeLeenSinPerdida(unittest.TestCase):
         self.assertEqual(len(carga2.snapshot.findings[0].evidence), 1)
 
 
-@unittest.skipUnless(MERGE_PY.exists(), "el repo G no está clonado en esta máquina")
+PARSER_G = Path(__file__).resolve().parent / "fixtures" / "parsear_bot_g.py"
+
+
 class ElParserDeGleeElStickyNuevo(unittest.TestCase):
-    """merge.py de agent-work decide el merge con el parser real del sticky."""
+    """El parser con el que merge.py de agent-work decide el merge, copia
+    versionada como fixture (origen y sha256 del original anotados ahí) para
+    que la prueba corra sin depender de dónde esté clonado G."""
 
     def _merge(self):
-        spec = importlib.util.spec_from_file_location("merge_de_g", MERGE_PY)
+        spec = importlib.util.spec_from_file_location("parsear_bot_g", PARSER_G)
         modulo = importlib.util.module_from_spec(spec)
-        sys.modules["merge_de_g"] = modulo
+        sys.modules["parsear_bot_g"] = modulo
         spec.loader.exec_module(modulo)
         return modulo
 
