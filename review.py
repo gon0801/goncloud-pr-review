@@ -2618,20 +2618,12 @@ def _cuerpo_con_checkpoint(decision):
     return encoded.block if decision.snapshot.schema == 3 else encoded
 
 
-def _avisar_desborde(desborde, decision, observado, adaptador):
-    """El comentario informa el desborde en el sticky EXISTENTE (la
-    arquitectura exige conservar el checkpoint y avisar). Sin sticky no se
-    crea comentario: un MARKER sin bloque válido secuestraría el sticky
-    futuro. El PATCH es lo mejor posible: si falla, manda el Unconfirmed."""
+def _parchar_aviso(observado, adaptador, banner):
+    """El banner CAUTION va al sticky EXISTENTE, best-effort. Sin sticky no
+    se crea comentario: un MARKER sin bloque válido secuestraría el sticky
+    futuro. Si el PATCH falla, manda el Unconfirmed del llamador."""
     if observado is None:
         return False
-    revision = decision.snapshot.revision
-    banner = caution_banner(
-        f"memoria de desborde ({desborde.needed} bytes para {desborde.limit}) "
-        "conservada; esta versión no la modifica",
-        revision.head_sha if revision else "",
-        has_previous=True,
-    )
     try:
         adaptador.parchar(
             observado["id"],
@@ -2640,6 +2632,40 @@ def _avisar_desborde(desborde, decision, observado, adaptador):
     except Exception:
         return False
     return True
+
+
+def _avisar_desborde(desborde, decision, observado, adaptador):
+    revision = decision.snapshot.revision
+    banner = caution_banner(
+        f"memoria de desborde ({desborde.needed} bytes para {desborde.limit}) "
+        "conservada; esta versión no la modifica",
+        revision.head_sha if revision else "",
+        has_previous=True,
+    )
+    return _parchar_aviso(observado, adaptador, banner)
+
+
+def _avisar_sin_espacio(decision, observado, adaptador):
+    """El comentario no trae el bloque de estado (no cabe el fijo del
+    sticky): el checkpoint previo se conserva y el sticky queda visible con
+    el aviso. Nunca se escribe un cuerpo sin bloque válido."""
+    revision = decision.snapshot.revision
+    banner = caution_banner(
+        "comentario sin espacio para el estado; el checkpoint previo se "
+        "conserva y esta versión no la modifica",
+        revision.head_sha if revision else "",
+        has_previous=True,
+    )
+    return _parchar_aviso(observado, adaptador, banner)
+
+
+def cuerpo_publicable(cuerpo, bloque):
+    """Una sola fuente de verdad para "no cabe": un cuerpo solo es
+    publicable si read_snapshot lo lee y trae EXACTAMENTE el bloque
+    codificado. El aviso de capacidad (sin bloque) o un marcador partido no
+    se escriben nunca: borrarían o romperían la memoria del sticky."""
+    carga = review_domain.read_snapshot(cuerpo or "")
+    return isinstance(carga, review_domain.Valid) and carga.block == bloque
 
 
 def _login_de(comentario):
@@ -2703,6 +2729,10 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
 
     if observado is None:
         cuerpo = visible(bloque, "")
+        if not cuerpo_publicable(cuerpo, bloque):
+            return Unconfirmed(
+                "el comentario no trae el bloque de estado; no se crea sticky"
+            )
         try:
             adaptador.crear(cuerpo)
         except Exception as exc:
@@ -2730,6 +2760,14 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     )
     resto = strip_findings_block(resto, last=False).strip()
     cuerpo = visible(bloque, resto)
+    if not cuerpo_publicable(cuerpo, bloque):
+        motivo = (
+            "el comentario no trae el bloque de estado: se conserva el "
+            "checkpoint previo"
+        )
+        if _avisar_sin_espacio(decision, observado, adaptador):
+            motivo += "; aviso publicado en el comentario"
+        return Unconfirmed(motivo)
     try:
         adaptador.parchar(observado["id"], cuerpo)
     except Exception as exc:
