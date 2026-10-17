@@ -9,8 +9,13 @@ defecto para estados legados.
 Esquema 2: Snapshot con anclas, evidencia, cursor de comandos y solicitudes
 pendientes. La lectura es estricta en la frontera (ids duplicados, tipos
 inválidos o referencias inconsistentes -> Invalid) y la escritura no tiene
-camino con pérdida: si el estado no cabe en el tope de 8000 bytes UTF-8 se
-devuelve CapacityExceeded y el llamador conserva el último estado válido.
+camino con pérdida: si el estado no cabe en el presupuesto se devuelve
+CapacityExceeded y el llamador conserva el último estado válido.
+
+El presupuesto por omisión es el perfil ampliado (StorageBudget: 40000 bytes
+de estado, 60000 para el comentario completo). Antes de rendirse, la
+escritura de esquema 2/3 compacta los hallazgos cerrados (resolved y
+dismissed) y reintenta; los abiertos nunca pierden campos.
 """
 
 import hashlib
@@ -22,9 +27,9 @@ FINDINGS_PREFIX = "<!-- ai-review:findings="
 FINDINGS_SUFFIX = " -->"
 FINDINGS_MAX_BYTES = 8000
 
-# La activación del perfil de capacidad ampliado queda pendiente de la
-# prueba de comentario real (T16): los límites solo aplican vía StorageBudget
-# explícito; compose sin budget conserva los topes actuales.
+# Perfil ampliado activo como presupuesto por omisión del ESTADO: encode
+# usa 40000 sin StorageBudget explícito. El comentario completo (60000)
+# solo aplica donde compose recibe budget explícito.
 STATE_BYTES_PROPOSED = 40000
 COMMENT_MAX_BYTES = 60000
 COMMENT_MAX_CHARS = 60000
@@ -206,7 +211,7 @@ class Receipt:
 
 @dataclass
 class StorageBudget:
-    max_bytes: int = FINDINGS_MAX_BYTES
+    max_bytes: int = STATE_BYTES_PROPOSED
     comment_max_bytes: int = COMMENT_MAX_BYTES
     comment_max_chars: int = COMMENT_MAX_CHARS
 
@@ -1234,15 +1239,53 @@ def _findings_json(snapshot, *, neutralizar=True):
     ]
 
 
+def compactar_cerrados(snapshot):
+    """Los cerrados (resolved y dismissed) viajan livianos: conservan la
+    identidad que la deduplicación y el re-render leen (id, título,
+    severidad, estado con at_sha/command_id y el ancla primaria íntegra) y
+    pierden cause_hint, evidence y related_anchors, que ningún consumidor
+    persistido les lee. Los abiertos van intactos. Pura e idempotente; sin
+    carga que tirar, devuelve el mismo objeto."""
+    cerrados = [f for f in snapshot.findings if not isinstance(f.status, StatusOpen)]
+    if not cerrados:
+        return snapshot
+    if all(
+        not f.related_anchors and f.cause_hint is None and not f.evidence
+        for f in cerrados
+    ):
+        return snapshot
+    compactos = []
+    for f in snapshot.findings:
+        if isinstance(f.status, StatusOpen):
+            compactos.append(f)
+            continue
+        compactos.append(replace(f, related_anchors=(), cause_hint=None, evidence=()))
+    return replace(snapshot, findings=compactos)
+
+
 def encode_snapshot(snapshot, budget=None):
     """Serializa el estado: legado en formato legado, v2 sin pérdida, v3 en
     checkpoint codificado con escapes JSON reversibles.
 
     Devuelve el bloque (str) para legado/v2, un EncodedCheckpoint para v3, o
-    CapacityExceeded cuando el estado no cabe en el presupuesto (nunca se
-    recorta: el llamador conserva el último estado válido).
+    CapacityExceeded cuando ni el estado íntegro ni el compactado caben en el
+    presupuesto (nunca se recorta: el llamador conserva el último estado
+    válido). Sin budget manda el perfil ampliado de StorageBudget. La
+    compactación de cerrados solo aplica bajo presión y es determinista:
+    el mismo snapshot produce los mismos bytes.
     """
-    limite = budget.max_bytes if budget is not None else FINDINGS_MAX_BYTES
+    limite = budget.max_bytes if budget is not None else StorageBudget().max_bytes
+    encoded = _encode_sin_perdida(snapshot, limite)
+    if isinstance(encoded, CapacityExceeded) and snapshot.schema in (2, 3):
+        compacto = compactar_cerrados(snapshot)
+        if compacto is not snapshot:
+            encoded = _encode_sin_perdida(compacto, limite)
+    return encoded
+
+
+def _encode_sin_perdida(snapshot, limite):
+    """Serialización v1/v2/v3 íntegra, la que comparten el intento directo y
+    el reintento compactado de encode_snapshot."""
     if snapshot.schema == 1:
         return serialize_findings(_legacy_raw_of_snapshot(snapshot), max_bytes=limite)
     if snapshot.schema == 2:
