@@ -982,12 +982,14 @@ def _classify_block(data, found_block, conservar_anclas):
 def rutas_de_cambio(manifest):
     """Qué archivos pueden resolver hallazgos en esta revisión.
 
-    incremental o revisión incompleta: solo los del delta; mismo commit:
-    nada (sin cambio de código nada puede resolverse); el resto: todo lo
-    revisado. Única fuente de la decisión, compartida por ambos escritores.
+    incremental, continuación o revisión incompleta: solo los del delta (en
+    continuación, changed_files es el delta real prev_sha..head: la resolución
+    sigue atada al delta, nunca al alcance); mismo commit: nada (sin cambio de
+    código nada puede resolverse); el resto: todo lo revisado. Única fuente de
+    la decisión, compartida por ambos escritores.
     """
     if (
-        manifest.get("mode") == "incremental"
+        manifest.get("mode") in ("incremental", "continuation")
         or manifest.get("reason") == "incomplete-prev"
     ):
         return tuple(manifest.get("changed_files", []))

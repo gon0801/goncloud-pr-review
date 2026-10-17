@@ -138,6 +138,10 @@ __all__ = [
 MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
 COMPLETION_PREFIX = "<!-- ai-review:completion="
+COVERED_PREFIX = "<!-- ai-review:covered="
+UNREVIEWED_PREFIX = "<!-- ai-review:unreviewed="
+LIBRO_MAX_ENTRADAS = 400
+LIBRO_MAX_BYTES = 30000
 COMMENT_LIMIT = 50000
 GITHUB_COMMENT_MAX = 65000
 
@@ -229,6 +233,104 @@ def split_coverage(text):
                 return "\n".join(lines[:i]).rstrip(), status, detail.strip()
         break
     return text.rstrip(), None, ""
+
+
+def libro_a_linea(head_sha, libro):
+    """El libro de cobertura como línea oculta del sticky; None si no cabe."""
+    if len(libro) > LIBRO_MAX_ENTRADAS:
+        return None
+    # Las flechas del comentario viajan como secuencias \uXXXX dentro del JSON:
+    # json.loads las decodifica al leer y una ruta con `-->` no rompe el comentario.
+    cuerpo = (
+        json.dumps(libro, ensure_ascii=True, separators=(",", ":"))
+        .replace("-->", "\\u002d\\u002d\\u003e")
+        .replace("<!--", "\\u003c\\u0021\\u002d\\u002d")
+    )
+    linea = f"{COVERED_PREFIX}{head_sha}:{cuerpo} -->"
+    return linea if len(linea.encode("utf-8")) <= LIBRO_MAX_BYTES else None
+
+
+def libro_de_linea(linea):
+    if not linea.startswith(COVERED_PREFIX):
+        return None, None
+    resto = linea[len(COVERED_PREFIX) :]
+    cabeza, sep, resto = resto.partition(":")
+    if not sep or not re.fullmatch(r"[0-9a-f]{40}", cabeza):
+        return None, None
+    fin = resto.rfind(" -->")
+    if fin < 0:
+        return None, None
+    try:
+        libro = json.loads(resto[:fin])
+    except json.JSONDecodeError:
+        return None, None
+    if not isinstance(libro, dict) or len(libro) > LIBRO_MAX_ENTRADAS:
+        return None, None
+    for ruta, blob in libro.items():
+        if not isinstance(ruta, str) or not ruta:
+            return None, None
+        if not isinstance(blob, str) or not re.fullmatch(r"[0-9a-f]{40}", blob):
+            return None, None
+    return cabeza, libro
+
+
+def libro_de(body):
+    """El libro del sticky: la primera línea covered= válida y del head de la
+    cabecera; cualquier desvío es (None, None), nunca un libro ajeno."""
+    for linea in (body or "").splitlines():
+        if linea.startswith(COVERED_PREFIX):
+            cabeza, libro = libro_de_linea(linea)
+            if libro is not None and cabeza == reviewed_sha(body):
+                return cabeza, libro
+            return None, None
+    return None, None
+
+
+def unreviewed_de(texto):
+    """Lo que el modelo declaró no revisar; None si falta o no se lee."""
+    antes, _, _ = split_coverage(texto or "")
+    inicio = antes.rfind(UNREVIEWED_PREFIX)
+    if inicio < 0:
+        return None
+    segmento = antes[inicio + len(UNREVIEWED_PREFIX) :].split("\n", 1)[0]
+    if not segmento.endswith(" -->"):
+        return None
+    try:
+        lista = json.loads(segmento[: -len(" -->")])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(lista, list) or len(lista) > LIBRO_MAX_ENTRADAS:
+        return None
+    if any(not isinstance(ruta, str) or not ruta for ruta in lista):
+        return None
+    return set(lista)
+
+
+def libro_fusionado(previo, manifest, texto, repo):
+    """El libro tras una pasada: lo cubierto ahora con su blob en head, más lo
+    cubierto antes que sigue intacto; todo lo demás queda fuera."""
+    head = manifest["head"]
+    _, cobertura, _ = split_coverage(texto)
+    revisados = manifest.get("reviewed") or []
+    if cobertura == "complete":
+        cubiertos = revisados
+    elif cobertura == "partial":
+        sin = unreviewed_de(texto)
+        cubiertos = [] if sin is None else [p for p in revisados if p not in sin]
+    else:
+        cubiertos = []
+    fused = {
+        p: b
+        for p, b in (previo or {}).items()
+        if p not in set(cubiertos) and repo.blob_at(head, p) == b
+    }
+    fused.update({p: b for p in cubiertos if (b := repo.blob_at(head, p))})
+    return fused
+
+
+def libro_actualizado(sticky, manifest, result, repo):
+    previo = libro_de((sticky or {}).get("body") or "")[1] or {}
+    return libro_fusionado(previo, manifest, (result or {}).get("result") or "", repo)
 
 
 def redact(text, secrets):
@@ -649,7 +751,7 @@ def prosa_en_presupuesto(armar, prosa, budget):
     return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
 
 
-def compose(result, manifest, *, sha, provider, findings=None, budget=None):
+def compose(result, manifest, *, sha, provider, findings=None, budget=None, libro=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
     review, coverage, detail = split_coverage(text)
@@ -690,6 +792,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
             review=review,
             warnings=warnings,
             budget=budget,
+            libro=libro,
         )
 
     if findings is not None:
@@ -699,6 +802,9 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
         f"{SHA_PREFIX}{sha} -->",
         f"{COMPLETION_PREFIX}{sha}:{_marcador_cobertura(warnings, findings)} -->",
     ]
+    linea_libro = libro_a_linea(sha, libro) if libro is not None else None
+    if linea_libro is not None:
+        parts.insert(3, linea_libro)
     if findings is not None:
         parts.append(findings["block"])
     parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
@@ -738,7 +844,16 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None):
 
 
 def compose_with_findings(
-    result, manifest, *, sha, provider, findings, review, warnings, budget=None
+    result,
+    manifest,
+    *,
+    sha,
+    provider,
+    findings,
+    review,
+    warnings,
+    budget=None,
+    libro=None,
 ):
     merged, new_ids, block = (
         findings["merged"],
@@ -789,6 +904,9 @@ def compose_with_findings(
         title,
         "",
     ]
+    linea_libro = libro_a_linea(sha, libro) if libro is not None else None
+    if linea_libro is not None:
+        parts.insert(3, linea_libro)
     if warnings:
         parts += [
             "> [!WARNING]",
@@ -877,6 +995,8 @@ def insert_caution_banner(sticky_body, banner):
     if idx < len(lines) and lines[idx].startswith(SHA_PREFIX):
         idx += 1
     if idx < len(lines) and lines[idx].startswith(COMPLETION_PREFIX):
+        idx += 1
+    if idx < len(lines) and lines[idx].startswith(COVERED_PREFIX):
         idx += 1
     prefix = lines[:idx]
     rest = strip_caution_banner("\n".join(lines[idx:]))
@@ -973,6 +1093,7 @@ def prev_de_memoria(body):
         "sha": reviewed_sha(body),
         "state": review_domain.estado_legado_de_memoria(body),
         "completion": reviewed_completion(body),
+        "covered": libro_de(body)[1],
     }
 
 
@@ -1041,7 +1162,14 @@ def cmd_prepare(args):
     if mode == "incremental" and not review_domain.is_complete(
         review_domain.parse_coverage(prev.get("completion"))
     ):
-        mode, reason = "full", "incomplete-prev"
+        if (
+            prev.get("completion") == "partial"
+            and prev.get("covered")
+            and prev.get("state")
+        ):
+            mode, reason = "continuation", ""
+        else:
+            mode, reason = "full", "incomplete-prev"
     if mode == "incremental":
         # T16 f13 (docs/evidence/reviewer/D0-C0.md): el incremental medido en la
         # medicion completa costo 11-25% mas que una revision completa del mismo
@@ -1053,9 +1181,20 @@ def cmd_prepare(args):
         # costos reales despues del merge; la corrida forzada es una full CON
         # memoria, y ese costo no se midio.
         mode, reason = "full", "forced-full-t16"
+    if (
+        mode == "full"
+        and reason == "same-sha"
+        and prev.get("completion") == "partial"
+        and prev.get("covered")
+        and prev.get("state")
+    ):
+        # Re-run manual en el mismo head tras una parcial con libro: continuar
+        # con lo pendiente en vez de repetir la revisión completa.
+        mode, reason = "continuation", ""
     changed = (
         changed_since(repo, prev_sha, head)
-        if mode == "incremental" or reason in ("incomplete-prev", "forced-full-t16")
+        if mode in ("incremental", "continuation")
+        or reason in ("incomplete-prev", "forced-full-t16")
         else []
     )
 
@@ -1119,7 +1258,9 @@ def cmd_prepare(args):
         ).json(),
         solicitante="",
     )
-    preparacion = prepare_review(repo, request, current, policy)
+    preparacion = prepare_review(
+        repo, request, current, policy, cobertura_previa=prev.get("covered")
+    )
 
     reviewed = [path.text for path in preparacion.entregados]
     excluded = [{"path": om.ruta, "reason": om.causa} for om in preparacion.omisiones]
@@ -1444,7 +1585,9 @@ def build_prompt(manifest, work, max_turns):
             f"it, citing the code. Do not review the rest of the PR, do not report other "
             f"findings, and do not emit a findings block or a COVERAGE line."
         )
-    if manifest.get("mode") != "incremental" and manifest.get("has_prev_findings"):
+    if manifest.get("mode") not in ("incremental", "continuation") and manifest.get(
+        "has_prev_findings"
+    ):
         prompt += (
             f"\n- This PR already has findings from an earlier review: {work}/prev_findings.md. "
             f'Report the same issues with their same ids, use "F-new" for new ones, and never report '
@@ -1465,6 +1608,20 @@ def build_prompt(manifest, work, max_turns):
             f"look for NEW bugs only in: {listed or '(no files in scope)'}. "
             f"Emit the updated findings block right before COVERAGE, as one line that starts with "
             f"`<!-- ai-review:findings=` and ends with ` -->`."
+        )
+    if manifest.get("mode") == "continuation":
+        reviewed = manifest.get("reviewed", [])
+        shown = reviewed[:INCREMENTAL_PROMPT_MAX_FILES]
+        listed = ", ".join(f"`{path}`" for path in shown)
+        if len(reviewed) > len(shown):
+            listed += f", … y {len(reviewed) - len(shown)} más"
+        prompt += (
+            f"\n- CONTINUATION review: earlier passes already covered the rest of this PR (their "
+            f"findings are in {work}/prev_findings.md; you may read any PR file for context). "
+            f"Verify each OPEN finding against the diff, mark resolved only what the diff fixed, "
+            f"look for NEW bugs only in: {listed or '(no files in scope)'}. Carry every previous "
+            f"finding with the same ids. Emit the updated findings block right before COVERAGE, as "
+            f"one line that starts with `<!-- ai-review:findings=` and ends with ` -->`."
         )
     return prompt
 
@@ -2110,6 +2267,14 @@ def actualizar_memoria_valida(
     ]
     runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
     cobertura = cobertura_declarada((result or {}).get("result") or "", model)
+    if (
+        manifest.get("mode") == "continuation"
+        and not manifest.get("reviewed")
+        and not manifest.get("excluded")
+    ):
+        # Continuación terminal: el libro ya cubre el alcance y no queda nada
+        # por leer; sin esto una pasada sin archivos degradaría a parcial.
+        cobertura = review_domain.COMPLETE_CLAIM
     excluidos = manifest.get("excluded", []) or []
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
@@ -2504,7 +2669,9 @@ def summary_of(body):
         line
         for line in body.split("\n")
         if line != MARKER
-        and not line.startswith((SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX))
+        and not line.startswith(
+            (SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX, COVERED_PREFIX)
+        )
     )
 
 
@@ -2581,8 +2748,20 @@ def cmd_publish(args):
             )
         else:
             revisado = True
+            libro = (
+                libro_actualizado(sticky, manifest, result, _repo_actual())
+                if manifest.get("head")
+                else None
+            )
             body = redact(
-                compose(result, manifest, sha=head, provider=name, findings=findings),
+                compose(
+                    result,
+                    manifest,
+                    sha=head,
+                    provider=name,
+                    findings=findings,
+                    libro=libro,
+                ),
                 [
                     os.environ.get("API_KEY", ""),
                     os.environ.get("FALLBACK_API_KEY", ""),
@@ -3182,6 +3361,7 @@ def cmd_execute_request(args):
         diff_max_bytes=int(os.environ.get("MAX_DIFF_BYTES", "1500000")),
         strict_budget=False,
     )
+    previo = prev_de_memoria(sticky["body"] if sticky else None)
     try:
         preparacion = prepare_review(
             GitRepository(Path.cwd()),
@@ -3206,6 +3386,7 @@ def cmd_execute_request(args):
             ),
             current,
             policy,
+            cobertura_previa=previo.get("covered"),
         )
     except Exception as exc:
         plan = {"mode": "full", "head_sha": head, "base_sha": base}
@@ -3243,7 +3424,6 @@ def cmd_execute_request(args):
     destino.write_text(json.dumps(paquete))
     # La misma memoria autenticada que autorizó la solicitud; los comandos ya
     # los aplicó el coordinador hasta su cursor.
-    previo = prev_de_memoria(sticky["body"] if sticky else None)
     (work / "prev.json").write_text(json.dumps(previo))
     print(
         f"ai-review: paquete de la solicitud {solicitud.id} preparado "
@@ -3266,12 +3446,24 @@ def cmd_close_result(args):
     if identidad not in IDENTIDADES:
         sys.exit(f"ai-review: identidad de hallazgos '{identidad}' no admitida")
     modelo = parse_model_findings(texto, conservar_anclas=identidad == "anchors")
+    manifiesto = work / "manifest.json"
+    datos = json.loads(manifiesto.read_text()) if manifiesto.exists() else None
+    cobertura = cobertura_declarada(texto, modelo)
+    if (
+        datos is not None
+        and datos.get("mode") == "continuation"
+        and not datos.get("reviewed")
+        and not datos.get("excluded")
+    ):
+        # Continuación terminal: el libro ya cubre el alcance y no queda nada
+        # por leer; sin esto una pasada sin archivos degradaría a parcial.
+        cobertura = review_domain.COMPLETE_CLAIM
     paquete.update(
         {
             "result": texto,
             "subtype": resultado.get("subtype"),
             "observaciones": (modelo or {}).get("findings", []),
-            "cobertura": cobertura_declarada(texto, modelo),
+            "cobertura": cobertura,
         }
     )
     for campo in ("total_cost_usd", "usage", "num_turns"):
@@ -3279,10 +3471,17 @@ def cmd_close_result(args):
             paquete[campo] = resultado[campo]
     paquete["review_provider"] = resultado.get("review_provider") or get_provider()[0]
     paquete["model_ok"] = modelo is not None
-    manifiesto = work / "manifest.json"
-    if manifiesto.exists():
-        datos = json.loads(manifiesto.read_text())
+    if datos is not None:
         paquete["manifest"] = {k: datos[k] for k in CAMPOS_DEL_ALCANCE if k in datos}
+        if datos.get("head"):
+            previo = (
+                json.loads((work / "prev.json").read_text())
+                if (work / "prev.json").exists()
+                else {}
+            ).get("covered") or {}
+            paquete["covered"] = libro_fusionado(
+                previo, datos, texto, GitRepository(Path.cwd())
+            )
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
@@ -3335,6 +3534,7 @@ def revision_visible(artifact, snapshot, previos, head):
                 "model_ok": artifact.get("model_ok", True),
                 "completion": snapshot.completion,
             },
+            libro=artifact.get("covered"),
         )
 
     return armar
@@ -3414,7 +3614,7 @@ def estado_visible(snapshot, explicacion=None):
             return "\n".join([cuerpo, *(["", *nueva] if nueva else [])])[
                 :GITHUB_COMMENT_MAX
             ]
-        marcas = (SHA_PREFIX, COMPLETION_PREFIX)
+        marcas = (SHA_PREFIX, COMPLETION_PREFIX, COVERED_PREFIX)
         # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
         # modelo publicados antes de neutralizarse.
         previo = [

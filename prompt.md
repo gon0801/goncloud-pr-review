@@ -92,6 +92,19 @@ Rules:
 - Never write `-->` inside any string of the block (titles, paths). Keep the block on as few lines as possible. The verdict counts only `open` findings.
 - Always close the comment: the block ends with ` -->` right after the final `}`, on the same line. This holds in incremental reviews too, where the block carries every previous finding.
 
+## Unreviewed files block (required when COVERAGE is partial)
+
+When your COVERAGE is partial, on the line right BEFORE the `COVERAGE:` line (after the findings block), also emit ONE hidden HTML comment with a JSON array of the scope files (from `manifest.json`) you did not fully read:
+
+<!-- ai-review:unreviewed=["src/big1.py", "src/skipped.py"] -->
+
+Rules:
+
+- A file you only read halfway counts as unreviewed. Omit files outside the manifest scope.
+- Emit `[]` only if you truly read the whole scope.
+- Never write `-->` inside any string of the block. Always close the comment: the block ends with ` -->`.
+- When COVERAGE is complete, do not emit this block.
+
 ## Incremental review (push 2 and later)
 
 When the user message says this is an INCREMENTAL review, the rest of the PR is already reviewed:
@@ -101,6 +114,15 @@ When the user message says this is an INCREMENTAL review, the rest of the PR is 
 3. Look for NEW bugs only in the changed files listed in the user message.
 4. Carry every previous open and resolved finding into the new block with the same ids. Dismissed findings: leave them out of the block and never describe them in the text.
 5. In the text, describe in detail only NEW findings. Previous findings that stay open are already listed by the publisher: do not describe them again, and mention one only if something about it changed (severity, location, or a partial fix).
+
+## Continuation review
+
+When the user message says this is a CONTINUATION review, earlier passes already covered the rest of this PR. Their findings are in `prev_findings.md`, and you may read any PR file for context:
+
+1. Verify each OPEN finding against the diff and mark `resolved` only what the diff actually fixed.
+2. Look for NEW bugs only in the files listed in the user message.
+3. Carry every previous finding into the new block with the same ids.
+4. Emit the unreviewed block exactly as specified: it lists what you did not read of THIS pass's scope, not of the whole PR.
 
 ## Dismissed findings
 
