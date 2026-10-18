@@ -1591,6 +1591,14 @@ class MaxTurns(unittest.TestCase):
         manifest = dict(MANIFEST, diff_bytes=1000, reviewed=["a.py"])
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
             self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 60)
+        with mock.patch.dict(os.environ, {"MAX_TURNS": ""}):
+            self.assertEqual(
+                review.resolve_max_turns(manifest, Path("/tmp")),
+                60,
+                "una variable vacia no rompe el auto",
+            )
+        with mock.patch.dict(os.environ, {"MAX_TURNS": "100"}):
+            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 100)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
             self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 33)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "abc"}):
@@ -4256,6 +4264,17 @@ class Workflows(unittest.TestCase):
                     text=True,
                 )
                 self.assertEqual(salida.returncode, 0, salida.stdout + salida.stderr)
+
+    def test_el_worker_pasa_max_turns_desde_vars_con_auto_por_omision(self):
+        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
+        inicio = texto.index("- name: modelo")
+        paso = texto[inicio : texto.index("- name:", inicio + 1)]
+        self.assertIn('review.py" run', paso)
+        self.assertIn(
+            "MAX_TURNS: ${{ vars.AI_REVIEW_MAX_TURNS || 'auto' }}",
+            paso,
+            "la perilla por repo llega al paso que corre el modelo",
+        )
 
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()
