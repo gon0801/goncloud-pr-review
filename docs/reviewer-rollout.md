@@ -38,6 +38,14 @@ ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
 - El conjunto lee los mismos secrets que el escritor que el retorno repone:
   `AI_REVIEW_API_KEY` (opencode-go, principal) y `DEEPSEEK_API_KEY`
   (respaldo). No hace falta crear secrets nuevos para instalarlo.
+- La variable de repositorio `AI_REVIEW_MAX_TURNS` (número) sobrescribe el
+  tope automático de turnos del worker en ese repo (puede subirlo o
+  bajarlo); solo surte efecto donde el worker instalado ya trae la línea
+  `MAX_TURNS` del paso del modelo (reinstalar o re-fijar el pin con
+  `scripts/install.sh`); sin definir, el tope sigue siendo `auto`.
+- El intento del modelo tiene un presupuesto de tiempo
+  `REVIEW_BUDGET_SECONDS` (1320 s): un tope de turnos que no quepa a
+  ~10 s por turno se corta por tiempo y no devuelve texto.
 
 El modo actual (`scripts/install.sh gon0801/mi-repo`) instala `ai-review.yml`
 y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de `@main`. En los dos
