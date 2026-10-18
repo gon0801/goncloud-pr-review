@@ -60,8 +60,7 @@ def aceptar_ronda(body, ronda):
     return decision.snapshot
 
 
-def armar():
-    body, ronda = cargar_ronda()
+def armar(body, ronda):
     previos = {f.id for f in domain.read_snapshot(body).snapshot.findings}
     snapshot = aceptar_ronda(body, ronda)
     lineas = body.split("\n")
@@ -73,8 +72,13 @@ def armar():
         previos,
         ronda["head_sha"],
     )
-    bloque = domain.encode_snapshot(snapshot).block
-    cuerpo = visible(bloque, resto)
+    bloque = domain.encode_snapshot(snapshot)
+    if isinstance(bloque, domain.CapacityExceeded):
+        raise SystemExit(
+            f"armar_sticky: el estado no cabe ({bloque.needed} bytes > "
+            f"{bloque.limit} incluso compactando); la ronda es demasiado grande"
+        )
+    cuerpo = visible(bloque.block, resto)
     return cuerpo, snapshot
 
 
@@ -83,7 +87,7 @@ def main():
     ap.add_argument("--salida", default="/tmp/sticky-pr20-armado.md")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    cuerpo, snapshot = armar()
+    cuerpo, snapshot = armar(*cargar_ronda())
     Path(args.salida).write_text(cuerpo, encoding="utf-8")
     abiertos = sum(
         1 for f in snapshot.findings if isinstance(f.status, domain.StatusOpen)

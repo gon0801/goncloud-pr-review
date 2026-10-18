@@ -1177,5 +1177,38 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
         self.assertEqual(carga.raw["next"], 63)
 
 
+class ElArmadorDelStickyRechazaElDesborde(unittest.TestCase):
+    """CodeRabbit: armar_sticky_pr20 leía .block de un encode que puede
+    devolver CapacityExceeded: AttributeError en vez de un error claro."""
+
+    @staticmethod
+    def cargar_armador():
+        especificacion = importlib.util.spec_from_file_location(
+            "armar_sticky_pr20", ROOT / "scripts" / "armar_sticky_pr20.py"
+        )
+        modulo = importlib.util.module_from_spec(especificacion)
+        especificacion.loader.exec_module(modulo)
+        return modulo
+
+    def test_una_ronda_que_desborda_da_error_claro(self):
+        armador = self.cargar_armador()
+        body, ronda = armador.cargar_ronda()
+        ronda["model_block"]["findings"] = [
+            {
+                "file": f"src/hermes/modulo_{i:03d}.py",
+                "line": i + 1,
+                "severity": "Medium",
+                "title": "hallazgo enorme " + "x" * 400 + f" numero {i}",
+                "state": "open",
+            }
+            for i in range(120)
+        ]
+        with self.assertRaises(SystemExit) as contexto:
+            armador.armar(body, ronda)
+        mensaje = str(contexto.exception)
+        self.assertIn("no cabe", mensaje)
+        self.assertIn("40000", mensaje)
+
+
 if __name__ == "__main__":
     unittest.main()
