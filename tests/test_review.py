@@ -4266,15 +4266,20 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(salida.returncode, 0, salida.stdout + salida.stderr)
 
     def test_el_worker_pasa_max_turns_desde_vars_con_auto_por_omision(self):
-        texto = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        inicio = texto.index("- name: modelo")
-        paso = texto[inicio : texto.index("- name:", inicio + 1)]
-        self.assertIn('review.py" run', paso)
-        self.assertIn(
-            "MAX_TURNS: ${{ vars.AI_REVIEW_MAX_TURNS || 'auto' }}",
-            paso,
-            "la perilla por repo llega al paso que corre el modelo",
-        )
+        for ruta in (
+            ROOT / "templates" / "ai-review-worker.yml",
+            ROOT / ".github" / "workflows" / "ai-review-worker.yml",
+        ):
+            with self.subTest(archivo=str(ruta.relative_to(ROOT))):
+                texto = ruta.read_text()
+                inicio = texto.index("- name: modelo")
+                paso = texto[inicio : texto.index("- name:", inicio + 1)]
+                self.assertIn('review.py" run', paso)
+                self.assertIn(
+                    "MAX_TURNS: ${{ vars.AI_REVIEW_MAX_TURNS || 'auto' }}",
+                    paso,
+                    "la perilla por repo llega al paso que corre el modelo",
+                )
 
     def test_action_max_turns_mentions_incremental_cap(self):
         action = (ROOT / "action.yml").read_text()
