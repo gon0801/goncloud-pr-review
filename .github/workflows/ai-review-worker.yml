@@ -130,6 +130,7 @@ jobs:
           PROVIDER: opencode-go
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          MAX_TURNS: ${{ vars.AI_REVIEW_MAX_TURNS || 'auto' }}
         run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" run --work "${RUNNER_TEMP}/ai-review"
       - name: cerrar el resultado para el coordinador
         id: cerrar
