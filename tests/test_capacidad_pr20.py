@@ -767,11 +767,24 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             ruta = Path(tmp) / "sticky.md"
             ruta.write_text(cuerpo, encoding="utf-8")
             hecho = subprocess.run(
-                [sys.executable, "scripts/verify_sticky.py", "--body-file", str(ruta)],
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "verify_sticky.py"),
+                    "--body-file",
+                    str(ruta),
+                ],
                 capture_output=True,
                 text=True,
             )
         self.assertEqual(hecho.returncode, 0, hecho.stdout + hecho.stderr)
+
+    def test_el_verificador_se_resuelve_desde_cualquier_cwd(self):
+        con_otro_cwd = tempfile.TemporaryDirectory()
+        self.addCleanup(con_otro_cwd.cleanup)
+        cwd_anterior = os.getcwd()
+        self.addCleanup(os.chdir, cwd_anterior)
+        os.chdir(con_otro_cwd.name)
+        self._sticky_verificado(sticky_pr20()["body"])
 
     def test_libro_al_tope_y_estado_grande_publican_sin_libro(self):
         snapshot, block = self._snapshot_grande()
