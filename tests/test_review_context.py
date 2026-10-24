@@ -536,13 +536,16 @@ class SelectiveContext(unittest.TestCase):
             head = commit(repo, "head")
             policy = domain.ReviewPolicy(diff_mode="incremental")
             digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-                selectivo=True,
-            )
+            with mock.patch.object(
+                review_context.ast, "parse", side_effect=RecursionError
+            ):
+                result = prepare_review(
+                    GitRepository(repo),
+                    solicitud(head, base, digest),
+                    memoria(prev, base, digest),
+                    policy,
+                    selectivo=True,
+                )
             refs = {ref.archivo: ref for ref in result.plan.context_refs}
             self.assertIn("deep.py", refs)
             self.assertEqual(refs["deep.py"].relacion, "textual")
