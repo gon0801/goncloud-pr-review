@@ -21,7 +21,7 @@ Reglas de hierro:
 
 Flujo de verificacion:
 - Durante la implementacion, corre solo las pruebas focalizadas del comportamiento modificado.
-- Agrupa los hallazgos de revision y corrigelos en una sola ronda por bloque. Solo un hallazgo bloqueante (seguridad, datos, regla innegociable, comportamiento pedido roto o prueba que no discrimina), con el comando que lo reproduce, reabre el ciclo; si el mismo bloqueante vuelve en dos rondas seguidas, decide el operador.
+- Agrupa los hallazgos de revision y corrigelos en una sola ronda por bloque. Solo un hallazgo bloqueante (seguridad, datos, regla innegociable, comportamiento pedido roto o un arreglo sin ninguna prueba), con el comando que lo reproduce (sin reproduccion no bloquea), reabre el ciclo; si el mismo bloqueante vuelve en dos rondas seguidas, decide el operador. Una prueba debil (pasaria sin el arreglo) es nota: se corrige en la misma ronda, no reabre el ciclo. En una revision nadie hace pruebas de mutacion.
 - Ejecuta Ruff y las pruebas focalizadas despues del ultimo cambio del bloque.
 - Ejecuta la bateria completa una sola vez, por SHA final del bloque de CODIGO, preferentemente en CI mediante PR; los bloques exclusivamente fast pagan los checks documentales.
 - Si commit, push o CI ya validaron tests, Ruff o pre-commit sobre ese SHA, no los repitas manualmente.
