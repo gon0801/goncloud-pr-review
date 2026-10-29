@@ -989,7 +989,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
 
-    def test_persistent_opencode_replay_error_switches_to_deepseek(self):
+    def test_persistent_opencode_replay_error_stays_on_the_subscription(self):
         error = ReasoningReplayRecovery.replay_error
         proc, calls, result, _, _ = self.run_agent(
             None,
@@ -1000,17 +1000,19 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             [c["ANTHROPIC_MODEL"] for c in calls],
-            ["deepseek-v4.1-flash", "deepseek-v4.1-flash", "deepseek-flash[1m]"],
+            ["deepseek-v4.1-flash", "deepseek-v4.1-flash"],
         )
-        self.assertEqual(calls[2]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
-        self.assertIn(
-            "ai-review: opencode-go rechazó el historial de razonamiento de la "
-            "conversación (reasoning_content); se cambia a deepseek",
-            proc.stdout,
+        self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
+        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
 
-    def test_primary_timeout_switches_to_the_other_provider_when_time_remains(self):
+    def test_primary_timeout_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1019,15 +1021,19 @@ class RunAgent(unittest.TestCase):
             ATTEMPT_TIMEOUT="1",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual([c["ANTHROPIC_MODEL"] for c in calls], ["deepseek-flash[1m]"])
-        self.assertIn(
-            "ai-review: la revisión con opencode-go excedió el tiempo límite de 1 s; "
-            "se cambia a deepseek",
-            proc.stdout,
+        # El intento que expira muere antes de loguear su llamada; ningún
+        # otro proveedor se despacha.
+        self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
 
-    def test_primary_timeout_without_time_for_the_fallback_says_so(self):
+    def test_primary_timeout_without_time_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1038,11 +1044,12 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo "
-                "límite de 1 s; no queda tiempo para probar deepseek"
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
             },
         )
 
@@ -1061,7 +1068,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(result, dict(OK_REPLY, review_provider="opencode-go"))
 
-    def test_both_providers_failing_name_each_cause(self):
+    def test_opencode_failure_keeps_its_cause_without_paid_fallback(self):
         error = ReasoningReplayRecovery.replay_error
         proc, calls, result, _, _ = self.run_agent(
             None,
@@ -1080,12 +1087,13 @@ class RunAgent(unittest.TestCase):
             ),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
+        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "opencode-go rechazó el historial de razonamiento "
-                "de la conversación (reasoning_content); deepseek agotó su cuota"
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
             },
         )
 
@@ -1158,32 +1166,55 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn(review.ERROR_KEY, result)
 
-    def test_opencode_insufficient_funds_switches_to_deepseek_with_its_own_key(self):
-        replies = [
-            {
-                "result": "API Error: 402 Insufficient account funds",
-                "is_error": True,
-                "api_error_status": 402,
-            },
-            OK_REPLY,
-        ]
+    def test_opencode_insufficient_funds_stays_on_the_subscription(self):
+        reply = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
         proc, calls, result, proxy, _ = self.run_agent(
-            OK_REPLY,
+            reply,
             provider="opencode-go",
             FALLBACK_API_KEY="sk-deepseek-key",
-            FAKE_CLAUDE_REPLIES=json.dumps(replies),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
-            [call["ANTHROPIC_MODEL"] for call in calls],
-            ["deepseek-v4.1-flash", "deepseek-flash[1m]"],
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
         )
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-key-123")
-        self.assertEqual(calls[1]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
-        self.assertIsNone(calls[1]["ANTHROPIC_AUTH_TOKEN"])
-        self.assertTrue(all("FALLBACK_API_KEY" not in call["env"] for call in calls))
-        self.assertEqual(result["result"], REVISION_COMPLETA)
-        self.assertEqual(result["review_provider"], "deepseek")
+        self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
+        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
+        )
+
+    def test_opencode_saturation_stays_on_the_subscription(self):
+        reply = {
+            "result": "API Error: 429 too many requests",
+            "is_error": True,
+            "api_error_status": 429,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            reply,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
+        )
+        motivo = review.FallaDelProveedor.saturacion("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
+        )
 
     def test_deepseek_quota_switches_to_opencode(self):
         replies = [
@@ -1208,29 +1239,26 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-fallback")
         self.assertEqual(result["review_provider"], "opencode-go")
 
-    def test_both_providers_out_of_quota_leave_commit_unreviewed(self):
-        replies = [
-            {
-                "result": "API Error: 402 Insufficient account funds",
-                "is_error": True,
-                "api_error_status": 402,
-            },
-            {
-                "result": "API Error: 429 quota exceeded",
-                "is_error": True,
-                "api_error_status": 429,
-            },
-        ]
+    def test_opencode_quota_leaves_commit_unreviewed_without_paid_fallback(self):
+        reply = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
         proc, calls, result, _, _ = self.run_agent(
-            OK_REPLY,
+            reply,
             provider="opencode-go",
             FALLBACK_API_KEY="sk-deepseek-key",
-            FAKE_CLAUDE_REPLIES=json.dumps(replies),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
+        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
         self.assertEqual(
-            result, {review.ERROR_KEY: "ambos proveedores agotaron su cuota"}
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
 
     def test_quota_without_fallback_key_reports_missing_secret_without_retry(self):
@@ -1257,7 +1285,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn(review.ERROR_KEY, result)
 
-    def test_primary_proxy_failure_uses_direct_deepseek_fallback(self):
+    def test_primary_proxy_failure_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1265,11 +1293,15 @@ class RunAgent(unittest.TestCase):
             litellm_script=FAKE_LITELLM_CRASH,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.proxy("opencode-go").motivo
         self.assertEqual(
-            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-flash[1m]"]
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result["result"], REVISION_COMPLETA)
-        self.assertEqual(result["review_provider"], "deepseek")
 
     def test_fallback_proxy_failure_names_both_failed_providers(self):
         quota = {
@@ -2397,7 +2429,11 @@ class Workflows(unittest.TestCase):
             "el worker instala Claude Code y LiteLLM antes del paso modelo",
         )
         self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
-        self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
+        # La suscripción no recibe llave de la API de pago: sin FALLBACK ni
+        # consumo de DEEPSEEK_API_KEY, un fallo del proveedor queda pendiente.
+        self.assertNotIn("FALLBACK_ENABLED", worker)
+        self.assertNotIn("FALLBACK_API_KEY", worker)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
 
     def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
         # Orbit #419/#420: dos PRs nuevos piden la solicitud 1 a la vez; con el
@@ -2505,7 +2541,8 @@ class Workflows(unittest.TestCase):
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
         cierre = cierre.split("- name:")[0]
         self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", cierre)
-        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
+        self.assertNotIn("FALLBACK_API_KEY", cierre)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", cierre)
         self.assertIn("PROVIDER: opencode-go", cierre)
 
     def test_action_caches_install_with_pinned_versions(self):
@@ -2572,7 +2609,8 @@ class Workflows(unittest.TestCase):
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", worker)
-        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
+        self.assertNotIn("FALLBACK_API_KEY", worker)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
         self.assertNotIn("secrets.API_KEY", worker)
         self.assertNotIn("secrets.FALLBACK_API_KEY", worker)
         self.assertIn("retention-days: 7", worker)
@@ -2700,8 +2738,8 @@ class Workflows(unittest.TestCase):
             "PR_NUMBER",
             "GITHUB_TOKEN",
         },
-        "install": {"PROVIDER", "FALLBACK_ENABLED"},
-        "run": {"API_KEY", "FALLBACK_API_KEY", "PROVIDER", "REPO", "PR_NUMBER"},
+        "install": {"PROVIDER"},
+        "run": {"API_KEY", "PROVIDER", "REPO", "PR_NUMBER"},
         "close-result": set(),
     }
 

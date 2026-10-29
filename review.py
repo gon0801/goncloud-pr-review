@@ -1789,6 +1789,18 @@ def cmd_run(args):
     if primaria is None:
         reparar_bloque(work, result_path, name, key, cmd, deadline)
         return
+    if name == "opencode-go":
+        # La suscripción es la única vía del repositorio: ningún fallo del
+        # proveedor despacha la API de pago y la revisión queda pendiente con
+        # su clasificación (cuota, saturación, proxy, tiempo...).
+        soft_fail(
+            result_path,
+            f"{primaria.motivo}; la suscripción es la única vía y no se cambia "
+            "a la API de pago"
+            if os.environ.get("FALLBACK_API_KEY", "")
+            else primaria.sin_respaldo,
+        )
+        return
     fallback_key = os.environ.get("FALLBACK_API_KEY", "")
     if not fallback_key:
         soft_fail(result_path, primaria.sin_respaldo)

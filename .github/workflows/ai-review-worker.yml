@@ -120,13 +120,11 @@ jobs:
       - name: instalar Claude Code (y LiteLLM para opencode-go)
         env:
           PROVIDER: opencode-go
-          FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}
         run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" install --work "${RUNNER_TEMP}/ai-review"
       - name: modelo
         working-directory: pr
         env:
           API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
-          FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           PROVIDER: opencode-go
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -136,7 +134,6 @@ jobs:
         id: cerrar
         env:
           API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
-          FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           PROVIDER: opencode-go
         run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" close-result --work "${RUNNER_TEMP}/ai-review"
       - name: subir resultado como datos
