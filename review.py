@@ -1259,17 +1259,6 @@ def cmd_prepare(args):
             mode, reason = "continuation", ""
         else:
             mode, reason = "full", "incomplete-prev"
-    if mode == "incremental":
-        # T16 f13 (docs/evidence/reviewer/D0-C0.md): el incremental medido en la
-        # medicion completa costo 11-25% mas que una revision completa del mismo
-        # par y 6 de 18 corridas perdieron el bloque de hallazgos (sin el cierre
-        # `-->`, read_snapshot lo rechaza). Decision del operador: el segundo push
-        # se revisa completo, conservando el delta real (changed_files abajo) para
-        # que las reversiones resuelvan hallazgos. El camino incremental queda
-        # intacto para revertir. Ojo: el 11-25% es una cota a verificar con los
-        # costos reales despues del merge; la corrida forzada es una full CON
-        # memoria, y ese costo no se midio.
-        mode, reason = "full", "forced-full-t16"
     if (
         mode == "full"
         and reason == "same-sha"
@@ -1282,8 +1271,7 @@ def cmd_prepare(args):
         mode, reason = "continuation", ""
     changed = (
         changed_since(repo, prev_sha, head)
-        if mode in ("incremental", "continuation")
-        or reason in ("incomplete-prev", "forced-full-t16")
+        if mode in ("incremental", "continuation") or reason == "incomplete-prev"
         else []
     )
 
@@ -1298,14 +1286,7 @@ def cmd_prepare(args):
         ),
     )
     digest = digest_de_politica(policy)
-    # La corrida forzada a full no recibe memoria: si se la pasaramos,
-    # prepare_review prepararia el delta por su cuenta y el manifest mentiria.
-    if (
-        reason != "forced-full-t16"
-        and prev_sha
-        and _sha_hexa(prev_sha)
-        and prev.get("state")
-    ):
+    if prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
         current = review_domain.snapshot_a_v3(
             review_domain.Snapshot(
                 schema=2,
@@ -1810,6 +1791,12 @@ def cmd_run(args):
         reparar_bloque(work, result_path, fallback_name, fallback_key, cmd, deadline)
     elif primaria.tipo == respaldo.tipo == "quota":
         soft_fail(result_path, "ambos proveedores agotaron su cuota")
+    elif primaria.tipo == respaldo.tipo == "saturation":
+        soft_fail(
+            result_path,
+            "ambos proveedores están saturados; la cuenta no está agotada "
+            "y la revisión queda pendiente de que se recuperen",
+        )
     else:
         soft_fail(result_path, f"{primaria.motivo}; {respaldo.motivo}")
 
@@ -1833,6 +1820,16 @@ class FallaDelProveedor:
     def proxy(cls, nombre, respaldo=False):
         motivo = f"el proxy {'del respaldo' if respaldo else 'de'} {nombre} no arrancó"
         return cls("proxy", motivo, f"{motivo}; {SIN_LLAVE_DE_RESPALDO}")
+
+    @classmethod
+    def saturacion(cls, nombre):
+        motivo = f"{nombre} está saturado (límite de velocidad)"
+        return cls(
+            "saturation",
+            motivo,
+            f"{motivo}; la cuenta no está agotada y la revisión queda pendiente "
+            "de que el proveedor se recupere",
+        )
 
     @classmethod
     def razonamiento(cls, nombre):
@@ -2154,8 +2151,11 @@ def run_agent(
                 file=sys.stderr,
             )
             print_proxy_log(result_path.parent)
-            if quota_error(result):
+            tipo_falla = clasificar_falla_proveedor(result)
+            if tipo_falla == "quota":
                 return FallaDelProveedor.cuota(name)
+            if tipo_falla == "saturation":
+                return FallaDelProveedor.saturacion(name)
             reasoning_replay_error = (
                 name == "opencode-go"
                 and result.get("api_error_status") == 400
@@ -2175,24 +2175,33 @@ def run_agent(
     return falla or FallaDelProveedor.no_disponible(name)
 
 
-def quota_error(result):
+_FRASES_SATURACION = ("rate limit exceeded", "rate limit", "too many requests")
+_FRASES_CUOTA = (
+    "quota exceeded",
+    "insufficient account funds",
+    "insufficient balance",
+    "credit balance",
+    "out of credits",
+    "usage limit",
+)
+
+
+def clasificar_falla_proveedor(result):
     status = result.get("api_error_status")
     message = (result.get("result") or "").lower()
-    return status in (402, 429) or (
-        status in (400, 403)
-        and any(
-            phrase in message
-            for phrase in (
-                "quota exceeded",
-                "insufficient account funds",
-                "insufficient balance",
-                "credit balance",
-                "out of credits",
-                "rate limit exceeded",
-                "usage limit",
-            )
-        )
-    )
+    if any(p in message for p in _FRASES_CUOTA):
+        return "quota"
+    if status == 402:
+        return "quota"
+    if status == 429 or any(p in message for p in _FRASES_SATURACION):
+        return "saturation"
+    if status in (400, 403) and "usage limit" in message:
+        return "quota"
+    return None
+
+
+def quota_error(result):
+    return clasificar_falla_proveedor(result) is not None
 
 
 # F0: identidad y evidencia. El dominio trae match_finding / accept_report /
@@ -2375,6 +2384,8 @@ def actualizar_memoria_valida(
     ]
     runtime_terminado = (result or {}).get("subtype") != "error_max_turns"
     cobertura = cobertura_declarada((result or {}).get("result") or "", model)
+    if model is None:
+        cobertura = review_domain.PARTIAL
     if continuacion_terminal(manifest):
         # Continuación terminal: el libro ya cubre el alcance y no queda nada
         # por leer; sin esto una pasada sin archivos degradaría a parcial.
@@ -2532,7 +2543,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     has_previous_changes = manifest.get("mode") in (
         "incremental",
         "continuation",
-    ) or manifest.get("reason") in ("incomplete-prev", "forced-full-t16")
+    ) or manifest.get("reason") == "incomplete-prev"
     changed = review_domain.rutas_de_cambio(manifest)
     watched = {
         f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN

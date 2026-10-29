@@ -503,8 +503,8 @@ class RequestTransitions(unittest.TestCase):
         self.assertIsInstance(vencido, domain.Commit)
         self.assertEqual(
             vencido.snapshot.completion,
-            domain.UNKNOWN,
-            "un bloque con formas inválidas no acredita cobertura",
+            domain.PARTIAL,
+            "un bloque con formas inválidas no acredita cobertura completa",
         )
         self.assertEqual(vencido.snapshot.pending_requests, [])
 

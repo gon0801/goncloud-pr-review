@@ -331,7 +331,7 @@ class Continuacion(unittest.TestCase):
         self.assertEqual((manifest2["mode"], manifest2["reason"]), ("continuation", ""))
         self.assertEqual(sorted(manifest2["reviewed"]), ["c.py"])
 
-    def test_g_tras_completa_el_siguiente_push_sigue_forced_full(self):
+    def test_g_tras_completa_el_siguiente_push_es_incremental(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, base, head1 = Escenario().escenario(tmp)
             work1 = Path(tmp, "work1")
@@ -348,7 +348,7 @@ class Continuacion(unittest.TestCase):
             head2 = commit(repo, "pasada-2")
             manifest2 = preparar(repo, Path(tmp, "work2"), base, head2, prev)
         self.assertEqual(
-            (manifest2["mode"], manifest2["reason"]), ("full", "forced-full-t16")
+            (manifest2["mode"], manifest2["reason"]), ("incremental", "")
         )
 
     def test_i_hallazgo_en_cubierto_sin_cambios_sigue_abierto(self):

@@ -327,29 +327,26 @@ class Prepare(unittest.TestCase):
         )
         return work, previo
 
-    def test_prev_usable_forces_full_review(self):
+    def test_prev_usable_revisa_el_delta(self):
         with tempfile.TemporaryDirectory() as tmp:
             work, previo = self.preparar_lineal(
                 tmp,
                 [{"id": "F1", "file": "previo.py", "severity": "Low"}],
             )
             manifest = json.loads((work / "manifest.json").read_text())
-            self.assertEqual(manifest["mode"], "full")
-            self.assertEqual(manifest["reason"], "forced-full-t16")
+            self.assertEqual(manifest["mode"], "incremental")
+            self.assertEqual(manifest["reason"], "")
             self.assertEqual(manifest["prev_sha"], previo)
 
-    def test_prev_usable_reviews_whole_pr_so_blocks_cannot_be_lost(self):
+    def test_prev_usable_revisa_solo_el_delta_y_conserva_hallazgos(self):
         with tempfile.TemporaryDirectory() as tmp:
             work, previo = self.preparar_lineal(
                 tmp,
                 [{"id": "F1", "file": "previo.py", "severity": "Low"}],
             )
             manifest = json.loads((work / "manifest.json").read_text())
-            # Todo el diff del PR (base..cabeza), no solo el delta del ultimo
-            # push (cabeza.py): sin memoria que achique el alcance, los bloques
-            # de hallazgos no pueden perderse por el camino de la memoria.
-            self.assertEqual(sorted(manifest["reviewed"]), ["cabeza.py", "previo.py"])
-            self.assertNotEqual(manifest["mode"], "incremental")
+            self.assertEqual(manifest["mode"], "incremental")
+            self.assertEqual(sorted(manifest["changed_files"]), ["cabeza.py"])
 
 
 FAKE_GH = textwrap.dedent("""\
@@ -5013,10 +5010,8 @@ class IncrementalPrepare(unittest.TestCase):
         )
         return json.loads((work / "manifest.json").read_text())
 
-    def test_push2_runs_full_by_decision(self):
-        # T16 f13 (D0-C0.md): el incremental medido costo 11-25% mas que una
-        # revision completa del mismo par y perdio bloques; por decision del
-        # operador el segundo push corre completo aunque la memoria sea usable.
+    def test_push2_runs_incremental(self):
+        # El segundo push revisa el delta real y recibe los hallazgos previos.
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(
@@ -5031,12 +5026,11 @@ class IncrementalPrepare(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+                (manifest["mode"], manifest["reason"]), ("incremental", "")
             )
-            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
+            self.assertEqual(manifest["changed_files"], ["other.py"])
             patch = (work / "diff.patch").read_text()
             self.assertIn("other.py", patch)
-            self.assertIn("app.py", patch)
             prev_md = (work / "prev_findings.md").read_text()
             self.assertIn("F1", prev_md)
 
@@ -5202,8 +5196,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
         )
         self.assertEqual(
             (manifest["mode"], manifest["reason"], manifest["prev_sha"]),
-            ("full", "forced-full-t16", prev),
-            "deja de ser full/no-prev",
+            ("incremental", "", prev),
         )
         self.assertTrue(manifest["has_prev_findings"])
         self.assertIn(
@@ -5363,7 +5356,7 @@ class ReviewContinuity(unittest.TestCase):
             review.prev_findings_markdown(prev["state"]),
         )
 
-    def test_partial_publish_recovers_full_scope_then_stays_full_by_decision(self):
+    def test_partial_publish_recovers_full_scope_then_goes_incremental(self):
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5411,15 +5404,12 @@ class ReviewContinuity(unittest.TestCase):
             previous, _ = self.gate(work, next_head, body)
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
-            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
 
-    def test_forced_full_still_resolves_reverted_files(self):
-        # T16 f14 (B1 del veredicto f13): en la corrida forzada a full, un
-        # hallazgo abierto sobre un archivo que el segundo push revierte a la
-        # base se resuelve igual que en incremental: el forzado conserva el
-        # delta real para la revision de reversiones.
+    def test_incremental_still_resolves_reverted_files(self):
+        # Un hallazgo abierto sobre un archivo que el segundo push revierte
+        # a la base se resuelve contra el delta real.
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5439,7 +5429,7 @@ class ReviewContinuity(unittest.TestCase):
             next_head = git(repo, "rev-parse", "HEAD")
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
             # El publicador corre en el checkout del repo bajo revision:
             # _repo_actual se fija al repo temporal, como el sh mockeado de
@@ -5465,11 +5455,9 @@ class ReviewContinuity(unittest.TestCase):
                 ],
             )
 
-    def test_forced_full_rejects_resolved_on_untouched_files(self):
-        # T16 f15 (B1 del veredicto f14): en la corrida forzada a full, el
-        # cerrojo B3 sigue vigente: un "resolved" que el modelo declara sobre
-        # un archivo que el push no toco queda abierto. La resolucion se
-        # evalua contra el delta real, no contra todo lo revisado.
+    def test_incremental_rejects_resolved_on_untouched_files(self):
+        # Un "resolved" que el modelo declara sobre un archivo que el push
+        # no toco queda abierto. La resolucion se evalua contra el delta real.
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5490,7 +5478,7 @@ class ReviewContinuity(unittest.TestCase):
             next_head = git(repo, "rev-parse", "HEAD")
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
             self.assertEqual(prepared["changed_files"], ["other.py"])
             with mock.patch.object(
@@ -8065,7 +8053,7 @@ class CableadoIdentidad(unittest.TestCase):
                     self.assertIn(":partial -->", cuerpo)
 
     def test_bloque_ausente_no_confirma_cobertura(self):
-        """model_ok falso (sin bloque) degrada la cobertura completa."""
+        """model_ok falso (sin bloque) deja la cobertura en parcial."""
         import review_domain as domain
 
         sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
@@ -8080,7 +8068,7 @@ class CableadoIdentidad(unittest.TestCase):
         }
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
         self.assertFalse(out["model_ok"])
-        self.assertEqual(out["completion"], domain.UNKNOWN)
+        self.assertEqual(out["completion"], domain.PARTIAL)
         cuerpo = review.compose(
             resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
         )
@@ -9058,7 +9046,7 @@ class GitPaths(unittest.TestCase):
 
             manifest = prepare_manifest(tmp, repo, head, head2)
             self.assertEqual(
-                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+                (manifest["mode"], manifest["reason"]), ("incremental", "")
             )
             self.assertEqual(manifest["reviewed"], ["nuevo.txt"])
             encoding = {

@@ -295,9 +295,8 @@ class PrepararBrazoDelta(unittest.TestCase):
     """prepare corre de verdad en un repo lineal base -> previo -> cabeza.
 
     Sin prev.json el manifest sale full (no-prev). Con prev.json (el que
-    construiría el paso del workflow) sale full forzado (T16 f13) y conserva
-    el delta real contra el push anterior; el brazo delta solo reproduce
-    incremental sobre el tag t16-candidato-e0898ff de la medición.
+    construiría el paso del workflow) sale incremental y conserva el delta
+    real contra el push anterior.
     """
 
     @classmethod
@@ -322,18 +321,17 @@ class PrepararBrazoDelta(unittest.TestCase):
         self.assertEqual(manifest["reason"], "no-prev")
         self.assertIsNone(manifest["prev_sha"])
 
-    def test_con_prev_json_el_forzado_sale_full_con_el_delta_real(self):
+    def test_con_prev_json_sale_incremental_con_el_delta_real(self):
         prev = {
             "sha": self.previo,
             "state": {"seen": 1, "findings": []},
             "completion": "complete",
         }
         manifest = self.preparar(prev)
-        self.assertEqual(manifest["mode"], "full")
-        self.assertEqual(manifest["reason"], "forced-full-t16")
+        self.assertEqual(manifest["mode"], "incremental")
+        self.assertEqual(manifest["reason"], "")
         self.assertEqual(manifest["prev_sha"], self.previo)
         self.assertEqual(manifest["changed_files"], ["cabeza.py"])
-        self.assertEqual(sorted(manifest["reviewed"]), ["cabeza.py", "previo.py"])
 
 
 class PasoDeltaConstruyePrevJson(unittest.TestCase):
