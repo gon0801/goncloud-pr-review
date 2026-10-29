@@ -393,7 +393,23 @@ def resolve_max_turns(manifest, work):
 
 
 def digest_de_politica(policy):
-    canon = json.dumps(sorted(dataclasses.asdict(policy).items()), sort_keys=True)
+    """Digest de la política que decide si la cobertura previa sigue válida.
+
+    Quedan fuera las perillas de una corrida concreta (`diff_mode`,
+    `diff_max_bytes`, `strict_budget`, `exclude_patterns`): cambiar el techo
+    de difusión, las exclusiones extra o la etiqueta de modo de una pasada no
+    cambia lo que significa la cobertura que esa pasada dejó registrada, y el
+    digest publicado lleva el modo de SU corrida y nunca sus exclusiones de
+    entorno. Lo que sí invalida la cobertura (identidad, reglas, schema)
+    entra completo.
+    """
+    campos = {
+        campo: valor
+        for campo, valor in dataclasses.asdict(policy).items()
+        if campo
+        not in ("diff_mode", "diff_max_bytes", "strict_budget", "exclude_patterns")
+    }
+    canon = json.dumps(sorted(campos.items()), sort_keys=True)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 

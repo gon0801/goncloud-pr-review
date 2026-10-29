@@ -5094,12 +5094,24 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
     def _sticky_del_segundo_push(self, prev, base, head):
         """La memoria real del #85 tras el primer push, con el SHA revisado
         apuntando al commit previo del repo de prueba y la solicitud del
-        segundo push admitida por el coordinador."""
+        segundo push admitida por el coordinador. La revisión del bloque se
+        reescribe a la del repo de prueba: prepare compara la revisión previa
+        auténtica (base, head, política) y la del fixture real pertenece a
+        otra historia."""
         import review_domain as domain
 
         cuerpo = self.STICKY_PUSH1.replace(self.SHA_PUSH1, prev)
         load = domain.read_snapshot(cuerpo)
-        estado = load.snapshot
+        estado = replace(
+            load.snapshot,
+            revision=domain.Revision(
+                base_sha=base,
+                head_sha=prev,
+                policy_digest=review.digest_de_politica(
+                    review.politica_de_revision()
+                ),
+            ),
+        )
         solicitud = domain.WorkRequest(
             id=2,
             kind="review",

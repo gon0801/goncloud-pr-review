@@ -1178,12 +1178,25 @@ def prev_de_memoria(body):
     hallazgos previos. También entiende la memoria v2/v3 del coordinador."""
     if body is None:
         return {"sha": None, "state": None, "completion": None}
+    load = review_domain.read_snapshot(body)
     return {
         "sha": reviewed_sha(body),
         "state": review_domain.estado_legado_de_memoria(body),
         "completion": reviewed_completion(body),
         "covered": libro_de(body)[1],
+        "snapshot": load.block if isinstance(load, review_domain.Valid) else None,
     }
+
+
+def _snapshot_previo(prev):
+    """El snapshot v2/v3 auténtico del sticky cuando prev.json lo transporta:
+    revisión (base, head, política), hallazgos y generación tal como quedaron
+    persistidos. None para memorias legadas sin bloque versionado."""
+    bloque = prev.get("snapshot") or ""
+    if not bloque:
+        return None
+    load = review_domain.read_snapshot(bloque)
+    return load.snapshot if isinstance(load, review_domain.Valid) else None
 
 
 def cmd_gate(args):
@@ -1240,6 +1253,17 @@ def cmd_prepare(args):
         )
         if not have:
             sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
+    policy = replace(
+        politica_de_revision(),
+        diff_max_bytes=int(os.environ.get("MAX_DIFF_BYTES", "1500000")),
+        strict_budget=False,
+        exclude_patterns=tuple(
+            p.strip()
+            for p in os.environ.get("EXTRA_EXCLUDES", "").splitlines()
+            if p.strip()
+        ),
+    )
+    digest = digest_de_politica(policy)
     try:
         mode, reason = decide_mode(repo, prev_sha, head)
     except OSError:
@@ -1269,24 +1293,17 @@ def cmd_prepare(args):
         # Re-run manual en el mismo head tras una parcial con libro: continuar
         # con lo pendiente en vez de repetir la revisión completa.
         mode, reason = "continuation", ""
-    changed = (
-        changed_since(repo, prev_sha, head)
-        if mode in ("incremental", "continuation") or reason == "incomplete-prev"
-        else []
-    )
 
-    policy = replace(
-        politica_de_revision(),
-        diff_max_bytes=int(os.environ.get("MAX_DIFF_BYTES", "1500000")),
-        strict_budget=False,
-        exclude_patterns=tuple(
-            p.strip()
-            for p in os.environ.get("EXTRA_EXCLUDES", "").splitlines()
-            if p.strip()
-        ),
-    )
-    digest = digest_de_politica(policy)
-    if prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
+    previo_snapshot = _snapshot_previo(prev)
+    if previo_snapshot is not None:
+        # El snapshot auténtico del sticky, con la revisión previa real (base,
+        # head, política). La cobertura viaja por el marcador publicado: un
+        # unknown del snapshot se publica como partial y con libro continúa.
+        current = replace(
+            previo_snapshot,
+            completion=review_domain.parse_coverage(prev.get("completion")),
+        )
+    elif prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
         current = review_domain.snapshot_a_v3(
             review_domain.Snapshot(
                 schema=2,
@@ -1312,6 +1329,18 @@ def cmd_prepare(args):
             findings=[],
             command_cursor=0,
         )
+    if mode in ("incremental", "continuation") and current.revision is not None:
+        # Mismo fallo que decidir_modo en la selección: la cobertura previa
+        # quedó medida contra otra base u otra política y no vale para este PR.
+        if current.revision.base_sha != base:
+            mode, reason = "full", "base: la base previa difiere de la solicitada"
+        elif current.revision.policy_digest != digest:
+            mode, reason = "full", "política: el digest previo difiere"
+    changed = (
+        changed_since(repo, prev_sha, head)
+        if mode in ("incremental", "continuation") or reason == "incomplete-prev"
+        else []
+    )
     request = review_domain.WorkRequest(
         id=1,
         kind="review",
@@ -2397,16 +2426,19 @@ def actualizar_memoria_valida(
 
     head = manifest.get("head")
     revision = None
+    digest = digest_de_politica(policy)
     if _sha_hexa(head) and _sha_hexa(manifest.get("base")):
+        # El digest viaja en la revisión persistida: la siguiente preparación
+        # compara contra él para decidir si la cobertura previa sigue válida.
         revision = review_domain.Revision(
             base_sha=manifest.get("base"),
             head_sha=head,
-            policy_digest="",
+            policy_digest=digest,
         )
     facts = hechos_de_repo(
         manifest,
         set(),
-        policy_digest=digest_de_politica(policy),
+        policy_digest=digest,
     )
     blobs = blobs_para_aceptar(
         snapshot, manifest, policy, rutas_delta=facts.changed_paths
