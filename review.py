@@ -318,6 +318,17 @@ def unreviewed_de(texto):
     return set(lista)
 
 
+def modelo_utilizable(modelo):
+    """La forma la decide el transporte del dominio, sin descartar el bloque."""
+    return modelo is not None and not any(
+        isinstance(
+            review_domain.observation_de_entrada(entrada),
+            review_domain.ObservationRejected,
+        )
+        for entrada in modelo.get("findings", [])
+    )
+
+
 def pasada_acredita(result, model_ok):
     """Una pasada acredita cobertura solo si su resultado es utilizable
     entero: COVERAGE declarada, runtime terminado y hallazgos del modelo
@@ -329,6 +340,11 @@ def pasada_acredita(result, model_ok):
         cobertura is not None
         and (result or {}).get("subtype") != "error_max_turns"
         and bool(model_ok)
+        and modelo_utilizable(
+            parse_model_findings(
+                (result or {}).get("result") or "", conservar_anclas=True
+            )
+        )
     )
 
 
@@ -858,7 +874,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
         )
     if findings is not None and not findings.get("model_ok", True) and reviewed_any:
         warnings.append(
-            "el revisor no entregó su bloque de hallazgos; se conservaron los hallazgos anteriores"
+            "el revisor no entregó su bloque de hallazgos utilizable; "
+            "esta pasada no acredita cobertura y conserva los hallazgos anteriores"
         )
 
     if findings is not None and findings.get("merged"):
@@ -2407,6 +2424,9 @@ def actualizar_memoria_valida(
         (result or {}).get("result") or "",
         conservar_anclas=policy.finding_identity == review_domain.IDENTIDAD_ANCLAS,
     )
+    model_ok = modelo_utilizable(
+        parse_model_findings((result or {}).get("result") or "", conservar_anclas=True)
+    )
     try:
         dismiss_ids, dismiss_all, seen = collect_dismissals(
             repo, pr, login, comments, snapshot.command_cursor
@@ -2433,6 +2453,8 @@ def actualizar_memoria_valida(
         # Continuación terminal: el libro ya cubre el alcance y no queda nada
         # por leer; sin esto una pasada sin archivos degradaría a parcial.
         cobertura = review_domain.COMPLETE_CLAIM
+    if model is not None and not model_ok:
+        cobertura = review_domain.PARTIAL
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
         for e in recortes_de_continuacion(manifest)
@@ -2502,7 +2524,7 @@ def actualizar_memoria_valida(
             "merged": [],
             "new_ids": [],
             "block": load.block,
-            "model_ok": model is not None,
+            "model_ok": model_ok,
             "keep": decision.reason,
         }
     encoded = review_domain.encode_snapshot(
@@ -2518,7 +2540,7 @@ def actualizar_memoria_valida(
             "merged": [],
             "new_ids": [],
             "block": load.block,
-            "model_ok": model is not None,
+            "model_ok": model_ok,
             "keep": motivo,
         }
     previos = {f.id for f in snapshot.findings}
@@ -2526,7 +2548,7 @@ def actualizar_memoria_valida(
         "merged": review_domain.hallazgos_legacy(decision.snapshot),
         "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
         "block": encoded.block if snapshot.schema == 3 else encoded,
-        "model_ok": model is not None,
+        "model_ok": model_ok,
         "completion": decision.snapshot.completion,
     }
 
@@ -2550,6 +2572,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             load, result, manifest, repo, pr, login, comments, policy
         )
     model = parse_model_findings((result or {}).get("result") or "")
+    model_ok = modelo_utilizable(
+        parse_model_findings((result or {}).get("result") or "", conservar_anclas=True)
+    )
     if isinstance(load, (review_domain.Valid, review_domain.Future)):
         motivo = (
             f"schema {load.snapshot.schema}"
@@ -2564,7 +2589,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             "merged": [],
             "new_ids": [],
             "block": load.block,
-            "model_ok": model is not None,
+            "model_ok": model_ok,
             "keep": motivo,
         }
     if isinstance(load, review_domain.Invalid):
@@ -2577,7 +2602,7 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             "merged": [],
             "new_ids": [],
             "block": load.block,
-            "model_ok": model is not None,
+            "model_ok": model_ok,
             "keep": motivo,
         }
     prev = load.raw if isinstance(load, review_domain.Legacy) else None
@@ -2631,14 +2656,14 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             "merged": [],
             "new_ids": [],
             "block": load.block,
-            "model_ok": model is not None,
+            "model_ok": model_ok,
             "keep": motivo,
         }
     return {
         "merged": merged["findings"],
         "new_ids": new_ids,
         "block": bloque,
-        "model_ok": model is not None,
+        "model_ok": model_ok,
     }
 
 
@@ -2864,6 +2889,13 @@ def dispatch_confirmed(recibo: PublishReceipt, *, despachar):
         despachar(solicitud)
 
 
+def forma_utilizable_del_artifact(artifact):
+    modelo = parse_model_findings(artifact.get("result") or "", conservar_anclas=True)
+    return modelo_utilizable({"findings": artifact.get("observaciones") or ()}) and (
+        modelo is None or modelo_utilizable(modelo)
+    )
+
+
 def authenticate_result(run_metadata, artifact, request):
     """El SHA del workflow (código confiable) y el HEAD del PR se validan por
     separado; el contenido del artifact nunca se ejecuta.
@@ -2893,7 +2925,9 @@ def authenticate_result(run_metadata, artifact, request):
         return rechazo("digest de política del artifact incorrecto")
     return AuthenticatedResult(
         observaciones=tuple(artifact.get("observaciones") or ()),
-        cobertura=artifact.get("cobertura") or review_domain.UNKNOWN,
+        cobertura=(artifact.get("cobertura") or review_domain.UNKNOWN)
+        if forma_utilizable_del_artifact(artifact)
+        else review_domain.PARTIAL,
         run_id=artifact.get("run_id"),
         attempt=artifact.get("attempt"),
     )
@@ -3711,6 +3745,7 @@ def cmd_close_result(args):
     if identidad not in IDENTIDADES:
         sys.exit(f"ai-review: identidad de hallazgos '{identidad}' no admitida")
     modelo = parse_model_findings(texto, conservar_anclas=identidad == "anchors")
+    model_ok = modelo_utilizable(parse_model_findings(texto, conservar_anclas=True))
     manifiesto = work / "manifest.json"
     datos = json.loads(manifiesto.read_text()) if manifiesto.exists() else None
     cobertura = cobertura_declarada(texto, modelo)
@@ -3718,6 +3753,8 @@ def cmd_close_result(args):
         # Continuación terminal: el libro ya cubre el alcance y no queda nada
         # por leer; sin esto una pasada sin archivos degradaría a parcial.
         cobertura = review_domain.COMPLETE_CLAIM
+    if modelo is not None and not model_ok:
+        cobertura = review_domain.PARTIAL
     paquete.update(
         {
             "result": texto,
@@ -3730,7 +3767,7 @@ def cmd_close_result(args):
         if campo in resultado:
             paquete[campo] = resultado[campo]
     paquete["review_provider"] = resultado.get("review_provider") or get_provider()[0]
-    paquete["model_ok"] = modelo is not None
+    paquete["model_ok"] = model_ok
     if datos is not None:
         paquete["manifest"] = {k: datos[k] for k in CAMPOS_DEL_ALCANCE if k in datos}
         if datos.get("head"):
@@ -3740,7 +3777,7 @@ def cmd_close_result(args):
                 else {}
             ).get("covered") or {}
             paquete["covered"] = libro_fusionado(
-                previo, datos, resultado, GitRepository(Path.cwd()), modelo is not None
+                previo, datos, resultado, GitRepository(Path.cwd()), model_ok
             )
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
@@ -3782,6 +3819,13 @@ def revision_visible(artifact, snapshot, previos, head):
         if proveedor not in PROVIDERS:
             proveedor = get_provider()[0]
         manifest = {"reviewed": [], "excluded": [], **(artifact.get("manifest") or {})}
+        model_ok = artifact.get("model_ok", True) and forma_utilizable_del_artifact(
+            artifact
+        )
+        libro = artifact.get("covered")
+        if not model_ok and libro is not None:
+            previo = libro_de(resto)[1] or {}
+            libro = {ruta: blob for ruta, blob in libro.items() if previo.get(ruta) == blob}
         return compose(
             artifact,
             manifest,
@@ -3791,10 +3835,10 @@ def revision_visible(artifact, snapshot, previos, head):
                 "merged": review_domain.hallazgos_legacy(snapshot),
                 "new_ids": [f.id for f in snapshot.findings if f.id not in previos],
                 "block": bloque,
-                "model_ok": artifact.get("model_ok", True),
+                "model_ok": model_ok,
                 "completion": snapshot.completion,
             },
-            libro=artifact.get("covered"),
+            libro=libro,
             budget=review_domain.StorageBudget(),
         )
 
