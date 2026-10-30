@@ -433,6 +433,43 @@ def hacer_repo_selectivo(tmp):
     return repo, base, prev, head
 
 
+class ContinuationContext(unittest.TestCase):
+    def test_continuacion_mide_desde_la_acreditacion_previa(self):
+        """Un archivo acreditado que cambia entra con su delta desde la
+        acreditación; lo pendiente sin cambios entra con su contenido desde
+        merge_base. Ninguno paga el diff histórico del PR."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            base = commit(repo, "base")
+            (repo / "a.py").write_text("".join(lineas(200, "a_")))
+            (repo / "b.py").write_text("b = 1\n")
+            prev = commit(repo, "prev")
+            with (repo / "a.py").open("a") as fh:
+                fh.write("a_correccion = 1\n")
+            (repo / "z.py").write_text("z = 1\n")
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest, completion=domain.PARTIAL),
+                policy,
+                cobertura_previa={
+                    "a.py": git(repo, "rev-parse", f"{prev}:a.py")
+                },
+            )
+            self.assertEqual(result.modo, "continuation")
+            self.assertEqual(
+                sorted(p.text for p in result.entregados), ["a.py", "b.py", "z.py"]
+            )
+            self.assertIn("a_correccion = 1", result.partes["a.py"])
+            self.assertNotIn("a_0 = 0", result.partes["a.py"])
+            self.assertIn("b = 1", result.partes["b.py"])
+            self.assertNotIn("a_0 = 0", result.partes["b.py"])
+
+
 class SelectiveContext(unittest.TestCase):
     def test_prefers_direct_callers_and_tests(self):
         with tempfile.TemporaryDirectory() as tmp:

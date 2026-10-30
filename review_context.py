@@ -979,12 +979,14 @@ def prepare_review(
 
     presupuesto = policy.diff_max_bytes
     entregados, usados, partes, over_budget = [], 0, {}, 0
-    # En incremental el contenido de cada archivo es su delta desde la
-    # revisión anterior; el tramo merge_base..previous_head ya lo revisó esa
-    # pasada y reenviarlo consume el presupuesto de la corrección. Un archivo
-    # nuevo desde previous_head llega completo: su delta ya es el archivo.
-    origen = previous_head if modo == "incremental" else merge_base
+    # El contenido de cada archivo es su delta desde la acreditación previa
+    # cuando cambió desde previous_head (incremental y continuación): el
+    # tramo ya revisado no vuelve a consumir el presupuesto de la corrección.
+    # Lo pendiente que no cambió desde previous_head llega desde merge_base:
+    # la continuación lo trae porque su contenido previo nunca se revisó.
+    delta_set = set(delta_rutas)
     for ruta in sorted(a_revisar, key=lambda r: (priority(r), r)):
+        origen = previous_head if modo != "full" and ruta in delta_set else merge_base
         crudo = repo.diff_bytes(origen, head, ruta)
         try:
             chunk = crudo.decode("utf-8")
