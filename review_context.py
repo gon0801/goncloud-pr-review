@@ -959,9 +959,7 @@ def prepare_review(
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
         # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
-        # acreditación fina que conservar y el alcance es solo el delta. Un
-        # borrado (blob None) es pendiente salvo que ya esté acreditado con
-        # el centinela del libro.
+        # acreditación fina que conservar y el alcance es solo el delta.
         previa = cobertura_previa or {}
         candidatas = list(delta_rutas)
         if previa:

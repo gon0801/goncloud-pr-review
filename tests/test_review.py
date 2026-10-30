@@ -5702,10 +5702,6 @@ class ReviewContinuity(unittest.TestCase):
             self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
 
     def test_base_solicitada_estable_no_fuerza_full(self):
-        """La revisión persistida lleva la base SOLICITADA (tip de BASE_SHA),
-        no el merge-base: si la rama base avanzó sola, la corrección pequeña
-        con la misma base solicitada sigue incremental en vez de volver a un
-        full con el diff histórico (hallazgo base_estable de la ronda 2)."""
         import review_domain as domain
 
         fixture = IncrementalPrepare()

@@ -1330,10 +1330,6 @@ def cmd_prepare(args):
             command_cursor=0,
         )
     if mode in ("incremental", "continuation") and current.revision is not None:
-        # La política distinta invalida la identidad de la cobertura: full.
-        # El movimiento de base no la invalida: el libro acredita blobs, que
-        # siguen siendo los revisados, y prepare acota el alcance por esa
-        # cobertura; el motivo documenta el movimiento.
         if current.revision.policy_digest != digest:
             mode, reason = "full", "política: el digest previo difiere"
         elif current.revision.base_sha != base:

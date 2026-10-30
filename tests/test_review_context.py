@@ -252,8 +252,7 @@ class IncrementalContext(unittest.TestCase):
                     self.assertEqual(result.modo, modo_esperado)
                     self.assertIn(rastro, result.motivo)
                     if nombre == "base":
-                        # Movimiento de base documentado, no full: el libro
-                        # acredita blobs y el alcance se acota por cobertura.
+                        # El motivo documenta el movimiento en vez de forzar full.
                         self.assertNotIn("rebase", result.motivo)
                     if conserva_delta:
                         self.assertTrue(result.hechos.delta_calculado)
@@ -263,9 +262,7 @@ class IncrementalContext(unittest.TestCase):
                         )
 
     def test_base_movement_scopes_by_valid_coverage(self):
-        """Retarget del PR a una base anterior: lo acreditado sin cambios sale
-        del alcance, lo nunca acreditado del PR entra con diff desde
-        merge_base y lo cambiado desde la acreditación entra con su delta."""
+        """El alcance del cambio de base se acota por la cobertura válida del libro."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
             (repo / "readme.md").write_text("# proyecto\n")
@@ -474,9 +471,7 @@ def hacer_repo_selectivo(tmp):
 
 class ContinuationContext(unittest.TestCase):
     def test_continuacion_mide_desde_la_acreditacion_previa(self):
-        """Un archivo acreditado que cambia entra con su delta desde la
-        acreditación; lo pendiente sin cambios entra con su contenido desde
-        merge_base. Ninguno paga el diff histórico del PR."""
+        """Ningún archivo vuelve a pagar el diff histórico del PR."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
             (repo / "readme.md").write_text("# proyecto\n")
