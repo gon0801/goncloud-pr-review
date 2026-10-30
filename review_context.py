@@ -954,13 +954,13 @@ def prepare_review(
             omisiones.append(Omission(ruta=diagnostico, causa="encoding"))
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
+    previa = cobertura_previa or {}
     if modo in ("incremental", "continuation"):
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
         # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
         # acreditación fina que conservar y el alcance es solo el delta.
-        previa = cobertura_previa or {}
         candidatas = list(delta_rutas)
         if previa:
             vistas = set(candidatas)
@@ -989,14 +989,18 @@ def prepare_review(
 
     presupuesto = policy.diff_max_bytes
     entregados, usados, partes, over_budget = [], 0, {}, 0
-    # El contenido de cada archivo es su delta desde la acreditación previa
-    # cuando cambió desde previous_head (incremental y continuación): el
-    # tramo ya revisado no vuelve a consumir el presupuesto de la corrección.
-    # Lo pendiente que no cambió desde previous_head llega desde merge_base:
-    # la continuación lo trae porque su contenido previo nunca se revisó.
+    # El delta desde previous_head solo lo paga la ruta que el libro acredita:
+    # su tramo merge_base..previous_head ya lo revisó la pasada que la acreditó
+    # y solo prev..head es nuevo. La ruta del delta ausente del libro llega
+    # desde merge_base: ese contenido nunca se revisó, aunque haya cambiado
+    # desde previous_head. En un archivo nuevo ambos orígenes dan lo mismo.
     delta_set = set(delta_rutas)
     for ruta in sorted(a_revisar, key=lambda r: (priority(r), r)):
-        origen = previous_head if modo != "full" and ruta in delta_set else merge_base
+        origen = (
+            previous_head
+            if modo != "full" and ruta in delta_set and ruta in previa
+            else merge_base
+        )
         crudo = repo.diff_bytes(origen, head, ruta)
         try:
             chunk = crudo.decode("utf-8")

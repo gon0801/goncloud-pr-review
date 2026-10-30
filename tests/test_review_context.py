@@ -503,6 +503,44 @@ class ContinuationContext(unittest.TestCase):
             self.assertIn("b = 1", result.partes["b.py"])
             self.assertNotIn("a_0 = 0", result.partes["b.py"])
 
+    def test_pendiente_cambiado_llega_desde_la_base(self):
+        """Lo pendiente nunca acreditado que cambió entrega su tramo completo.
+
+        b.py entró al PR antes de la parcial, el libro solo acreditó a.py y
+        head vuelve a tocar b.py: su tramo base..prev jamás fue revisado, así
+        que llega desde merge_base y no como delta desde previous_head.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            (repo / "a.py").write_text("a = 2\n")
+            (repo / "b.py").write_text("".join(lineas(200, "b_")))
+            prev = commit(repo, "a acreditado, b pendiente")
+            with (repo / "a.py").open("a") as fh:
+                fh.write("a_correccion = 1\n")
+            with (repo / "b.py").open("a") as fh:
+                fh.write("b_correccion = 1\n")
+            head = commit(repo, "b cambia de nuevo")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest, completion=domain.PARTIAL),
+                policy,
+                cobertura_previa={
+                    "a.py": git(repo, "rev-parse", f"{prev}:a.py")
+                },
+            )
+            self.assertEqual(result.modo, "continuation")
+            self.assertEqual(
+                sorted(p.text for p in result.entregados), ["a.py", "b.py"]
+            )
+            self.assertIn("b_correccion = 1", result.partes["b.py"])
+            self.assertIn("b_0 = 0", result.partes["b.py"])
+            self.assertIn("b_199 = 199", result.partes["b.py"])
+
 
 class SelectiveContext(unittest.TestCase):
     def test_prefers_direct_callers_and_tests(self):
