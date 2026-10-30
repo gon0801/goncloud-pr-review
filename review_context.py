@@ -955,12 +955,21 @@ def prepare_review(
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
     previa = cobertura_previa or {}
+    revision_previa = current.revision if current is not None else None
+    base_movida = bool(
+        revision_previa
+        and revision_previa.base_sha
+        and revision_previa.base_sha != base
+        and previous_head
+    )
     if modo in ("incremental", "continuation"):
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
         # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
         # acreditación fina que conservar y el alcance es solo el delta.
+        # Mover la base puede meter en una ruta acreditada un tramo que antes
+        # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
         candidatas = list(delta_rutas)
         if previa:
             vistas = set(candidatas)
@@ -972,6 +981,22 @@ def prepare_review(
                     if previa.get(ruta) != LIBRO_BORRADO:
                         candidatas.append(ruta)
                 elif blob != previa.get(ruta):
+                    candidatas.append(ruta)
+            if base_movida:
+                for ruta in historicas:
+                    if ruta in candidatas or ruta not in previa:
+                        continue
+                    if repo.diff_bytes(
+                        revision_previa.base_sha, previous_head, ruta
+                    ) != repo.diff_bytes(merge_base, head, ruta):
+                        candidatas.append(ruta)
+        elif base_movida:
+            viejas = {
+                path.text
+                for path in repo.changed_files(revision_previa.base_sha, previous_head)
+            }
+            for ruta in historicas:
+                if ruta not in candidatas and ruta not in viejas:
                     candidatas.append(ruta)
         rutas_plan = list(candidatas)
     else:
