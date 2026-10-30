@@ -996,7 +996,11 @@ def prepare_review(
                 for path in repo.changed_files(revision_previa.base_sha, previous_head)
             }
             for ruta in historicas:
-                if ruta not in candidatas and ruta not in viejas:
+                if ruta in candidatas:
+                    continue
+                if ruta not in viejas or repo.diff_bytes(
+                    revision_previa.base_sha, previous_head, ruta
+                ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)
         rutas_plan = list(candidatas)
     else:
@@ -1021,11 +1025,15 @@ def prepare_review(
     # desde previous_head. En un archivo nuevo ambos orígenes dan lo mismo.
     delta_set = set(delta_rutas)
     for ruta in sorted(a_revisar, key=lambda r: (priority(r), r)):
-        origen = (
-            previous_head
-            if modo != "full" and ruta in delta_set and ruta in previa
-            else merge_base
-        )
+        # previous_head solo si el tramo ya acreditado sigue siendo el mismo
+        # contra la base nueva. Si el cambio de base metió contenido que la
+        # pasada anterior no vio, el origen es la base actual del PR.
+        acreditado = modo != "full" and ruta in delta_set and ruta in previa
+        if acreditado and base_movida and repo.diff_bytes(
+            revision_previa.base_sha, previous_head, ruta
+        ) != repo.diff_bytes(merge_base, previous_head, ruta):
+            acreditado = False
+        origen = previous_head if acreditado else merge_base
         crudo = repo.diff_bytes(origen, head, ruta)
         try:
             chunk = crudo.decode("utf-8")
