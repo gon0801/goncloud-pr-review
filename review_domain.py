@@ -514,10 +514,21 @@ def parse_model_findings(text, *, conservar_anclas=False):
     if found is None:
         return None
     start, end, data, _ = found
-    load = _classify_block(data, text[start:end], conservar_anclas)
+    aceptadas, rechazadas = [], []
+    for i, entrada in enumerate(data["findings"]):
+        observacion = observation_de_entrada(entrada)
+        if isinstance(observacion, ObservationRejected):
+            rechazadas.append((i, observacion.motivo))
+        else:
+            aceptadas.append(entrada)
+    load = _classify_block(
+        {**data, "findings": aceptadas}, text[start:end], conservar_anclas
+    )
     if not isinstance(load, Legacy):
         return None
     state = load.raw
+    if rechazadas:
+        state["rechazadas_forma"] = tuple(rechazadas)
     for finding in state["findings"]:
         if finding["state"] == DISMISSED:
             finding["state"] = OPEN
@@ -1737,7 +1748,20 @@ def observation_de_entrada(entry):
     severidad se normaliza al aceptar. Sin ancla declarada, la ubicación es
     la legada (ruta y línea del propio hallazgo).
     """
+    if not isinstance(entry, dict):
+        return ObservationRejected(motivo="hallazgo sin estructura válida")
+    if sanitize_finding(entry, allow_dismissed=True) is None:
+        return ObservationRejected(motivo="hallazgo sin archivo o título")
+    for campo in ("related_anchors", "evidence"):
+        valor = entry.get(campo)
+        if valor is not None and not isinstance(valor, (list, tuple)):
+            return ObservationRejected(motivo=f"{campo} debe ser una lista")
+    valida, linea = _linea_legada(entry.get("line"))
+    if not valida:
+        return ObservationRejected(motivo=f"línea inválida {linea!r}")
     ancla = entry.get("anchor")
+    if ancla is not None and not isinstance(ancla, dict):
+        return ObservationRejected(motivo="ancla primaria sin estructura válida")
     if isinstance(ancla, dict) and ancla.get("blob_sha"):
         rango = ancla.get("range")
         if not _rango_valido(rango):
@@ -1759,9 +1783,6 @@ def observation_de_entrada(entry):
             )
         primaria = AnchorLegacy(path=str(ancla.get("path") or ""), line=linea)
     else:
-        valida, linea = _linea_legada(entry.get("line"))
-        if not valida:
-            return ObservationRejected(motivo=f"línea inválida {linea!r}")
         primaria = AnchorLegacy(path=str(entry.get("file") or ""), line=linea)
     relacionadas = []
     for a in entry.get("related_anchors", []) or []:

@@ -5338,6 +5338,111 @@ class ReviewContinuity(unittest.TestCase):
             review.cmd_gate(argparse.Namespace(work=str(work)))
         return json.loads((work / "prev.json").read_text()), output.call_args.args
 
+    def test_observacion_invalida_no_resuelve_F1_ni_acredita_cobertura(self):
+        import review_domain as domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work, base, prev, head = IncrementalPrepare().make_repo(tmp)
+            anterior = make_finding("F1", file="other.py", title="Hallazgo previo")
+            valida = make_finding("F-new", file="other.py", title="Hallazgo válido")
+            libro_previo = {"app.py": git(repo, "rev-parse", f"{prev}:app.py")}
+            cuerpo_previo = "\n".join(
+                [
+                    review.MARKER,
+                    f"{review.SHA_PREFIX}{prev} -->",
+                    f"{review.COMPLETION_PREFIX}{prev}:partial -->",
+                    review.libro_a_linea(prev, libro_previo),
+                    block_of(anterior),
+                ]
+            )
+            manifest = dict(
+                base=base, head=head, prev_sha=prev, mode="incremental",
+                reviewed=["other.py"], excluded=[], changed_files=["other.py"],
+            )
+            casos = (
+                {"related_anchors": 1},
+                {"evidence": 1},
+                {"line": -1},
+                {"anchor": {"blob_sha": "a" * 40, "range": [1]}},
+                {"title": ""},
+            )
+            for via in ("publish", "worker"):
+                for defecto in casos:
+                    with self.subTest(via=via, defecto=defecto), contextlib.chdir(repo):
+                        invalida = dict(anterior, state="resolved", **defecto)
+                        resultado = {
+                            "result": block_of(invalida, valida) + "\nCOVERAGE: complete",
+                            "subtype": "success",
+                        }
+                        with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "current"}):
+                            if via == "publish":
+                                cuerpo = self.publish(
+                                    work, head, manifest, resultado, cuerpo_previo, repo=repo
+                                )
+                            else:
+                                work.mkdir(exist_ok=True)
+                                policy = review.politica_de_revision()
+                                revision = domain.Revision(
+                                    base_sha=base, head_sha=head,
+                                    policy_digest=review.digest_de_politica(policy),
+                                )
+                                solicitud = domain.WorkRequest(
+                                    id=1, kind="review", target={
+                                        "head_sha": head, "base_sha": base,
+                                        "policy_digest": revision.policy_digest,
+                                    },
+                                )
+                                (work / "request-package.json").write_text(json.dumps({
+                                    "request_id": 1, "run_id": 11, "attempt": 1,
+                                    "finding_identity": "current", "pr_head_sha": head,
+                                    "policy_digest": revision.policy_digest,
+                                }))
+                                (work / "prev.json").write_text(json.dumps({"covered": libro_previo}))
+                                (work / "manifest.json").write_text(json.dumps(manifest))
+                                (work / "result.json").write_text(json.dumps(resultado))
+                                with contextlib.redirect_stdout(io.StringIO()):
+                                    review.cmd_close_result(argparse.Namespace(work=str(work)))
+                                artifact = json.loads((work / "result.json").read_text())
+                                self.assertFalse(artifact["model_ok"])
+                                self.assertEqual(artifact["cobertura"], domain.PARTIAL)
+                                self.assertEqual(artifact["covered"], libro_previo)
+                                self.assertEqual([f["title"] for f in artifact["observaciones"]], ["Hallazgo válido"])
+                                artifact.update(
+                                    model_ok=True, cobertura=domain.COMPLETE_CLAIM,
+                                    observaciones=domain.legacy_raw_of({"findings": [invalida, valida]})["findings"],
+                                )
+                                autenticado = review.authenticate_result(
+                                    dict(repository="o/r", workflow="ai-review-worker", ref="main",
+                                         sha="f" * 40, run_id=11, attempt=1),
+                                    artifact,
+                                    review.request_de_solicitud(solicitud, repository="o/r", ref="main", workflow_sha="f" * 40),
+                                )
+                                current = replace(
+                                    domain.snapshot_a_v3(domain.read_snapshot(cuerpo_previo).snapshot),
+                                    revision=revision, pending_requests=[solicitud], request_count=1,
+                                )
+                                decision = domain.reconcile(
+                                    current,
+                                    domain.ReportReady(
+                                        origin=domain.Origin(kind="re-run", run_id=11),
+                                        request_id=1, run_id=11, attempt=1,
+                                        observaciones=tuple(domain.observation_de_entrada(e) for e in autenticado.observaciones),
+                                        cobertura=autenticado.cobertura,
+                                    ),
+                                    domain.RepositoryFacts(revision=revision, changed_paths=("other.py",), delta_calculado=True),
+                                    policy,
+                                )
+                                cuerpo = review.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
+                                    domain.encode_snapshot(decision.snapshot).block, cuerpo_previo
+                                )
+                        self.assertEqual(review.reviewed_completion(cuerpo), "partial")
+                        self.assertEqual(review.libro_de(cuerpo)[1], libro_previo)
+                        findings = domain.estado_legado_de_memoria(cuerpo)["findings"]
+                        self.assertEqual([(f["id"], f["title"], f["state"]) for f in findings], [
+                            ("F1", "Hallazgo previo", "open"),
+                            ("F2", "Hallazgo válido", "open"),
+                        ])
+
     def test_el_gate_lee_la_memoria_schema3_del_coordinador(self):
         """F2 de #86: tras el retorno, el gate no entendía la memoria v3 y el
         modelo revisaba sin los hallazgos previos ("Sin hallazgos previos")."""
