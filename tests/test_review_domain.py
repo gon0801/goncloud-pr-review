@@ -3181,7 +3181,7 @@ class ReportBoundary(unittest.TestCase):
             self._snapshot_v2([]), domain.ReviewPlan(), report
         )
         self.assertIsInstance(transicion, domain.Replace)
-        self.assertEqual(transicion.snapshot.completion, domain.UNKNOWN)
+        self.assertEqual(transicion.snapshot.completion, domain.PARTIAL)
         self.assertEqual(transicion.snapshot.findings, [])
 
     def test_resolucion_por_reversion_exacta(self):

@@ -26,7 +26,6 @@ Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_fo
 
 ```bash
 scripts/set-secret.sh gon0801/mi-repo          # pide la key una vez, sin eco
-SECRET_NAME=DEEPSEEK_API_KEY scripts/set-secret.sh gon0801/mi-repo  # llave de respaldo
 scripts/install.sh gon0801/mi-repo             # abre el PR con el workflow
 EXCLUDE=$'data/**\nout/**' scripts/install.sh gon0801/mi-repo   # con exclusiones extra
 ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado (en vez de @main)
@@ -50,7 +49,7 @@ merge), el instalador primero fusiona la rama por defecto en ella sin forzar.
 Si esa fusión tiene conflicto (HTTP 409) o falla por otra causa, sale con
 error sin publicar nada.
 
-`AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración, `DEEPSEEK_API_KEY` guarda la llave de la API directa de DeepSeek y la plantilla la pasa como respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal, hay que sustituir también `fallback_api_key` por `${{ secrets.OPENCODE_GO_API_KEY }}` y guardar allí una llave de OpenCode Go.
+`AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración la suscripción es la única vía: ningún fallo del proveedor cambia a la API de pago y no se configura llave de respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal (pagando por uso), se usa esa llave como `AI_REVIEW_API_KEY` y, para conservar el respaldo en sentido contrario (hacia la suscripción), `fallback_api_key` con una llave de OpenCode Go.
 
 ## Operación
 
@@ -65,7 +64,7 @@ error sin publicar nada.
 
 ## Proveedor y costo
 
-**Principal: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Si OpenCode no completa la revisión por cuota o saldo, proxy, historial `reasoning_content`, tiempo límite o caída, y `DEEPSEEK_API_KEY` está configurado, la revisión comienza de nuevo con la API directa de DeepSeek. El comentario identifica el proveedor que completó la revisión. Si falta la llave de respaldo, no queda tiempo para el respaldo o los dos proveedores fallan, el check queda en verde con un aviso amarillo sin marcar el commit como revisado.
+**Principal: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Si OpenCode no completa la revisión por cuota o saldo, proxy, historial `reasoning_content`, tiempo límite, saturación o caída, la revisión queda pendiente con su causa en un aviso amarillo, sin marcar el commit como revisado: la suscripción es la única vía y ningún fallo despacha la API de pago. La saturación y los fallos pasajeros se recuperan con el siguiente push o re-run.
 
 **Alternativa: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal:
 

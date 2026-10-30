@@ -213,7 +213,7 @@ class IncrementalContext(unittest.TestCase):
             self.assertEqual(set(result.plan.changed_paths), {"m.py"})
             self.assertEqual(set(result.hechos.changed_paths), {"m.py"})
 
-    def test_full_mode_forces_and_keeps_real_delta(self):
+    def test_mode_forcing_keeps_the_real_delta(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
             (repo / "app.py").write_text("v1\n")
@@ -230,17 +230,18 @@ class IncrementalContext(unittest.TestCase):
             policy = domain.ReviewPolicy(diff_mode="incremental")
             digest = digest_de_politica(policy)
             casos = {
-                "rebase": (memoria(huerfana, base, digest), "rebase", False),
-                "base": (memoria(prev, prev, digest), "base", True),
-                "política": (memoria(prev, base, "f" * 64), "política", True),
-                "memoria": (memoria_vacia(), "memoria", False),
+                "rebase": (memoria(huerfana, base, digest), "rebase", "full", False),
+                "base": (memoria(prev, prev, digest), "base", "incremental", True),
+                "política": (memoria(prev, base, "f" * 64), "política", "full", True),
+                "memoria": (memoria_vacia(), "memoria", "full", False),
                 "cobertura": (
                     memoria(prev, base, digest, completion=domain.PARTIAL),
                     "cobertura",
+                    "full",
                     True,
                 ),
             }
-            for nombre, (actual, rastro, conserva_delta) in casos.items():
+            for nombre, (actual, rastro, modo_esperado, conserva_delta) in casos.items():
                 with self.subTest(caso=nombre):
                     result = prepare_review(
                         GitRepository(repo),
@@ -248,9 +249,10 @@ class IncrementalContext(unittest.TestCase):
                         actual,
                         policy,
                     )
-                    self.assertEqual(result.modo, "full")
+                    self.assertEqual(result.modo, modo_esperado)
                     self.assertIn(rastro, result.motivo)
                     if nombre == "base":
+                        # El motivo documenta el movimiento en vez de forzar full.
                         self.assertNotIn("rebase", result.motivo)
                     if conserva_delta:
                         self.assertTrue(result.hechos.delta_calculado)
@@ -258,6 +260,40 @@ class IncrementalContext(unittest.TestCase):
                             set(result.hechos.changed_paths),
                             {"app.py", "other.py"},
                         )
+
+    def test_base_movement_scopes_by_valid_coverage(self):
+        """El alcance del cambio de base se acota por la cobertura válida del libro."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            raiz = commit(repo, "raíz")
+            (repo / "z_antecesor.py").write_text("antecesor = 1\n")
+            base_vieja = commit(repo, "base vieja")
+            (repo / "a.py").write_text("".join(lineas(200, "a_")))
+            prev = commit(repo, "prev")
+            (repo / "y_correccion.py").write_text("y = 1\n")
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, raiz, digest),
+                memoria(prev, base_vieja, digest),
+                policy,
+                cobertura_previa={
+                    "a.py": git(repo, "rev-parse", f"{prev}:a.py")
+                },
+            )
+            self.assertEqual(result.modo, "incremental")
+            self.assertIn("base", result.motivo)
+            self.assertNotIn("rebase", result.motivo)
+            self.assertEqual(
+                sorted(p.text for p in result.entregados),
+                ["y_correccion.py", "z_antecesor.py"],
+            )
+            self.assertIn("antecesor = 1", result.partes["z_antecesor.py"])
+            self.assertNotIn("a_0 = 0", result.partes["y_correccion.py"])
+            self.assertEqual(result.hechos.changed_paths, ("y_correccion.py",))
 
     def test_strict_budget_leaves_obligation_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,6 +467,79 @@ def hacer_repo_selectivo(tmp):
     )
     head = commit(repo, "head")
     return repo, base, prev, head
+
+
+class ContinuationContext(unittest.TestCase):
+    def test_continuacion_mide_desde_la_acreditacion_previa(self):
+        """Ningún archivo vuelve a pagar el diff histórico del PR."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "readme.md").write_text("# proyecto\n")
+            base = commit(repo, "base")
+            (repo / "a.py").write_text("".join(lineas(200, "a_")))
+            (repo / "b.py").write_text("b = 1\n")
+            prev = commit(repo, "prev")
+            with (repo / "a.py").open("a") as fh:
+                fh.write("a_correccion = 1\n")
+            (repo / "z.py").write_text("z = 1\n")
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest, completion=domain.PARTIAL),
+                policy,
+                cobertura_previa={
+                    "a.py": git(repo, "rev-parse", f"{prev}:a.py")
+                },
+            )
+            self.assertEqual(result.modo, "continuation")
+            self.assertEqual(
+                sorted(p.text for p in result.entregados), ["a.py", "b.py", "z.py"]
+            )
+            self.assertIn("a_correccion = 1", result.partes["a.py"])
+            self.assertNotIn("a_0 = 0", result.partes["a.py"])
+            self.assertIn("b = 1", result.partes["b.py"])
+            self.assertNotIn("a_0 = 0", result.partes["b.py"])
+
+    def test_pendiente_cambiado_llega_desde_la_base(self):
+        """Lo pendiente nunca acreditado que cambió entrega su tramo completo.
+
+        b.py entró al PR antes de la parcial, el libro solo acreditó a.py y
+        head vuelve a tocar b.py: su tramo base..prev jamás fue revisado, así
+        que llega desde merge_base y no como delta desde previous_head.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            (repo / "a.py").write_text("a = 2\n")
+            (repo / "b.py").write_text("".join(lineas(200, "b_")))
+            prev = commit(repo, "a acreditado, b pendiente")
+            with (repo / "a.py").open("a") as fh:
+                fh.write("a_correccion = 1\n")
+            with (repo / "b.py").open("a") as fh:
+                fh.write("b_correccion = 1\n")
+            head = commit(repo, "b cambia de nuevo")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest, completion=domain.PARTIAL),
+                policy,
+                cobertura_previa={
+                    "a.py": git(repo, "rev-parse", f"{prev}:a.py")
+                },
+            )
+            self.assertEqual(result.modo, "continuation")
+            self.assertEqual(
+                sorted(p.text for p in result.entregados), ["a.py", "b.py"]
+            )
+            self.assertIn("b_correccion = 1", result.partes["b.py"])
+            self.assertIn("b_0 = 0", result.partes["b.py"])
+            self.assertIn("b_199 = 199", result.partes["b.py"])
 
 
 class SelectiveContext(unittest.TestCase):

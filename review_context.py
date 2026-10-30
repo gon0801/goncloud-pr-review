@@ -393,7 +393,23 @@ def resolve_max_turns(manifest, work):
 
 
 def digest_de_politica(policy):
-    canon = json.dumps(sorted(dataclasses.asdict(policy).items()), sort_keys=True)
+    """Digest de la política que decide si la cobertura previa sigue válida.
+
+    Quedan fuera las perillas de una corrida concreta (`diff_mode`,
+    `diff_max_bytes`, `strict_budget`, `exclude_patterns`): cambiar el techo
+    de difusión, las exclusiones extra o la etiqueta de modo de una pasada no
+    cambia lo que significa la cobertura que esa pasada dejó registrada, y el
+    digest publicado lleva el modo de SU corrida y nunca sus exclusiones de
+    entorno. Lo que sí invalida la cobertura (identidad, reglas, schema)
+    entra completo.
+    """
+    campos = {
+        campo: valor
+        for campo, valor in dataclasses.asdict(policy).items()
+        if campo
+        not in ("diff_mode", "diff_max_bytes", "strict_budget", "exclude_patterns")
+    }
+    canon = json.dumps(sorted(campos.items()), sort_keys=True)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
@@ -707,32 +723,39 @@ def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
     """(modo, motivo, previous_head) según la memoria y el target (D0).
 
     Incremental exige revisión previa completa, head distinto y ancestro,
-    y la misma base y política con que se creó la memoria. Una parcial con
-    libro de cobertura continúa donde el libro quedó.
+    y la misma política con que se creó la memoria. Una parcial con
+    libro de cobertura continúa donde el libro quedó. Un movimiento de
+    base no invalida la cobertura: el libro acredita blobs, que siguen
+    siendo los revisados, y el motivo lo documenta mientras prepare acota
+    el alcance por esa cobertura. La política distinta sí fuerza full:
+    cambia la identidad de las reglas que acreditó la pasada.
     """
     revision = current.revision if current is not None else None
     if revision is None or not revision.head_sha:
         return "full", "memoria: no hay revisión previa registrada", None
     previous_head = revision.head_sha
+    motivo_base = (
+        "base: la base previa difiere de la solicitada; "
+        "el alcance se acota por la cobertura válida"
+        if revision.base_sha != base_sha
+        else ""
+    )
     if not is_complete(current.completion):
         if (
             current.completion == PARTIAL
             and cobertura_previa
-            and revision.base_sha == base_sha
             and revision.policy_digest == digest
         ):
             modo, motivo = decide_mode(repo, previous_head, head)
             if modo == "incremental" or motivo == "same-sha":
-                return "continuation", "", previous_head
+                return "continuation", motivo_base, previous_head
         return "full", "cobertura: la revisión previa no fue completa", previous_head
     modo, motivo = decide_mode(repo, previous_head, head)
     if modo == "full":
         return modo, motivo, previous_head
-    if revision.base_sha != base_sha:
-        return "full", "base: la base previa difiere de la solicitada", previous_head
     if revision.policy_digest != digest:
         return "full", "política: el digest previo difiere", previous_head
-    return "incremental", "", previous_head
+    return "incremental", motivo_base, previous_head
 
 
 def rutas_abiertas(current):
@@ -931,22 +954,54 @@ def prepare_review(
             omisiones.append(Omission(ruta=diagnostico, causa="encoding"))
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
-    if modo == "incremental":
-        rutas_plan = list(delta_rutas)
-        candidatas = delta_rutas
-    elif modo == "continuation":
-        # Alcance de la continuación: lo pendiente del libro más lo que cambió.
-        # Un borrado (blob None) es pendiente salvo que ya esté acreditado
-        # con el centinela del libro.
-        previa = cobertura_previa or {}
-        candidatas = []
-        for ruta in historicas:
-            blob = repo.blob_at(head, ruta)
-            if blob is None:
-                if previa.get(ruta) != LIBRO_BORRADO:
+    previa = cobertura_previa or {}
+    revision_previa = current.revision if current is not None else None
+    base_movida = bool(
+        revision_previa
+        and revision_previa.base_sha
+        and revision_previa.base_sha != base
+        and previous_head
+    )
+    if modo in ("incremental", "continuation"):
+        # Alcance acotado por la cobertura válida del libro: el delta real
+        # desde la acreditación más lo del alcance del PR que el libro no
+        # acredita contra head. Acreditado y sin cambios queda fuera: ese
+        # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
+        # acreditación fina que conservar y el alcance es solo el delta.
+        # Mover la base puede meter en una ruta acreditada un tramo que antes
+        # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
+        candidatas = list(delta_rutas)
+        if previa:
+            vistas = set(candidatas)
+            for ruta in historicas:
+                if ruta in vistas:
+                    continue
+                blob = repo.blob_at(head, ruta)
+                if blob is None:
+                    if previa.get(ruta) != LIBRO_BORRADO:
+                        candidatas.append(ruta)
+                elif blob != previa.get(ruta):
                     candidatas.append(ruta)
-            elif blob != previa.get(ruta):
-                candidatas.append(ruta)
+            if base_movida:
+                for ruta in historicas:
+                    if ruta in candidatas or ruta not in previa:
+                        continue
+                    if repo.diff_bytes(
+                        revision_previa.base_sha, previous_head, ruta
+                    ) != repo.diff_bytes(merge_base, head, ruta):
+                        candidatas.append(ruta)
+        elif base_movida:
+            viejas = {
+                path.text
+                for path in repo.changed_files(revision_previa.base_sha, previous_head)
+            }
+            for ruta in historicas:
+                if ruta in candidatas:
+                    continue
+                if ruta not in viejas or repo.diff_bytes(
+                    revision_previa.base_sha, previous_head, ruta
+                ) != repo.diff_bytes(merge_base, head, ruta):
+                    candidatas.append(ruta)
         rutas_plan = list(candidatas)
     else:
         rutas_plan = historicas
@@ -963,8 +1018,23 @@ def prepare_review(
 
     presupuesto = policy.diff_max_bytes
     entregados, usados, partes, over_budget = [], 0, {}, 0
+    # El delta desde previous_head solo lo paga la ruta que el libro acredita:
+    # su tramo merge_base..previous_head ya lo revisó la pasada que la acreditó
+    # y solo prev..head es nuevo. La ruta del delta ausente del libro llega
+    # desde merge_base: ese contenido nunca se revisó, aunque haya cambiado
+    # desde previous_head. En un archivo nuevo ambos orígenes dan lo mismo.
+    delta_set = set(delta_rutas)
     for ruta in sorted(a_revisar, key=lambda r: (priority(r), r)):
-        crudo = repo.diff_bytes(merge_base, head, ruta)
+        # previous_head solo si el tramo ya acreditado sigue siendo el mismo
+        # contra la base nueva. Si el cambio de base metió contenido que la
+        # pasada anterior no vio, el origen es la base actual del PR.
+        acreditado = modo != "full" and ruta in delta_set and ruta in previa
+        if acreditado and base_movida and repo.diff_bytes(
+            revision_previa.base_sha, previous_head, ruta
+        ) != repo.diff_bytes(merge_base, previous_head, ruta):
+            acreditado = False
+        origen = previous_head if acreditado else merge_base
+        crudo = repo.diff_bytes(origen, head, ruta)
         try:
             chunk = crudo.decode("utf-8")
         except UnicodeDecodeError:

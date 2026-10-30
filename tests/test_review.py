@@ -327,29 +327,26 @@ class Prepare(unittest.TestCase):
         )
         return work, previo
 
-    def test_prev_usable_forces_full_review(self):
+    def test_prev_usable_revisa_el_delta(self):
         with tempfile.TemporaryDirectory() as tmp:
             work, previo = self.preparar_lineal(
                 tmp,
                 [{"id": "F1", "file": "previo.py", "severity": "Low"}],
             )
             manifest = json.loads((work / "manifest.json").read_text())
-            self.assertEqual(manifest["mode"], "full")
-            self.assertEqual(manifest["reason"], "forced-full-t16")
+            self.assertEqual(manifest["mode"], "incremental")
+            self.assertEqual(manifest["reason"], "")
             self.assertEqual(manifest["prev_sha"], previo)
 
-    def test_prev_usable_reviews_whole_pr_so_blocks_cannot_be_lost(self):
+    def test_prev_usable_revisa_solo_el_delta_y_conserva_hallazgos(self):
         with tempfile.TemporaryDirectory() as tmp:
             work, previo = self.preparar_lineal(
                 tmp,
                 [{"id": "F1", "file": "previo.py", "severity": "Low"}],
             )
             manifest = json.loads((work / "manifest.json").read_text())
-            # Todo el diff del PR (base..cabeza), no solo el delta del ultimo
-            # push (cabeza.py): sin memoria que achique el alcance, los bloques
-            # de hallazgos no pueden perderse por el camino de la memoria.
-            self.assertEqual(sorted(manifest["reviewed"]), ["cabeza.py", "previo.py"])
-            self.assertNotEqual(manifest["mode"], "incremental")
+            self.assertEqual(manifest["mode"], "incremental")
+            self.assertEqual(sorted(manifest["changed_files"]), ["cabeza.py"])
 
 
 FAKE_GH = textwrap.dedent("""\
@@ -992,7 +989,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
 
-    def test_persistent_opencode_replay_error_switches_to_deepseek(self):
+    def test_persistent_opencode_replay_error_stays_on_the_subscription(self):
         error = ReasoningReplayRecovery.replay_error
         proc, calls, result, _, _ = self.run_agent(
             None,
@@ -1003,17 +1000,19 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             [c["ANTHROPIC_MODEL"] for c in calls],
-            ["deepseek-v4.1-flash", "deepseek-v4.1-flash", "deepseek-flash[1m]"],
+            ["deepseek-v4.1-flash", "deepseek-v4.1-flash"],
         )
-        self.assertEqual(calls[2]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
-        self.assertIn(
-            "ai-review: opencode-go rechazó el historial de razonamiento de la "
-            "conversación (reasoning_content); se cambia a deepseek",
-            proc.stdout,
+        self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
+        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
 
-    def test_primary_timeout_switches_to_the_other_provider_when_time_remains(self):
+    def test_primary_timeout_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1022,15 +1021,19 @@ class RunAgent(unittest.TestCase):
             ATTEMPT_TIMEOUT="1",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual([c["ANTHROPIC_MODEL"] for c in calls], ["deepseek-flash[1m]"])
-        self.assertIn(
-            "ai-review: la revisión con opencode-go excedió el tiempo límite de 1 s; "
-            "se cambia a deepseek",
-            proc.stdout,
+        # El intento que expira muere antes de loguear su llamada; ningún
+        # otro proveedor se despacha.
+        self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
 
-    def test_primary_timeout_without_time_for_the_fallback_says_so(self):
+    def test_primary_timeout_without_time_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1041,11 +1044,12 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo "
-                "límite de 1 s; no queda tiempo para probar deepseek"
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
             },
         )
 
@@ -1064,7 +1068,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(result, dict(OK_REPLY, review_provider="opencode-go"))
 
-    def test_both_providers_failing_name_each_cause(self):
+    def test_opencode_failure_keeps_its_cause_without_paid_fallback(self):
         error = ReasoningReplayRecovery.replay_error
         proc, calls, result, _, _ = self.run_agent(
             None,
@@ -1083,12 +1087,13 @@ class RunAgent(unittest.TestCase):
             ),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
+        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "opencode-go rechazó el historial de razonamiento "
-                "de la conversación (reasoning_content); deepseek agotó su cuota"
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
             },
         )
 
@@ -1161,32 +1166,55 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn(review.ERROR_KEY, result)
 
-    def test_opencode_insufficient_funds_switches_to_deepseek_with_its_own_key(self):
-        replies = [
-            {
-                "result": "API Error: 402 Insufficient account funds",
-                "is_error": True,
-                "api_error_status": 402,
-            },
-            OK_REPLY,
-        ]
+    def test_opencode_insufficient_funds_stays_on_the_subscription(self):
+        reply = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
         proc, calls, result, proxy, _ = self.run_agent(
-            OK_REPLY,
+            reply,
             provider="opencode-go",
             FALLBACK_API_KEY="sk-deepseek-key",
-            FAKE_CLAUDE_REPLIES=json.dumps(replies),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
-            [call["ANTHROPIC_MODEL"] for call in calls],
-            ["deepseek-v4.1-flash", "deepseek-flash[1m]"],
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
         )
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-key-123")
-        self.assertEqual(calls[1]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
-        self.assertIsNone(calls[1]["ANTHROPIC_AUTH_TOKEN"])
-        self.assertTrue(all("FALLBACK_API_KEY" not in call["env"] for call in calls))
-        self.assertEqual(result["result"], REVISION_COMPLETA)
-        self.assertEqual(result["review_provider"], "deepseek")
+        self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
+        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
+        )
+
+    def test_opencode_saturation_stays_on_the_subscription(self):
+        reply = {
+            "result": "API Error: 429 too many requests",
+            "is_error": True,
+            "api_error_status": 429,
+        }
+        proc, calls, result, _, _ = self.run_agent(
+            reply,
+            provider="opencode-go",
+            FALLBACK_API_KEY="sk-deepseek-key",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
+        )
+        motivo = review.FallaDelProveedor.saturacion("opencode-go").motivo
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
+        )
 
     def test_deepseek_quota_switches_to_opencode(self):
         replies = [
@@ -1211,29 +1239,26 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-fallback")
         self.assertEqual(result["review_provider"], "opencode-go")
 
-    def test_both_providers_out_of_quota_leave_commit_unreviewed(self):
-        replies = [
-            {
-                "result": "API Error: 402 Insufficient account funds",
-                "is_error": True,
-                "api_error_status": 402,
-            },
-            {
-                "result": "API Error: 429 quota exceeded",
-                "is_error": True,
-                "api_error_status": 429,
-            },
-        ]
+    def test_opencode_quota_leaves_commit_unreviewed_without_paid_fallback(self):
+        reply = {
+            "result": "API Error: 402 Insufficient account funds",
+            "is_error": True,
+            "api_error_status": 402,
+        }
         proc, calls, result, _, _ = self.run_agent(
-            OK_REPLY,
+            reply,
             provider="opencode-go",
             FALLBACK_API_KEY="sk-deepseek-key",
-            FAKE_CLAUDE_REPLIES=json.dumps(replies),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
+        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
         self.assertEqual(
-            result, {review.ERROR_KEY: "ambos proveedores agotaron su cuota"}
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
 
     def test_quota_without_fallback_key_reports_missing_secret_without_retry(self):
@@ -1260,7 +1285,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn(review.ERROR_KEY, result)
 
-    def test_primary_proxy_failure_uses_direct_deepseek_fallback(self):
+    def test_primary_proxy_failure_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
             OK_REPLY,
             provider="opencode-go",
@@ -1268,11 +1293,15 @@ class RunAgent(unittest.TestCase):
             litellm_script=FAKE_LITELLM_CRASH,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [])
+        motivo = review.FallaDelProveedor.proxy("opencode-go").motivo
         self.assertEqual(
-            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-flash[1m]"]
+            result,
+            {
+                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                "y no se cambia a la API de pago"
+            },
         )
-        self.assertEqual(result["result"], REVISION_COMPLETA)
-        self.assertEqual(result["review_provider"], "deepseek")
 
     def test_fallback_proxy_failure_names_both_failed_providers(self):
         quota = {
@@ -2400,7 +2429,11 @@ class Workflows(unittest.TestCase):
             "el worker instala Claude Code y LiteLLM antes del paso modelo",
         )
         self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
-        self.assertIn("FALLBACK_ENABLED: ${{ secrets.DEEPSEEK_API_KEY != '' }}", worker)
+        # La suscripción no recibe llave de la API de pago: sin FALLBACK ni
+        # consumo de DEEPSEEK_API_KEY, un fallo del proveedor queda pendiente.
+        self.assertNotIn("FALLBACK_ENABLED", worker)
+        self.assertNotIn("FALLBACK_API_KEY", worker)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
 
     def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
         # Orbit #419/#420: dos PRs nuevos piden la solicitud 1 a la vez; con el
@@ -2508,7 +2541,8 @@ class Workflows(unittest.TestCase):
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
         cierre = cierre.split("- name:")[0]
         self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", cierre)
-        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
+        self.assertNotIn("FALLBACK_API_KEY", cierre)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", cierre)
         self.assertIn("PROVIDER: opencode-go", cierre)
 
     def test_action_caches_install_with_pinned_versions(self):
@@ -2575,7 +2609,8 @@ class Workflows(unittest.TestCase):
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", worker)
-        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
+        self.assertNotIn("FALLBACK_API_KEY", worker)
+        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
         self.assertNotIn("secrets.API_KEY", worker)
         self.assertNotIn("secrets.FALLBACK_API_KEY", worker)
         self.assertIn("retention-days: 7", worker)
@@ -2703,8 +2738,8 @@ class Workflows(unittest.TestCase):
             "PR_NUMBER",
             "GITHUB_TOKEN",
         },
-        "install": {"PROVIDER", "FALLBACK_ENABLED"},
-        "run": {"API_KEY", "FALLBACK_API_KEY", "PROVIDER", "REPO", "PR_NUMBER"},
+        "install": {"PROVIDER"},
+        "run": {"API_KEY", "PROVIDER", "REPO", "PR_NUMBER"},
         "close-result": set(),
     }
 
@@ -5013,10 +5048,8 @@ class IncrementalPrepare(unittest.TestCase):
         )
         return json.loads((work / "manifest.json").read_text())
 
-    def test_push2_runs_full_by_decision(self):
-        # T16 f13 (D0-C0.md): el incremental medido costo 11-25% mas que una
-        # revision completa del mismo par y perdio bloques; por decision del
-        # operador el segundo push corre completo aunque la memoria sea usable.
+    def test_push2_runs_incremental(self):
+        # El segundo push revisa el delta real y recibe los hallazgos previos.
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = self.make_repo(tmp)
             manifest = self.run_prepare(
@@ -5031,12 +5064,11 @@ class IncrementalPrepare(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+                (manifest["mode"], manifest["reason"]), ("incremental", "")
             )
-            self.assertEqual(sorted(manifest["reviewed"]), ["app.py", "other.py"])
+            self.assertEqual(manifest["changed_files"], ["other.py"])
             patch = (work / "diff.patch").read_text()
             self.assertIn("other.py", patch)
-            self.assertIn("app.py", patch)
             prev_md = (work / "prev_findings.md").read_text()
             self.assertIn("F1", prev_md)
 
@@ -5100,12 +5132,24 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
     def _sticky_del_segundo_push(self, prev, base, head):
         """La memoria real del #85 tras el primer push, con el SHA revisado
         apuntando al commit previo del repo de prueba y la solicitud del
-        segundo push admitida por el coordinador."""
+        segundo push admitida por el coordinador. La revisión del bloque se
+        reescribe a la del repo de prueba: prepare compara la revisión previa
+        auténtica (base, head, política) y la del fixture real pertenece a
+        otra historia."""
         import review_domain as domain
 
         cuerpo = self.STICKY_PUSH1.replace(self.SHA_PUSH1, prev)
         load = domain.read_snapshot(cuerpo)
-        estado = load.snapshot
+        estado = replace(
+            load.snapshot,
+            revision=domain.Revision(
+                base_sha=base,
+                head_sha=prev,
+                policy_digest=review.digest_de_politica(
+                    review.politica_de_revision()
+                ),
+            ),
+        )
         solicitud = domain.WorkRequest(
             id=2,
             kind="review",
@@ -5202,8 +5246,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
         )
         self.assertEqual(
             (manifest["mode"], manifest["reason"], manifest["prev_sha"]),
-            ("full", "forced-full-t16", prev),
-            "deja de ser full/no-prev",
+            ("incremental", "", prev),
         )
         self.assertTrue(manifest["has_prev_findings"])
         self.assertIn(
@@ -5363,7 +5406,7 @@ class ReviewContinuity(unittest.TestCase):
             review.prev_findings_markdown(prev["state"]),
         )
 
-    def test_partial_publish_recovers_full_scope_then_stays_full_by_decision(self):
+    def test_partial_publish_recovers_full_scope_then_goes_incremental(self):
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5411,15 +5454,12 @@ class ReviewContinuity(unittest.TestCase):
             previous, _ = self.gate(work, next_head, body)
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
-            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
 
-    def test_forced_full_still_resolves_reverted_files(self):
-        # T16 f14 (B1 del veredicto f13): en la corrida forzada a full, un
-        # hallazgo abierto sobre un archivo que el segundo push revierte a la
-        # base se resuelve igual que en incremental: el forzado conserva el
-        # delta real para la revision de reversiones.
+    def test_incremental_still_resolves_reverted_files(self):
+        # Un hallazgo abierto sobre un archivo que el segundo push revierte
+        # a la base se resuelve contra el delta real.
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5439,7 +5479,7 @@ class ReviewContinuity(unittest.TestCase):
             next_head = git(repo, "rev-parse", "HEAD")
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
             # El publicador corre en el checkout del repo bajo revision:
             # _repo_actual se fija al repo temporal, como el sh mockeado de
@@ -5465,11 +5505,9 @@ class ReviewContinuity(unittest.TestCase):
                 ],
             )
 
-    def test_forced_full_rejects_resolved_on_untouched_files(self):
-        # T16 f15 (B1 del veredicto f14): en la corrida forzada a full, el
-        # cerrojo B3 sigue vigente: un "resolved" que el modelo declara sobre
-        # un archivo que el push no toco queda abierto. La resolucion se
-        # evalua contra el delta real, no contra todo lo revisado.
+    def test_incremental_rejects_resolved_on_untouched_files(self):
+        # Un "resolved" que el modelo declara sobre un archivo que el push
+        # no toco queda abierto. La resolucion se evalua contra el delta real.
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
@@ -5490,7 +5528,7 @@ class ReviewContinuity(unittest.TestCase):
             next_head = git(repo, "rev-parse", "HEAD")
             prepared = fixture.run_prepare(repo, work, base, next_head, previous)
             self.assertEqual(
-                (prepared["mode"], prepared["reason"]), ("full", "forced-full-t16")
+                (prepared["mode"], prepared["reason"]), ("incremental", "")
             )
             self.assertEqual(prepared["changed_files"], ["other.py"])
             with mock.patch.object(
@@ -5662,6 +5700,70 @@ class ReviewContinuity(unittest.TestCase):
                 (prepared["mode"], prepared["reason"]), ("full", "same-sha")
             )
             self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
+
+    def test_base_solicitada_estable_no_fuerza_full(self):
+        import review_domain as domain
+
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = Path(tmp, "repo"), Path(tmp, "work")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "README.md").write_text("# proyecto\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "raíz compartida")
+            raiz = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-qb", "pr")
+            (repo / "app.py").write_text("v1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "implementación aprobada")
+            prev = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "main")
+            (repo / "solo_en_main.py").write_text("ajeno = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "main avanza sin tocar el PR")
+            base_tip = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "pr")
+            self.assertNotEqual(raiz, base_tip)
+            preparada = fixture.run_prepare(
+                repo, work, base_tip, prev, {"sha": None, "state": None}
+            )
+            self.assertEqual(preparada["base"], raiz)
+            self.assertEqual(preparada["requested_base"], base_tip)
+            vacio = domain.Snapshot(
+                schema=3,
+                generation=1,
+                revision=None,
+                next_id=1,
+                completion=domain.UNKNOWN,
+                findings=[],
+                command_cursor=0,
+            )
+            semilla = f"{review.MARKER}\n{domain.encode_snapshot(vacio)}"
+            antes = os.getcwd()
+            os.chdir(repo)
+            try:
+                body = self.publish(
+                    work,
+                    prev,
+                    preparada,
+                    {"result": f"{block_of()}\nCOVERAGE: complete"},
+                    semilla,
+                    repo=repo,
+                )
+            finally:
+                os.chdir(antes)
+            (repo / "app.py").write_text("v1\ncorreccion = 1\n")
+            (repo / "z.py").write_text("nuevo = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "corrección pequeña, misma base solicitada")
+            head = git(repo, "rev-parse", "HEAD")
+            previous, _ = self.gate(work, head, body)
+            prepared = fixture.run_prepare(repo, work, base_tip, head, previous)
+            self.assertEqual((prepared["mode"], prepared["reason"]), ("incremental", ""))
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "z.py"])
 
     def test_filtered_empty_scope_can_complete_but_budget_cannot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8065,7 +8167,7 @@ class CableadoIdentidad(unittest.TestCase):
                     self.assertIn(":partial -->", cuerpo)
 
     def test_bloque_ausente_no_confirma_cobertura(self):
-        """model_ok falso (sin bloque) degrada la cobertura completa."""
+        """model_ok falso (sin bloque) deja la cobertura en parcial."""
         import review_domain as domain
 
         sticky = {"body": domain.encode_snapshot(self._memoria_v2_chica(domain))}
@@ -8080,7 +8182,7 @@ class CableadoIdentidad(unittest.TestCase):
         }
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
         self.assertFalse(out["model_ok"])
-        self.assertEqual(out["completion"], domain.UNKNOWN)
+        self.assertEqual(out["completion"], domain.PARTIAL)
         cuerpo = review.compose(
             resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
         )
@@ -9058,7 +9160,7 @@ class GitPaths(unittest.TestCase):
 
             manifest = prepare_manifest(tmp, repo, head, head2)
             self.assertEqual(
-                (manifest["mode"], manifest["reason"]), ("full", "forced-full-t16")
+                (manifest["mode"], manifest["reason"]), ("incremental", "")
             )
             self.assertEqual(manifest["reviewed"], ["nuevo.txt"])
             encoding = {
