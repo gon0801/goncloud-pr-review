@@ -723,32 +723,39 @@ def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
     """(modo, motivo, previous_head) según la memoria y el target (D0).
 
     Incremental exige revisión previa completa, head distinto y ancestro,
-    y la misma base y política con que se creó la memoria. Una parcial con
-    libro de cobertura continúa donde el libro quedó.
+    y la misma política con que se creó la memoria. Una parcial con
+    libro de cobertura continúa donde el libro quedó. Un movimiento de
+    base no invalida la cobertura: el libro acredita blobs, que siguen
+    siendo los revisados, y el motivo lo documenta mientras prepare acota
+    el alcance por esa cobertura. La política distinta sí fuerza full:
+    cambia la identidad de las reglas que acreditó la pasada.
     """
     revision = current.revision if current is not None else None
     if revision is None or not revision.head_sha:
         return "full", "memoria: no hay revisión previa registrada", None
     previous_head = revision.head_sha
+    motivo_base = (
+        "base: la base previa difiere de la solicitada; "
+        "el alcance se acota por la cobertura válida"
+        if revision.base_sha != base_sha
+        else ""
+    )
     if not is_complete(current.completion):
         if (
             current.completion == PARTIAL
             and cobertura_previa
-            and revision.base_sha == base_sha
             and revision.policy_digest == digest
         ):
             modo, motivo = decide_mode(repo, previous_head, head)
             if modo == "incremental" or motivo == "same-sha":
-                return "continuation", "", previous_head
+                return "continuation", motivo_base, previous_head
         return "full", "cobertura: la revisión previa no fue completa", previous_head
     modo, motivo = decide_mode(repo, previous_head, head)
     if modo == "full":
         return modo, motivo, previous_head
-    if revision.base_sha != base_sha:
-        return "full", "base: la base previa difiere de la solicitada", previous_head
     if revision.policy_digest != digest:
         return "full", "política: el digest previo difiere", previous_head
-    return "incremental", "", previous_head
+    return "incremental", motivo_base, previous_head
 
 
 def rutas_abiertas(current):
@@ -947,22 +954,27 @@ def prepare_review(
             omisiones.append(Omission(ruta=diagnostico, causa="encoding"))
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
-    if modo == "incremental":
-        rutas_plan = list(delta_rutas)
-        candidatas = delta_rutas
-    elif modo == "continuation":
-        # Alcance de la continuación: lo pendiente del libro más lo que cambió.
-        # Un borrado (blob None) es pendiente salvo que ya esté acreditado
-        # con el centinela del libro.
+    if modo in ("incremental", "continuation"):
+        # Alcance acotado por la cobertura válida del libro: el delta real
+        # desde la acreditación más lo del alcance del PR que el libro no
+        # acredita contra head. Acreditado y sin cambios queda fuera: ese
+        # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
+        # acreditación fina que conservar y el alcance es solo el delta. Un
+        # borrado (blob None) es pendiente salvo que ya esté acreditado con
+        # el centinela del libro.
         previa = cobertura_previa or {}
-        candidatas = []
-        for ruta in historicas:
-            blob = repo.blob_at(head, ruta)
-            if blob is None:
-                if previa.get(ruta) != LIBRO_BORRADO:
+        candidatas = list(delta_rutas)
+        if previa:
+            vistas = set(candidatas)
+            for ruta in historicas:
+                if ruta in vistas:
+                    continue
+                blob = repo.blob_at(head, ruta)
+                if blob is None:
+                    if previa.get(ruta) != LIBRO_BORRADO:
+                        candidatas.append(ruta)
+                elif blob != previa.get(ruta):
                     candidatas.append(ruta)
-            elif blob != previa.get(ruta):
-                candidatas.append(ruta)
         rutas_plan = list(candidatas)
     else:
         rutas_plan = historicas

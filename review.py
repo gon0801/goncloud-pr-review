@@ -1330,12 +1330,17 @@ def cmd_prepare(args):
             command_cursor=0,
         )
     if mode in ("incremental", "continuation") and current.revision is not None:
-        # Mismo fallo que decidir_modo en la selección: la cobertura previa
-        # quedó medida contra otra base u otra política y no vale para este PR.
-        if current.revision.base_sha != base:
-            mode, reason = "full", "base: la base previa difiere de la solicitada"
-        elif current.revision.policy_digest != digest:
+        # La política distinta invalida la identidad de la cobertura: full.
+        # El movimiento de base no la invalida: el libro acredita blobs, que
+        # siguen siendo los revisados, y prepare acota el alcance por esa
+        # cobertura; el motivo documenta el movimiento.
+        if current.revision.policy_digest != digest:
             mode, reason = "full", "política: el digest previo difiere"
+        elif current.revision.base_sha != base:
+            reason = (
+                "base: la base previa difiere de la solicitada; "
+                "el alcance se acota por la cobertura válida"
+            )
     changed = (
         changed_since(repo, prev_sha, head)
         if mode in ("incremental", "continuation") or reason == "incomplete-prev"
@@ -1371,6 +1376,7 @@ def cmd_prepare(args):
     (work / "diff.patch").write_bytes(parche)
     manifest = {
         "base": merge_base,
+        "requested_base": base,
         "head": head,
         "reviewed": reviewed,
         "excluded": excluded,
@@ -2442,8 +2448,13 @@ def actualizar_memoria_valida(
     if _sha_hexa(head) and _sha_hexa(manifest.get("base")):
         # El digest viaja en la revisión persistida: la siguiente preparación
         # compara contra él para decidir si la cobertura previa sigue válida.
+        # La base persistida es la SOLICITADA (el tip de BASE_SHA): el
+        # merge-base movió con la rama base y compararlo contra el tip
+        # solicitado forzaba un full sin cambio real de base. Manifiestos
+        # legados sin base solicitada degradan una vez a un alcance acotado
+        # por cobertura y queda documentado en el motivo.
         revision = review_domain.Revision(
-            base_sha=manifest.get("base"),
+            base_sha=manifest.get("requested_base") or manifest.get("base"),
             head_sha=head,
             policy_digest=digest,
         )

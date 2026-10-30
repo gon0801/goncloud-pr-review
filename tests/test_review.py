@@ -5701,6 +5701,74 @@ class ReviewContinuity(unittest.TestCase):
             )
             self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "other.py"])
 
+    def test_base_solicitada_estable_no_fuerza_full(self):
+        """La revisión persistida lleva la base SOLICITADA (tip de BASE_SHA),
+        no el merge-base: si la rama base avanzó sola, la corrección pequeña
+        con la misma base solicitada sigue incremental en vez de volver a un
+        full con el diff histórico (hallazgo base_estable de la ronda 2)."""
+        import review_domain as domain
+
+        fixture = IncrementalPrepare()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = Path(tmp, "repo"), Path(tmp, "work")
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "t@t")
+            git(repo, "config", "user.name", "t")
+            (repo / "README.md").write_text("# proyecto\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "raíz compartida")
+            raiz = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-qb", "pr")
+            (repo / "app.py").write_text("v1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "implementación aprobada")
+            prev = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "main")
+            (repo / "solo_en_main.py").write_text("ajeno = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "main avanza sin tocar el PR")
+            base_tip = git(repo, "rev-parse", "HEAD")
+            git(repo, "checkout", "-q", "pr")
+            self.assertNotEqual(raiz, base_tip)
+            preparada = fixture.run_prepare(
+                repo, work, base_tip, prev, {"sha": None, "state": None}
+            )
+            self.assertEqual(preparada["base"], raiz)
+            self.assertEqual(preparada["requested_base"], base_tip)
+            vacio = domain.Snapshot(
+                schema=3,
+                generation=1,
+                revision=None,
+                next_id=1,
+                completion=domain.UNKNOWN,
+                findings=[],
+                command_cursor=0,
+            )
+            semilla = f"{review.MARKER}\n{domain.encode_snapshot(vacio)}"
+            antes = os.getcwd()
+            os.chdir(repo)
+            try:
+                body = self.publish(
+                    work,
+                    prev,
+                    preparada,
+                    {"result": f"{block_of()}\nCOVERAGE: complete"},
+                    semilla,
+                    repo=repo,
+                )
+            finally:
+                os.chdir(antes)
+            (repo / "app.py").write_text("v1\ncorreccion = 1\n")
+            (repo / "z.py").write_text("nuevo = 1\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "corrección pequeña, misma base solicitada")
+            head = git(repo, "rev-parse", "HEAD")
+            previous, _ = self.gate(work, head, body)
+            prepared = fixture.run_prepare(repo, work, base_tip, head, previous)
+            self.assertEqual((prepared["mode"], prepared["reason"]), ("incremental", ""))
+            self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "z.py"])
+
     def test_filtered_empty_scope_can_complete_but_budget_cannot(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
