@@ -320,7 +320,7 @@ def unreviewed_de(texto):
 
 def modelo_utilizable(modelo):
     """La forma la decide el transporte del dominio, sin descartar el bloque."""
-    return modelo is not None and not any(
+    return modelo is not None and not modelo.get("rechazadas_forma") and not any(
         isinstance(
             review_domain.observation_de_entrada(entrada),
             review_domain.ObservationRejected,
@@ -2923,8 +2923,16 @@ def authenticate_result(run_metadata, artifact, request):
         return rechazo("HEAD del PR del artifact no es el target vigente")
     if artifact.get("policy_digest") != target.get("policy_digest"):
         return rechazo("digest de política del artifact incorrecto")
+    modelo = parse_model_findings(
+        artifact.get("result") or "",
+        conservar_anclas=artifact.get("finding_identity") == "anchors",
+    )
     return AuthenticatedResult(
-        observaciones=tuple(artifact.get("observaciones") or ()),
+        observaciones=tuple(
+            modelo["findings"]
+            if modelo is not None
+            else artifact.get("observaciones") or ()
+        ),
         cobertura=(artifact.get("cobertura") or review_domain.UNKNOWN)
         if forma_utilizable_del_artifact(artifact)
         else review_domain.PARTIAL,
