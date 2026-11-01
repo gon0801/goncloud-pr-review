@@ -132,7 +132,7 @@ Un renombre necesita correspondencia comprobable y un ancla compatible. Si dos p
 
 Cada hallazgo debe distinguir qué afirma y qué evidencia lo respalda. Verificar archivo, blob, líneas y extracto demuestra que la cita existe en ese commit. No demuestra que el diagnóstico sea correcto. Las instrucciones de reproducción que propone el modelo no se ejecutan automáticamente.
 
-Resolver exige un cambio pertinente y evidencia del arreglo. La ausencia de F3 en la respuesta no lo resuelve. Se conserva la resolución determinista por reversión exacta. Si el modelo evalúa que un arreglo es suficiente, se presenta como evaluación, no como prueba ejecutada.
+Resolver exige un cambio pertinente y evidencia del arreglo: un hallazgo que el modelo da por resuelto se cierra si cambió, en el delta real, un archivo ancla del hallazgo o un archivo que la observación del modelo nombra (`files`, ancla primaria o relacionada). La ausencia de F3 en la respuesta no lo resuelve. Se conserva la resolución determinista por reversión exacta. Si el modelo evalúa que un arreglo es suficiente, se presenta como evaluación, no como prueba ejecutada.
 
 ## 3. Incremental real
 

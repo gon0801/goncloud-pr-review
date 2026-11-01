@@ -1372,6 +1372,10 @@ class Observation:
     cause_hint: str | None = None
     evidence: list = field(default_factory=list)
     claim: str = OPEN
+    # Otros archivos que el modelo nombra para el hallazgo (`files` del bloque),
+    # sobre todo donde vive el arreglo; con las anclas de la observación
+    # acreditan el cambio pertinente que resuelve.
+    archivos: tuple = ()
     # Id de un previo que el modelo repite (lo ve en prev_findings.md); solo
     # decide la identidad fuera de `anchors`, como en merge_findings.
     claimed_id: str | None = None
@@ -1750,7 +1754,8 @@ def observation_de_entrada(entry):
     """
     if not isinstance(entry, dict):
         return ObservationRejected(motivo="hallazgo sin estructura válida")
-    if sanitize_finding(entry, allow_dismissed=True) is None:
+    limpio = sanitize_finding(entry, allow_dismissed=True)
+    if limpio is None:
         return ObservationRejected(motivo="hallazgo sin archivo o título")
     for campo in ("related_anchors", "evidence"):
         valor = entry.get(campo)
@@ -1826,6 +1831,7 @@ def observation_de_entrada(entry):
         cause_hint=entry.get("cause_hint"),
         evidence=tuple(evidencia),
         claim=claim,
+        archivos=tuple(p for p in limpio["files"] if p != limpio["file"]),
         claimed_id=entry.get("id") if finding_number(entry.get("id") or "") else None,
     )
 
@@ -1844,6 +1850,61 @@ def _severidad_de(valor):
 def _cambio_pertinente(finding, cambiadas):
     rutas = {_ruta_primaria(finding)} | {a.path for a in finding.related_anchors}
     return bool(rutas & set(cambiadas))
+
+
+def _rutas_nombradas(obs):
+    """Archivos que la observación señala para el hallazgo: su ancla primaria,
+    las relacionadas y `files`."""
+    return (
+        {_ruta_primaria(obs)}
+        | {a.path for a in obs.related_anchors}
+        | set(obs.archivos)
+    ) - {""}
+
+
+def _con_arreglo_registrado(previo, relacionadas, arreglo):
+    """El archivo donde el modelo ubica el arreglo pasa a ser ancla relacionada
+    del hallazgo resuelto: un cambio posterior ahí lo reabre. Con el tope de
+    anclas lleno, el arreglo desplaza a las relacionadas más viejas y nunca
+    se recorta él."""
+    conocidas = {_ruta_primaria(previo)} | {a.path for a in relacionadas}
+    nuevas = tuple(
+        AnchorLegacy(path=ruta, line=0) for ruta in sorted(arreglo - conocidas)
+    )
+    if not nuevas:
+        return tuple(relacionadas)
+    tope = FINDING_FILES_MAX - 1
+    nuevas = nuevas[:tope]
+    return tuple(relacionadas)[: tope - len(nuevas)] + nuevas
+
+
+EVIDENCIA_SIN_CAMBIO_PERTINENTE = (
+    "el modelo lo evalúa resuelto; sin cambio pertinente registrado"
+)
+_EVIDENCIA_SIN_CAMBIO_PERTINENTE = EvidenceUnverified(
+    text=EVIDENCIA_SIN_CAMBIO_PERTINENTE
+)
+
+
+def _evidencia_del_modelo(obs):
+    """La evidencia que trae el modelo, sin la nota que solo escribe el programa:
+    si el modelo la fabricara, el comentario atribuiría al programa un rechazo
+    que no ocurrió."""
+    return tuple(e for e in obs.evidence if e != _EVIDENCIA_SIN_CAMBIO_PERTINENTE)
+
+
+def _sin_cambio_pertinente(finding):
+    return _EVIDENCIA_SIN_CAMBIO_PERTINENTE in tuple(finding.evidence)
+
+
+def resoluciones_sin_acreditar(snapshot):
+    """Ids abiertos que el modelo dio por resueltos en la última pasada que los
+    tocó y que el programa no aceptó por falta de cambio pertinente."""
+    return tuple(
+        f.id
+        for f in snapshot.findings
+        if isinstance(f.status, StatusOpen) and _sin_cambio_pertinente(f)
+    )
 
 
 def _cobertura_persistida(report, plan):
@@ -1895,7 +1956,9 @@ def accept_report(current, plan, report):
 
     Requiere estado v2 o v3 (schema 2/3): en legado devuelve Keep. El programa asigna
     los ids; título y causa son mutables. Resolver exige cambio pertinente o
-    reversión exacta; la evaluación del modelo queda etiquetada como
+    reversión exacta: cambió un archivo ancla del hallazgo o uno que la
+    observación del modelo nombra (ancla, ancla relacionada o `files`), siempre
+    dentro del delta real; la evaluación del modelo queda etiquetada como
     UnverifiedClaim. Un match Ambiguous entra como hallazgo separado con la
     indicación de posible duplicado, sin fusionar. Los descartes nunca
     reaparecen.
@@ -1939,7 +2002,7 @@ def accept_report(current, plan, report):
                 causa = f"posible duplicado de {fid}"
                 if obs.cause_hint:
                     causa = f"{causa}; {obs.cause_hint}"
-                evidencia_dup = tuple(obs.evidence)
+                evidencia_dup = _evidencia_del_modelo(obs)
                 if marca_severidad:
                     evidencia_dup = evidencia_dup + (
                         EvidenceUnverified(text=marca_severidad),
@@ -1959,9 +2022,10 @@ def accept_report(current, plan, report):
                 next_id += 1
                 continue
             tocados.add(fid)
-            evidencia = tuple(obs.evidence)
+            evidencia = _evidencia_del_modelo(obs)
             if marca_severidad:
                 evidencia = evidencia + (EvidenceUnverified(text=marca_severidad),)
+            arreglo = _rutas_nombradas(obs) & cambiadas
             reverting = _cambio_pertinente(previo, revertidas)
             if reverting:
                 estado = StatusResolved(
@@ -1977,11 +2041,11 @@ def accept_report(current, plan, report):
                 estado = (
                     previo.status
                 )  # la resolución se conserva sin cambio que la rompa
-            elif obs.claim == RESOLVED and not _cambio_pertinente(previo, cambiadas):
+            elif obs.claim == RESOLVED and not (
+                _cambio_pertinente(previo, cambiadas) or arreglo
+            ):
                 evidencia = evidencia + (
-                    EvidenceUnverified(
-                        text="el modelo lo evalúa resuelto; sin cambio pertinente registrado"
-                    ),
+                    EvidenceUnverified(text=EVIDENCIA_SIN_CAMBIO_PERTINENTE),
                 )
                 estado = StatusOpen()
             elif obs.claim == RESOLVED:
@@ -1996,6 +2060,10 @@ def accept_report(current, plan, report):
                 else previo.primary_anchor
             )
             relacionadas = tuple(obs.related_anchors) or previo.related_anchors
+            if isinstance(estado, StatusResolved) and not isinstance(
+                previo.status, StatusResolved
+            ):
+                relacionadas = _con_arreglo_registrado(previo, relacionadas, arreglo)
             findings[findings.index(previo)] = replace(
                 previo,
                 title=obs.title,
@@ -2023,13 +2091,21 @@ def accept_report(current, plan, report):
             primary_anchor=obs.primary_anchor,
             related_anchors=tuple(obs.related_anchors),
             cause_hint=obs.cause_hint,
-            evidence=tuple(obs.evidence),
+            evidence=_evidencia_del_modelo(obs),
         )
         next_id += 1
         findings.append(nueva)
     for i, f in enumerate(findings):
         if f.id in tocados or isinstance(f.status, StatusDismissed):
             continue
+        if _sin_cambio_pertinente(f):
+            # la nota fecha de un reclamo anterior: esta pasada no lo repitió
+            f = findings[i] = replace(
+                f,
+                evidence=tuple(
+                    e for e in f.evidence if e != _EVIDENCIA_SIN_CAMBIO_PERTINENTE
+                ),
+            )
         if _ruta_primaria(f) in revertidas and not isinstance(f.status, StatusResolved):
             findings[i] = replace(
                 f,
@@ -2379,6 +2455,10 @@ def _consumido(current, cid, efecto=None, recibo=True):
     )
 
 
+ACCION_NO_ENTENDIDA = "no-entendida"
+RECHAZO_NO_ENTENDIDO = "comando no entendido"
+
+
 def procesar_comandos(current, comandos, permisos, target):
     """Procesa el prefijo confirmado de comentarios-comando (T09).
 
@@ -2414,7 +2494,10 @@ def procesar_comandos(current, comandos, permisos, target):
             snapshot = _consumido(snapshot, cid, rechazos[-1][1])
             continue
         action, arg = comando["action"], comando["arg"]
-        if action == "descartar":
+        if action == ACCION_NO_ENTENDIDA:
+            rechazos.append((cid, RECHAZO_NO_ENTENDIDO))
+            snapshot = _consumido(snapshot, cid, RECHAZO_NO_ENTENDIDO)
+        elif action == "descartar":
             ids_hallazgos = {f.id for f in snapshot.findings}
             if arg != "todo" and arg not in ids_hallazgos:
                 rechazos.append((cid, f"el hallazgo {arg} no existe"))

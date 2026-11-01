@@ -134,7 +134,10 @@ class Compose(unittest.TestCase):
             sha=SHA,
             provider="opencode-go",
         )
-        self.assertIn("el revisor no alcanzó a revisar todo: tests/ sin leer", body)
+        self.assertIn("> **Revisión incompleta:** el revisor no alcanzó a revisar todo.", body)
+        detalle = body.split("## Detalle del revisor", 1)[1]
+        self.assertIn("Cobertura declarada por el revisor: parcial | tests/ sin leer", detalle)
+        self.assertNotIn("tests/ sin leer", body.split("## Detalle del revisor", 1)[0])
 
     def test_usage_line_uses_deepseek_prices(self):
         usage = {
@@ -4880,6 +4883,26 @@ class VerdictSections(unittest.TestCase):
         self.assertIn("<details><summary>Descartados (1)</summary>", body)
         self.assertIn("## Detalle del revisor", body)
 
+    def test_el_motivo_de_una_resolucion_no_aceptada_sale_bajo_el_hallazgo_abierto(self):
+        merged = [make_finding("F1"), make_finding("F2")]
+        partes = review.sections_for(merged, [], no_acreditados=("F1",))
+        siguen = partes.index("## Siguen abiertos")
+        bloque = partes[siguen:]
+        i = next(n for n, linea in enumerate(bloque) if linea.endswith(" · F1"))
+        self.assertEqual(
+            bloque[i + 1],
+            "  - ↳ el modelo lo da por resuelto, pero no cambió ningún archivo pertinente",
+        )
+        self.assertTrue(bloque[i + 2].endswith(" · F2"), "F2 no lleva motivo")
+        self.assertEqual(
+            len([l for l in partes if "no cambió ningún archivo pertinente" in l]), 1
+        )
+        self.assertEqual(
+            review.sections_for(merged, [], no_acreditados=()),
+            review.sections_for(merged, []),
+            "sin resoluciones no aceptadas el render no cambia",
+        )
+
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
         body = review.compose(
@@ -6170,6 +6193,15 @@ class IncrementalRun(unittest.TestCase):
         self.assertNotIn("EXPLAIN", prompt)
         self.assertNotIn("Aprueba", prompt)
 
+    def test_el_prompt_pide_nombrar_el_archivo_donde_vive_el_arreglo(self):
+        prompt = (ROOT / "prompt.md").read_text()
+        incremental = prompt.split("## Incremental review", 1)[1].split(
+            "## Continuation review", 1
+        )[0]
+        for token in ("including a new one", "name that file", "`files`"):
+            self.assertIn(token, incremental)
+        self.assertIn("in a file you name for it", prompt.split("## Anchors", 1)[1])
+
     def test_el_prompt_de_sistema_define_las_explicaciones(self):
         sistema = (ROOT / "prompt.md").read_text()
         self.assertIn("## Explanation requests", sistema)
@@ -7453,6 +7485,389 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 self.assertIsInstance(
                     f2.status, domain.StatusOpen, "sin cambio pertinente sigue abierto"
                 )
+
+    def test_resuelto_en_otro_archivo_nombrado_en_files_cierra_el_hallazgo(self):
+        """#148 F1 y #152 F4 de gon0801/goncloud-motor: el arreglo vive en otro
+        archivo (o en uno nuevo) que el modelo nombra en `files`."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        casos = [
+            (
+                "F1",
+                "High",
+                "El nuevo job de bateria rompe tests/test_ci_jaula.py",
+                ".github/workflows/pruebas.yml",
+                54,
+                ["tests/test_ci_jaula.py"],
+                ["tests/test_ci_jaula.py"],
+            ),
+            (
+                "F4",
+                "Medium",
+                "El tope del modelo no tiene comprobación automática que detecte el desvío",
+                "verificacion/inspeccion/main.cfg",
+                5,
+                ["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+                ["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+            ),
+        ]
+
+        def previo(schema, fid, severidad, titulo, ruta, linea):
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=5,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id=fid,
+                        title=titulo,
+                        severity=severidad,
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLegacy(path=ruta, line=linea),
+                    )
+                ],
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def modelo(fid, severidad, titulo, ruta, linea, files):
+            return (
+                "COVERAGE: partial\n\n## Detalle\n\n"
+                + domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "id": fid,
+                                "file": ruta,
+                                "line": linea,
+                                "files": files,
+                                "severity": severidad,
+                                "title": titulo,
+                                "state": "resolved",
+                            }
+                        ],
+                        "next": 5,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+            )
+
+        def publicar(schema, caso, delta, files):
+            fid, sev, titulo, ruta, linea, _, _ = caso
+            encoded = domain.encode_snapshot(
+                previo(schema, fid, sev, titulo, ruta, linea), domain.StorageBudget()
+            )
+            manifest = {
+                "base": "b" * 40,
+                "head": "e" * 40,
+                "mode": "incremental",
+                "changed_files": delta,
+                "reviewed": delta,
+            }
+            with mock.patch.object(
+                review, "collect_dismissals", return_value=(set(), False, 0)
+            ):
+                r = review.build_findings(
+                    {"result": modelo(fid, sev, titulo, ruta, linea, files)},
+                    manifest,
+                    {"body": encoded.block if schema == 3 else encoded},
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+            self.assertIsNone(r.get("keep"))
+            return next(
+                f
+                for f in domain.read_snapshot(r["block"]).snapshot.findings
+                if f.id == fid
+            )
+
+        for schema in (2, 3):
+            for caso in casos:
+                fid, _, _, _, _, files, delta = caso
+                with self.subTest(schema=schema, hallazgo=fid):
+                    cerrado = publicar(schema, caso, delta, files)
+                    self.assertIsInstance(cerrado.status, domain.StatusResolved)
+                    self.assertEqual(cerrado.status.at_sha, "e" * 40)
+                with self.subTest(schema=schema, hallazgo=fid, caso="sin cambio"):
+                    abierto = publicar(schema, caso, ["README.md"], files)
+                    self.assertIsInstance(
+                        abierto.status,
+                        domain.StatusOpen,
+                        "ni el ancla ni lo que el modelo nombra cambiaron",
+                    )
+                with self.subTest(schema=schema, hallazgo=fid, caso="sin nombrar"):
+                    abierto = publicar(schema, caso, delta, [])
+                    self.assertIsInstance(
+                        abierto.status,
+                        domain.StatusOpen,
+                        "el modelo no nombra el archivo del arreglo",
+                    )
+
+    def _publicar_resuelto(self, delta, files, prosa, modo="v3", previo=None, estado="resolved", cobertura="COVERAGE: partial"):
+        """build_findings + compose con un F1 anclado en pruebas.yml que el modelo
+        da por resuelto; devuelve (findings, comentario)."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        titulo = "El nuevo job de bateria rompe tests/test_ci_jaula.py"
+        ruta = ".github/workflows/pruebas.yml"
+        if previo is None:
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title=titulo,
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLegacy(path=ruta, line=54),
+                    )
+                ],
+                command_cursor=0,
+            )
+            previo = domain.encode_snapshot(
+                domain.snapshot_a_v3(base) if modo == "v3" else base,
+                domain.StorageBudget(),
+            )
+            previo = previo.block if modo == "v3" else previo
+        entrada = {
+            "id": "F1",
+            "file": ruta,
+            "line": 54,
+            "files": files,
+            "severity": "High",
+            "title": titulo,
+            "state": estado,
+        }
+        modelo = (
+            prosa
+            + "\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps({"findings": [entrada], "next": 2})
+            + domain.FINDINGS_SUFFIX
+            + "\n" + cobertura
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "incremental",
+            "changed_files": delta,
+            "reviewed": delta,
+        }
+        with mock.patch.object(
+            review, "collect_dismissals", return_value=(set(), False, 0)
+        ):
+            findings = review.build_findings(
+                {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
+            )
+        self.assertIsNone(findings.get("keep"))
+        cuerpo = review.compose(
+            {"result": modelo},
+            {"reviewed": delta, "excluded": [], **manifest},
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+        )
+        return findings, cuerpo
+
+    MOTIVO = "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
+
+    def test_resuelto_sin_cambio_pertinente_se_explica_en_siguen_abiertos(self):
+        for modo in ("v2", "v3"):
+            with self.subTest(modo=modo):
+                findings, cuerpo = self._publicar_resuelto(
+                    ["README.md"], [], "F1 quedó resuelto.", modo=modo
+                )
+                self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+                siguen = cuerpo[cuerpo.index("## Siguen abiertos") :]
+                self.assertIn(
+                    f"· F1\n  - ↳ {self.MOTIVO}\n", siguen.split("## Detalle")[0]
+                )
+                self.assertIn("**Veredicto:** 1 High abierto.", cuerpo)
+                antes, detalle = cuerpo.split("## Detalle del revisor", 1)
+                self.assertEqual(antes.count(self.MOTIVO), 1)
+                self.assertNotIn(
+                    self.MOTIVO,
+                    detalle,
+                    "el programa no escribe en la sección del modelo",
+                )
+                self.assertNotIn("Nota del publicador", cuerpo)
+                self.assertIn("F1 quedó resuelto.", detalle)
+
+    # Marca única: dónde aparece la marca dice dónde queda el texto del modelo.
+    MARCA = "ZZMODELOZZ"
+    VARIANTES_DEL_MODELO = {
+        "entidad decimal": f"&#78;ota del publicador {MARCA}: F9 sigue abierto.",
+        "entidad hexadecimal": f"**&#x4E;ota del publicador:** {MARCA} F9",
+        "admonition falso": f"> [!CAUTION]\n> **Nota del publicador:** {MARCA} falso",
+        "revisión incompleta falsa": f"> [!WARNING]\n> **Revisión incompleta:** {MARCA}",
+        "memoria conservada falsa": f"> [!CAUTION]\n> **Memoria conservada sin actualizar:** {MARCA}",
+        "sin espacio falso": f"> [!CAUTION]\n> **Comentario sin espacio para el estado:** {MARCA}",
+        "cerca falsa": f"``` `x`\n> [!CAUTION]\n> **Nota del publicador:** {MARCA}",
+        "html": f"<br>**Nota del publicador:** {MARCA} <blockquote>x</blockquote>",
+    }
+
+    @staticmethod
+    def _secciones(cuerpo):
+        """(programa, modelo): el comentario partido en lo que arma el programa y la
+        sección rotulada del modelo (Detalle del revisor, hasta el Alcance)."""
+        antes, resto = cuerpo.split("## Detalle del revisor", 1)
+        modelo, alcance = resto.split(review.ALCANCE_INICIO, 1)
+        return antes + review.ALCANCE_INICIO + alcance, modelo
+
+    def test_el_texto_del_modelo_solo_aparece_en_su_seccion(self):
+        for nombre, variante in self.VARIANTES_DEL_MODELO.items():
+            prosa = f"Todo bien.\n{variante}\nF1 quedó resuelto."
+            rutas = {
+                "sin hallazgos": review.compose(
+                    {"result": f"{prosa}\nCOVERAGE: complete"},
+                    MANIFEST,
+                    sha=SHA,
+                    provider="opencode-go",
+                ),
+                "con hallazgos": self._publicar_resuelto(["README.md"], [], prosa)[1],
+                "con hallazgos y pertinente": self._publicar_resuelto(
+                    ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], prosa
+                )[1],
+            }
+            for ruta, cuerpo in rutas.items():
+                with self.subTest(variante=nombre, ruta=ruta):
+                    programa, modelo = self._secciones(cuerpo)
+                    self.assertIn(self.MARCA, modelo)
+                    self.assertNotIn(self.MARCA, programa)
+                    self.assertNotRegex(modelo, r"(?<!amp;)&#x?[0-9A-Fa-f]+;")
+
+    def test_las_explicaciones_son_texto_del_modelo_y_no_forman_un_aviso_del_programa(self):
+        for nombre, variante in self.VARIANTES_DEL_MODELO.items():
+            with self.subTest(variante=nombre):
+                texto = review.texto_de_explicacion(
+                    {"result": f"Causa.\n{variante}\nCOVERAGE: complete"}
+                )
+                self.assertIn(self.MARCA, texto)
+                self.assertNotRegex(texto, r"(?<!amp;)&#x?[0-9A-Fa-f]+;")
+
+    def test_los_avisos_del_programa_no_contienen_texto_del_modelo(self):
+        detalle = f"faltó a.py<br>**Nota del publicador:** {self.MARCA} &#78;ota <blockquote>x"
+        manifest = {"reviewed": ["a.py"], "excluded": []}
+        sin = review.compose(
+            {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
+            manifest,
+            sha=SHA,
+            provider="opencode-go",
+        )
+        _, con = self._publicar_resuelto(
+            ["README.md"], [], "F1 resuelto.", cobertura=f"COVERAGE: partial | {detalle}"
+        )
+        for ruta, cuerpo in (("sin hallazgos", sin), ("con hallazgos", con)):
+            with self.subTest(ruta=ruta):
+                programa, modelo = self._secciones(cuerpo)
+                lineas_de_aviso = [
+                    l for l in programa.split("\n") if l.lstrip().startswith(">")
+                ]
+                self.assertTrue(lineas_de_aviso, "hay un aviso de revisión incompleta")
+                for l in lineas_de_aviso:
+                    self.assertNotIn(self.MARCA, l)
+                    self.assertNotIn("<br", l)
+                self.assertIn(
+                    "> **Revisión incompleta:** el revisor no alcanzó a revisar todo.",
+                    programa,
+                )
+                self.assertNotIn(self.MARCA, programa)
+                self.assertIn(f"Cobertura declarada por el revisor: parcial | faltó a.py", modelo)
+                self.assertIn(self.MARCA, modelo)
+                self.assertIn("&amp;#78;ota", modelo)
+
+    def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
+        for banner in (
+            review.AVISO_SIN_ESPACIO,
+            review.caution_banner("falló", "a" * 40, False),
+            review.aviso_de_comando_no_entendido(5),
+        ):
+            primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
+            self.assertTrue(
+                any(primera[4:].startswith(e) for e in review.AVISOS_DEL_PROGRAMA),
+                primera,
+            )
+        with self.assertRaises(ValueError):
+            review.aviso_md("Aviso nuevo sin registrar", "x")
+
+    def test_referencias_de_caracter_en_la_prosa_se_ven_literales(self):
+        self.assertEqual(
+            review.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
+            "Un &amp;#78; y &amp;#x4E; y &amp;copy; y &amp; sueltos.",
+        )
+
+    def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
+        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
+        lineas = banner.split("\n")
+        self.assertEqual(lineas[0], "> [!CAUTION]")
+        self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
+        self.assertNotIn("<br", banner)
+        self.assertNotIn("&#78;", banner)
+        self.assertEqual(
+            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
+            "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
+        )
+
+    def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
+        findings, cuerpo = self._publicar_resuelto(
+            ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], "F1 quedó resuelto."
+        )
+        self.assertEqual(tuple(findings["no_acreditados"]), ())
+        self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
+        self.assertIn("**Veredicto:** sin problemas abiertos (1 resuelto).", cuerpo)
+
+    def test_el_motivo_no_sobrevive_a_una_pasada_que_no_repite_el_reclamo(self):
+        findings, _ = self._publicar_resuelto(["README.md"], [], "F1 resuelto.")
+        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        siguiente, cuerpo = self._publicar_resuelto(
+            ["README.md"], [], "F1 sigue.", previo=findings["block"], estado="open"
+        )
+        self.assertEqual(tuple(siguiente["no_acreditados"]), ())
+        self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
+
+    def test_camino_legado_tambien_explica_la_resolucion_no_aceptada(self):
+        titulo = "El nuevo job de bateria rompe tests/test_ci_jaula.py"
+        ruta = ".github/workflows/pruebas.yml"
+        previo = review.serialize_findings(
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": ruta,
+                        "line": 54,
+                        "files": [ruta],
+                        "severity": "High",
+                        "title": titulo,
+                        "state": "open",
+                    }
+                ],
+                "next": 2,
+            }
+        )
+        findings, cuerpo = self._publicar_resuelto(
+            ["README.md"], [], "F1 resuelto.", previo=previo
+        )
+        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertIn(f"· F1\n  - ↳ {self.MOTIVO}\n", cuerpo)
 
     def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
         import sys

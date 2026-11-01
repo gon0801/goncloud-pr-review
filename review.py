@@ -546,18 +546,32 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
     return dict(state, findings=findings)
 
 
-def dismiss_wants_all(rest):
-    """Whether `todo` is the explicit target. `todo` inside prose
-    ("todo bien") must never discard everything: strip F-ids, commas and
-    conjunctions, then accept only `todo` plus optional `lo demás`."""
-    tmp = re.sub(r"F\d+", " ", rest, flags=re.IGNORECASE)
-    tmp = re.sub(r"\b(?:y|e|o)\b", " ", tmp, flags=re.IGNORECASE)
-    tmp = tmp.replace(",", " ").strip()
-    return bool(
-        re.fullmatch(
-            DISMISS_ALL_WORD + r"(\s+lo\s+dem[áa]s)?[\s.,;:!¡?¿]*", tmp, re.IGNORECASE
-        )
+DISMISS_TARGETS_RE = re.compile(
+    r"(?:\s*(?:[,;]|\b[yeo]\b|F\d+\b|"
+    + DISMISS_ALL_WORD
+    + r"\b(?:\s+lo\s+dem[áa]s\b)?))*",
+    re.IGNORECASE,
+)
+DISMISS_FIRST_TOKEN_RE = re.compile(
+    r"\s*(?:F\d+\b|" + DISMISS_ALL_WORD + r"\b)", re.IGNORECASE
+)
+
+
+def dismiss_targets(rest):
+    """(ids, todo) de lo que sigue a "descartar". Solo el tramo inicial de ids,
+    comas, conjunciones y `todo [lo demás]` es el objetivo; el resto es el
+    motivo y no cambia el comando (un SHA como c2b1af7 trae "f7"). El primer
+    token tiene que ser un id o `todo`. `todo` seguido de una palabra
+    ("todo bien") es prosa y nunca descarta todo."""
+    if not DISMISS_FIRST_TOKEN_RE.match(rest):
+        return set(), False
+    end = DISMISS_TARGETS_RE.match(rest).end()
+    lead, tail = rest[:end], rest[end:]
+    ids = {f"F{int(n)}" for n in re.findall(r"\bF(\d+)", lead, re.IGNORECASE)}
+    todo = bool(re.search(r"\btodo\b", lead, re.IGNORECASE)) and not re.match(
+        r"\s*\w", tail
     )
+    return ids, todo
 
 
 def parse_comando_reconcile(body):
@@ -570,12 +584,11 @@ def parse_comando_reconcile(body):
         return {"action": "revisar", "arg": ""}
     m = re.match(r"ai-review:\s*descartar\s+(.+)", texto, re.IGNORECASE)
     if m:
-        rest = m.group(1)
-        if dismiss_wants_all(rest):
+        ids, todo = dismiss_targets(m.group(1))
+        if todo:
             return {"action": "descartar", "arg": "todo"}
-        numeros = re.findall(r"F(\d+)", rest, re.IGNORECASE)
-        if len(numeros) == 1:
-            return {"action": "descartar", "arg": f"F{int(numeros[0])}"}
+        if len(ids) == 1:
+            return {"action": "descartar", "arg": next(iter(ids))}
     return None
 
 
@@ -583,11 +596,9 @@ def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
     ids, all_open = set(), False
     for match in DISMISS_RE.finditer(body or ""):
-        rest = match.group(1)
-        if dismiss_wants_all(rest):
-            all_open = True
-        for number in re.findall(r"F(\d+)", rest, re.IGNORECASE):
-            ids.add(f"F{int(number)}")
+        found, todo = dismiss_targets(match.group(1))
+        ids |= found
+        all_open = all_open or todo
     return ids, all_open
 
 
@@ -695,7 +706,20 @@ def finding_line(finding):
     )
 
 
-def sections_for(merged, new_ids):
+MOTIVO_SIN_CAMBIO_PERTINENTE = (
+    "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
+)
+
+
+def motivo_line(finding_id, no_acreditados):
+    """Una línea bajo el hallazgo abierto que el modelo dio por resuelto sin que
+    el programa lo acepte. Sangrada: no termina en ` · Fn` como una de hallazgo."""
+    if finding_id not in no_acreditados:
+        return []
+    return [f"  - ↳ {MOTIVO_SIN_CAMBIO_PERTINENTE}"]
+
+
+def sections_for(merged, new_ids, no_acreditados=()):
     new = {i for i in new_ids}
     fresh = [f for f in merged if f["id"] in new and f["state"] == OPEN]
     still = [f for f in merged if f["id"] not in new and f["state"] == OPEN]
@@ -704,7 +728,11 @@ def sections_for(merged, new_ids):
     parts = ["## Nuevos en este push", ""]
     parts += [finding_line(f) for f in fresh] or ["Ninguno."]
     parts += ["", "## Siguen abiertos", ""]
-    parts += [finding_line(f) for f in still] or ["Ninguno."]
+    parts += [
+        line
+        for f in still
+        for line in [finding_line(f), *motivo_line(f["id"], no_acreditados)]
+    ] or ["Ninguno."]
     if done:
         parts += ["", f"<details><summary>Resueltos ({len(done)})</summary>", ""]
         parts += [finding_line(f) for f in done]
@@ -823,6 +851,8 @@ def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
         MARKER,
         aviso,
         "",
+        DETALLE_DEL_REVISOR,
+        "",
         "",
         "",
         ALCANCE_INICIO,
@@ -833,16 +863,38 @@ def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
     ]
     overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
     disponible = max(0, GITHUB_COMMENT_MAX - overhead)
-    partes[3] = (recorte() if len(review) > disponible else review) or (
+    partes[5] = (recorte() if len(review) > disponible else review) or (
         "_El revisor no devolvió texto._"
     )
     return "\n".join(partes)
 
 
-AVISO_SIN_ESPACIO = (
-    "> [!CAUTION]\n> **Comentario sin espacio para el estado:** el cuerpo fijo "
-    "del sticky no cabe en el presupuesto del comentario (con y sin libro de "
-    "cobertura); esta revisión no se marca como revisada ni confirma cobertura."
+# Avisos que escribe el programa en el comentario. La autoridad la da el lugar:
+# solo salen de secciones que arma el programa y su texto lo sabe el programa;
+# nunca llevan texto del modelo, que va únicamente en su sección ("Detalle del
+# revisor" y las explicaciones). Todos salen de aviso_md.
+AVISOS_DEL_PROGRAMA = (
+    "Revisión incompleta",
+    "Memoria conservada sin actualizar",
+    "Comentario sin espacio para el estado",
+    "No se pudo revisar el commit",
+    "Comando no entendido",
+)
+
+
+def aviso_md(etiqueta, texto, nivel=None):
+    if not any(etiqueta.startswith(e) for e in AVISOS_DEL_PROGRAMA):
+        raise ValueError(f"aviso sin registrar en AVISOS_DEL_PROGRAMA: {etiqueta!r}")
+    cabeza = f"> [!{nivel}]\n" if nivel else ""
+    return f"{cabeza}> **{etiqueta}:** {texto}"
+
+
+AVISO_SIN_ESPACIO = aviso_md(
+    "Comentario sin espacio para el estado",
+    "el cuerpo fijo del sticky no cabe en el presupuesto del comentario (con y "
+    "sin libro de cobertura); esta revisión no se marca como revisada ni "
+    "confirma cobertura.",
+    "CAUTION",
 )
 
 
@@ -859,10 +911,13 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
     if coverage is None and reviewed_any:
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
-        warnings.append(
-            "el revisor no alcanzó a revisar todo"
-            + (f": {neutralizar_marcadores(detail)}" if detail else "")
-        )
+        # El aviso dice solo lo que sabe el programa. El motivo que dio el modelo
+        # es texto suyo y va en su sección, tras su prosa.
+        warnings.append("el revisor no alcanzó a revisar todo")
+        if detail:
+            review = (
+                f"{review}\n\n" if review else ""
+            ) + f"Cobertura declarada por el revisor: parcial | {detail}"
     if budget_cut:
         warnings.append(
             f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff"
@@ -892,7 +947,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
         )
 
     if findings is not None:
-        review = neutralizar_marcadores(strip_model_findings_block(review))
+        review = strip_model_findings_block(review)
+    review = neutralizar_marcadores(prosa_del_modelo(review))
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
@@ -906,10 +962,13 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
     parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
     if warnings:
         parts += [
-            "> [!WARNING]",
-            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            *aviso_md(
+                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
+            ).split("\n"),
             "",
         ]
+    # El texto del modelo va en una sola sección, rotulada, también aquí.
+    parts += [DETALLE_DEL_REVISOR, ""]
     scope = [
         ALCANCE_INICIO,
         "",
@@ -971,16 +1030,19 @@ def compose_with_findings(
         findings["block"],
     )
     review = neutralizar_marcadores(
-        strip_model_verdict(strip_model_findings_block(review))
+        prosa_del_modelo(strip_model_verdict(strip_model_findings_block(review)))
     )
-    sections = sections_for(merged, new_ids)
+    no_acreditados = tuple(findings.get("no_acreditados", ()))
+    sections = sections_for(merged, new_ids, no_acreditados)
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
         # commit como revisado; sólo el aviso visible, dentro del tope.
-        aviso = (
-            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** el estado "
-            f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
-            "bytes; esta revisión no se marca como revisada ni confirma cobertura."
+        aviso = aviso_md(
+            "Memoria conservada sin actualizar",
+            f"el estado ({block.needed} bytes) no cabe en el bloque de "
+            f"{block.limit} bytes; esta revisión no se marca como revisada ni "
+            "confirma cobertura.",
+            "CAUTION",
         )
         return _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso)
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
@@ -999,8 +1061,9 @@ def compose_with_findings(
         parts.insert(3, linea_libro)
     if warnings:
         parts += [
-            "> [!WARNING]",
-            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            *aviso_md(
+                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
+            ).split("\n"),
             "",
         ]
     parts += [verdict_for(merged), ""]
@@ -1013,6 +1076,9 @@ def compose_with_findings(
         else:
             review = "_El revisor no devolvió texto._"
     parts += ["", "## Detalle del revisor", ""]
+    # Esta sección es del modelo y el programa no escribe en ella: si su prosa
+    # dice "resuelto" de un hallazgo que el veredicto deja abierto, la
+    # explicación está en la línea del hallazgo, en "Siguen abiertos".
     i_prosa = len(parts)
     parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
@@ -1068,7 +1134,11 @@ CAUTION_MARK = "> [!CAUTION]"
 
 
 def caution_banner(reason, head, has_previous):
-    banner = f"{CAUTION_MARK}\n> **No se pudo revisar el commit {head[:7]}:** {reason}."
+    banner = aviso_md(
+        f"No se pudo revisar el commit {head[:7]}",
+        f"{una_linea_literal(reason)}.",
+        "CAUTION",
+    )
     if has_previous:
         banner += (
             " Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
@@ -2550,6 +2620,7 @@ def actualizar_memoria_valida(
         "block": encoded.block if snapshot.schema == 3 else encoded,
         "model_ok": model_ok,
         "completion": decision.snapshot.completion,
+        "no_acreditados": review_domain.resoluciones_sin_acreditar(decision.snapshot),
     }
 
 
@@ -2659,11 +2730,25 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             "model_ok": model_ok,
             "keep": motivo,
         }
+    antes = {f["id"]: f["state"] for f in (prev or {}).get("findings", []) if f.get("id")}
+    resueltos_por_el_modelo = [
+        e for e in (model or {}).get("findings", []) if e.get("state") == RESOLVED
+    ]
     return {
         "merged": merged["findings"],
         "new_ids": new_ids,
         "block": bloque,
         "model_ok": model_ok,
+        "no_acreditados": tuple(
+            f["id"]
+            for f in merged["findings"]
+            if f["state"] == OPEN
+            and antes.get(f["id"]) == OPEN
+            and any(
+                e.get("id") == f["id"] or same_issue(e, f)
+                for e in resueltos_por_el_modelo
+            )
+        ),
     }
 
 
@@ -3284,9 +3369,12 @@ def _comandos_de_comentarios(comentarios, login, cursor):
         autor = _login_de(c)
         if login and autor == login:
             continue
-        parsed = parse_comando_reconcile(c.get("body") or "")
+        cuerpo = c.get("body") or ""
+        parsed = parse_comando_reconcile(cuerpo)
         if parsed is None:
-            continue
+            if not re.match(r"\s*ai-review:", cuerpo, re.IGNORECASE):
+                continue
+            parsed = {"action": review_domain.ACCION_NO_ENTENDIDA, "arg": ""}
         comandos.append(
             {
                 "cid": cid,
@@ -3538,6 +3626,7 @@ def cmd_reconcile(args):
         evento = _evento_de_entorno(repo, pr, head, base, digest)
         decision = review_domain.reconcile(current, evento, facts, policy)
     elif event_name == "issue_comment":
+        avisos = ()
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
         if payload.get("action") != "created":
             print(
@@ -3562,6 +3651,11 @@ def cmd_reconcile(args):
         )
         for cid, effect in rechazos:
             print(f"ai-review: comando {cid} rechazado ({effect})")
+        avisos = tuple(
+            aviso_de_comando_no_entendido(cid)
+            for cid, effect in rechazos
+            if effect == review_domain.RECHAZO_NO_ENTENDIDO
+        )
         decision = review_domain.Commit(snapshot=snapshot, work_after_commit=work)
     else:
         sys.exit(
@@ -3600,7 +3694,7 @@ def cmd_reconcile(args):
             artifact.get("pr_head_sha") or head,
         )
     elif isinstance(decision, review_domain.Commit) and event_name == "issue_comment":
-        visible = estado_visible(decision.snapshot)
+        visible = estado_visible(decision.snapshot, avisos=avisos)
     elif (
         artifact is not None
         and isinstance(decision, review_domain.Commit)
@@ -3845,6 +3939,7 @@ def revision_visible(artifact, snapshot, previos, head):
                 "block": bloque,
                 "model_ok": model_ok,
                 "completion": snapshot.completion,
+                "no_acreditados": review_domain.resoluciones_sin_acreditar(snapshot),
             },
             libro=libro,
             budget=review_domain.StorageBudget(),
@@ -3859,6 +3954,47 @@ ALCANCE_INICIO = "<details><summary>Alcance de la revisión</summary>"
 EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
+AVISO_COMANDO_PREFIX = aviso_md("Comando no entendido", "")
+AVISOS_VISIBLES = 3
+
+
+def es_aviso_de_comando(linea):
+    """Solo la línea exacta que escribe el programa para un comentario real se
+    conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
+    m = re.fullmatch(re.escape(AVISO_COMANDO_PREFIX) + r"el comentario (\d+) .*", linea)
+    return bool(m) and linea == aviso_de_comando_no_entendido(int(m.group(1)))
+
+
+def aviso_de_comando_no_entendido(cid):
+    return (
+        f"{AVISO_COMANDO_PREFIX}el comentario {cid} empieza con `ai-review:` pero no "
+        "es un comando que entienda; usa `ai-review: descartar F3`, "
+        "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
+    )
+
+
+_ENTIDAD_RE = re.compile(r"&(?!amp;)(?=#?\w+;)")
+
+
+def prosa_del_modelo(texto):
+    """Texto del modelo, listo para ir en la única sección que lo lleva ("Detalle
+    del revisor" y las explicaciones). La autoridad la da el lugar, no el texto:
+    los avisos del programa solo salen de secciones que arma el programa
+    (aviso_md, sections_for, estado_visible) y nunca contienen texto del modelo,
+    así que lo que parezca un aviso dentro de la sección del modelo se lee como
+    del modelo. Aquí solo hace falta el escapado básico para que no rompa el resto
+    del comentario: el `&` de una referencia de carácter se escapa para que se vea
+    literal (`<!--` y `<details` los neutraliza neutralizar_marcadores)."""
+    return _ENTIDAD_RE.sub("&amp;", texto)
+
+
+def una_linea_literal(texto):
+    """Causa externa (no del modelo, p. ej. el error del worker) que el programa
+    interpola en un aviso suyo: una sola línea, con HTML y markdown escapados para
+    que se vea literal y no forme otra línea o etiqueta dentro del aviso."""
+    texto = " ".join(str(texto).split())
+    texto = html.escape(texto, quote=False)
+    return re.sub(r"([\\`*_~\[\]])", r"\\\1", texto)
 
 
 def neutralizar_marcadores(texto):
@@ -3872,23 +4008,25 @@ def neutralizar_marcadores(texto):
 def texto_de_explicacion(artifact):
     """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
     Además de neutralizar_marcadores, no puede imitar las secciones que el
-    re-render busca (encabezados bajan a ####, también con sangría)."""
+    re-render busca (encabezados bajan a ####, también con sangría) ni los
+    avisos del programa (una cita `> **Comando no entendido:**` deja de serlo)."""
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
-    texto = neutralizar_marcadores(texto)
+    texto = neutralizar_marcadores(prosa_del_modelo(texto))
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
     return texto or "_El revisor no devolvió texto._"
 
 
-def estado_visible(snapshot, explicacion=None):
+def estado_visible(snapshot, explicacion=None, avisos=()):
     """Re-render del comentario cuando un comando o una explicación cambian la
     memoria sin una revisión nueva: veredicto y secciones salen del snapshot;
     los marcadores sha=/completion=, los avisos, el título y el detalle del
     revisor se conservan (nada de esto acredita un SHA). explicacion es
-    (finding_id, texto). Un cuerpo sin la forma de una revisión conserva el
-    resto tal cual."""
+    (finding_id, texto). avisos son líneas de comandos que no se entendieron:
+    se ven tras las secciones y se conservan los últimos en los re-renders. Un
+    cuerpo sin la forma de una revisión conserva el resto tal cual."""
     merged = review_domain.hallazgos_legacy(snapshot)
     titulos = {f["id"]: f["title"] for f in merged}
     nueva = []
@@ -3924,9 +4062,9 @@ def estado_visible(snapshot, explicacion=None):
         )
         if veredicto is None:
             cuerpo = cuerpo_con_cabecera(bloque, resto)
-            return "\n".join([cuerpo, *(["", *nueva] if nueva else [])])[
-                :GITHUB_COMMENT_MAX
-            ]
+            return "\n".join(
+                [cuerpo, *(["", *avisos] if avisos else []), *(["", *nueva] if nueva else [])]
+            )[:GITHUB_COMMENT_MAX]
         marcas = (SHA_PREFIX, COMPLETION_PREFIX, COVERED_PREFIX)
         # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
         # modelo publicados antes de neutralizarse.
@@ -3951,11 +4089,15 @@ def estado_visible(snapshot, explicacion=None):
                 m.group(1) for linea in tramo if (m := re.search(r" · (\S+)$", linea))
             ]
         explicaciones = []
+        previos_avisos = []
         for linea in region:
             if linea.startswith(EXPLICACION_PREFIX):
                 explicaciones.append([linea])
             elif explicaciones:
                 explicaciones[-1].append(linea)
+            elif es_aviso_de_comando(linea):
+                previos_avisos.append(linea)
+        todos_avisos = [a for a in previos_avisos if a not in avisos] + list(avisos)
         if nueva:
             explicaciones = [
                 e
@@ -3976,8 +4118,12 @@ def estado_visible(snapshot, explicacion=None):
             ),
             verdict_for(merged),
             "",
-            *sections_for(merged, nuevos),
+            *sections_for(
+                merged, nuevos, review_domain.resoluciones_sin_acreditar(snapshot)
+            ),
         ]
+        for aviso in todos_avisos[-AVISOS_VISIBLES:]:
+            cuerpo += ["", aviso]
         for e in explicaciones[-EXPLICACIONES_VISIBLES:]:
             while e and not e[-1]:
                 e = e[:-1]
