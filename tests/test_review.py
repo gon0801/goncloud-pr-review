@@ -7686,6 +7686,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         return findings, cuerpo
 
     MOTIVO = "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
+    NOTA_F1 = f"> **Nota del publicador:** F1 sigue abierto: {MOTIVO}; ver «Siguen abiertos»."
 
     def test_resuelto_sin_cambio_pertinente_se_explica_en_siguen_abiertos(self):
         for modo in ("v2", "v3"):
@@ -7701,12 +7702,16 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 self.assertIn("**Veredicto:** 1 High abierto.", cuerpo)
                 antes, detalle = cuerpo.split("## Detalle del revisor", 1)
                 self.assertEqual(antes.count(self.MOTIVO), 1)
-                self.assertNotIn(
-                    self.MOTIVO,
-                    detalle,
-                    "el programa no escribe en la prosa del modelo: el motivo vive encima",
+                self.assertTrue(
+                    detalle.lstrip("\n").startswith(self.NOTA_F1 + "\n\nF1 quedó resuelto."),
+                    "la explicación va en posición fija, justo antes de la prosa que nombra F1",
                 )
-                self.assertNotIn("Nota del publicador", cuerpo)
+                self.assertEqual(detalle.count("Nota del publicador"), 1)
+
+    def test_si_la_prosa_no_nombra_el_hallazgo_el_detalle_queda_igual(self):
+        _, cuerpo = self._publicar_resuelto(["README.md"], [], "Sin novedades.")
+        self.assertIn(f"- ↳ {self.MOTIVO}", cuerpo)
+        self.assertNotIn("Nota del publicador", cuerpo)
 
     def test_el_modelo_no_puede_falsificar_una_nota_del_publicador_en_su_prosa(self):
         falsa = (
@@ -7726,12 +7731,19 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         l
                         for l in detalle.split("\n")
                         if l.lstrip().lower().startswith("> **nota del publicador")
+                        and l != self.NOTA_F1
                     ],
                     [],
                     "ninguna cita del modelo abre como nota del programa",
                 )
                 self.assertIn("&gt; **Nota del publicador:** F9", detalle)
                 self.assertNotIn("Nota del publicador", antes)
+                reales = [l for l in detalle.split("\n") if l == self.NOTA_F1]
+                self.assertEqual(len(reales), 1 if delta == ["README.md"] else 0)
+                if reales:
+                    self.assertLess(
+                        detalle.index(self.NOTA_F1), detalle.index("F1 quedó resuelto.")
+                    )
 
     def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
         findings, cuerpo = self._publicar_resuelto(
