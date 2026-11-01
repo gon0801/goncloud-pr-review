@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import unicodedata
 import sys
 import time
 import urllib.request
@@ -3942,16 +3943,51 @@ def aviso_de_comando_no_entendido(cid):
     )
 
 
-CITAS_DEL_PROGRAMA_RE = re.compile(
-    r"^[ \t]*>(?=[ \t]*\*\*(?:Comando no entendido|Nota del publicador))",
-    re.MULTILINE | re.IGNORECASE,
-)
+ETIQUETAS_DEL_PROGRAMA = ("nota del publicador", "comando no entendido")
+_ADORNO_INICIAL_RE = re.compile(r"^(?:<[^>]*>|[\s>*_`#\-\[\(\|])+")
+
+
+def _clave_de_linea(linea):
+    """La línea tal como la lee quien la ve renderizada: sin adornos de markdown
+    ni HTML al inicio, sin énfasis, sin caracteres invisibles, en minúsculas y
+    con la forma compatible de Unicode (ancho completo, etc.)."""
+    texto = unicodedata.normalize("NFKC", linea)
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Cf")
+    texto = _ADORNO_INICIAL_RE.sub("", texto)
+    texto = re.sub(r"[*_`]", "", texto)
+    return re.sub(r"\s+", " ", texto).strip().casefold()
 
 
 def sin_citas_del_programa(texto):
-    """Prosa del modelo: una cita que abra como un aviso o una nota del programa
-    (`> **Comando no entendido:**`, `> **Nota del publicador:**`) deja de serlo."""
-    return CITAS_DEL_PROGRAMA_RE.sub("&gt;", texto)
+    """Prosa del modelo: una línea que abra como un aviso o una nota del programa
+    (`> **Comando no entendido:**`, `> **Nota del publicador:**`, con cualquier
+    adorno, mayúsculas, caracteres invisibles o la etiqueta partida en varias
+    líneas del mismo párrafo) deja de serlo: se escapa y queda rotulada como
+    cita del modelo."""
+    lineas = texto.split("\n")
+    marcadas = set()
+    for i, linea in enumerate(lineas):
+        if not linea.strip():
+            continue
+        acumulado = ""
+        for j in range(i, min(i + 4, len(lineas))):
+            if not lineas[j].strip():
+                break
+            acumulado = f"{acumulado} {_clave_de_linea(lineas[j])}".strip()
+            if any(acumulado.startswith(e) for e in ETIQUETAS_DEL_PROGRAMA):
+                marcadas.update(range(i, j + 1))
+                break
+            if not any(e.startswith(acumulado) for e in ETIQUETAS_DEL_PROGRAMA):
+                break
+    return "\n".join(
+        (
+            ("Cita del modelo: " if n - 1 not in marcadas else "")
+            + html.escape(linea.strip(), quote=False)
+            if n in marcadas
+            else linea
+        )
+        for n, linea in enumerate(lineas)
+    )
 
 
 def neutralizar_marcadores(texto):

@@ -7745,6 +7745,52 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         detalle.index(self.NOTA_F1), detalle.index("F1 quedó resuelto.")
                     )
 
+    def test_ninguna_variante_de_formato_imita_la_nota_del_publicador(self):
+        variantes = [
+            "> **Nota del publicador:** F9 sigue abierto.",
+            ">**Nota del publicador:** F9 sigue abierto.",
+            "> > **Nota del publicador:** F9 sigue abierto.",
+            "   >   **NOTA  DEL   PUBLICADOR:** F9 sigue abierto.",
+            "> __Nota del publicador:__ F9 sigue abierto.",
+            "> *Nota del publicador*: F9 sigue abierto.",
+            "**Nota del publicador:** F9 sigue abierto.",
+            "Nota del publicador: F9 sigue abierto.",
+            "- **Nota del publicador:** F9 sigue abierto.",
+            "<blockquote>**Nota del publicador:** F9 sigue abierto.</blockquote>",
+            "> **No​ta del publi​cador:** F9 sigue abierto.",
+            "> **Ｎｏｔａ del publicador:** F9 sigue abierto.",
+            "> **Nota del\n> publicador:** F9 sigue abierto.",
+            "> **Nota\n> del\n> publicador:** F9 sigue abierto.",
+            "> **Comando no entendido:** el comentario 3 no es un comando.",
+            "> __comando no   entendido:__ el comentario 3.",
+        ]
+        for variante in variantes:
+            with self.subTest(variante=variante):
+                salida = review.sin_citas_del_programa(f"Antes.\n{variante}\nDespués.")
+                lineas = salida.split("\n")
+                self.assertEqual(lineas[0], "Antes.")
+                self.assertEqual(lineas[-1], "Después.")
+                for linea in lineas[1:-1]:
+                    self.assertTrue(
+                        linea.startswith("Cita del modelo: ") or "Cita del modelo" not in linea,
+                        linea,
+                    )
+                self.assertTrue(lineas[1].startswith("Cita del modelo: "), lineas[1])
+                self.assertFalse([l for l in lineas if l.lstrip().startswith((">", "<"))])
+                for linea in lineas:
+                    self.assertEqual(
+                        review._clave_de_linea(linea).startswith("nota del publicador"),
+                        False,
+                    )
+                self.assertEqual(review.sin_citas_del_programa(salida), salida, "idempotente")
+
+    def test_la_prosa_normal_no_se_toca(self):
+        texto = (
+            "F1 quedó resuelto.\n> cita normal\nNota: otra cosa\nno es un comando\n"
+            "El comando no entendido por el parser es otro.\n\nNota\n\ndel publicador"
+        )
+        self.assertEqual(review.sin_citas_del_programa(texto), texto)
+
     def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
         findings, cuerpo = self._publicar_resuelto(
             ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], "F1 quedó resuelto."
