@@ -3310,6 +3310,184 @@ class ReportBoundary(unittest.TestCase):
         self.assertIsInstance(f2.status, domain.StatusResolved)
 
 
+class ResolucionEnOtroArchivo(unittest.TestCase):
+    """Los dos casos del 1-nov en gon0801/goncloud-motor: el arreglo vive en un
+    archivo que no es el ancla del hallazgo (#148 F1) o es un archivo nuevo
+    (#152 F4). El modelo nombra ese archivo en `files` y debe estar en el delta."""
+
+    REVISION = domain.Revision(
+        base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+    )
+    JAULA = dict(
+        id="F1",
+        title="El nuevo job de bateria rompe tests/test_ci_jaula.py",
+        severity="High",
+        ruta=".github/workflows/pruebas.yml",
+        linea=54,
+        arreglo=["tests/test_ci_jaula.py"],
+    )
+    TOPE = dict(
+        id="F4",
+        title="El tope del modelo no tiene comprobación automática que detecte el desvío",
+        severity="Medium",
+        ruta="verificacion/inspeccion/main.cfg",
+        linea=5,
+        arreglo=["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+    )
+
+    def _previo(self, caso, estado=None, relacionadas=()):
+        return domain.Finding(
+            id=caso["id"],
+            title=caso["title"],
+            severity=caso["severity"],
+            status=estado or domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path=caso["ruta"], line=caso["linea"]),
+            related_anchors=list(relacionadas),
+        )
+
+    def _entrada(self, caso, state="resolved", files=None):
+        return {
+            "id": caso["id"],
+            "file": caso["ruta"],
+            "line": caso["linea"],
+            "files": caso["arreglo"] if files is None else files,
+            "severity": caso["severity"],
+            "title": caso["title"],
+            "state": state,
+        }
+
+    def _aceptar(self, previo, entrada, delta):
+        hechos = domain.RepositoryFacts(
+            revision=self.REVISION, changed_paths=tuple(delta), delta_calculado=True
+        )
+        report = domain.validar_reporte(
+            [domain.observation_de_entrada(entrada)], "partial", hechos
+        )
+        plan = domain.ReviewPlan(
+            revision=self.REVISION,
+            changed_paths=tuple(delta),
+            policy=domain.ReviewPolicy(),
+        )
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=self.REVISION,
+            next_id=5,
+            completion=domain.UNKNOWN,
+            findings=[previo],
+            command_cursor=0,
+        )
+        transicion = domain.accept_report(snapshot, plan, report)
+        return next(f for f in transicion.snapshot.findings if f.id == previo.id)
+
+    def _sin_cambio_pertinente(self, hallazgo):
+        return any(
+            isinstance(e, domain.EvidenceUnverified)
+            and e.text == "el modelo lo evalúa resuelto; sin cambio pertinente registrado"
+            for e in hallazgo.evidence
+        )
+
+    def test_arreglo_en_otro_archivo_cierra_el_hallazgo(self):
+        previo = self._previo(self.JAULA)
+        f = self._aceptar(
+            previo, self._entrada(self.JAULA), delta=["tests/test_ci_jaula.py"]
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+        self.assertEqual(f.status.at_sha, "c" * 40)
+        self.assertEqual(
+            [a.path for a in f.related_anchors],
+            ["tests/test_ci_jaula.py"],
+            "el archivo del arreglo queda como ancla relacionada",
+        )
+
+    def test_arreglo_en_archivo_nuevo_cierra_el_hallazgo(self):
+        previo = self._previo(self.TOPE)
+        f = self._aceptar(
+            previo,
+            self._entrada(self.TOPE),
+            delta=["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+
+    def test_basta_con_que_cambie_uno_de_los_archivos_nombrados(self):
+        f = self._aceptar(
+            self._previo(self.TOPE),
+            self._entrada(self.TOPE),
+            delta=["tests/test_tope_del_modelo.py"],
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+
+    def test_el_archivo_puede_venir_como_ancla_relacionada(self):
+        entrada = self._entrada(self.JAULA, files=[])
+        entrada["related_anchors"] = [{"path": "tests/test_ci_jaula.py", "line": 12}]
+        f = self._aceptar(
+            self._previo(self.JAULA), entrada, delta=["tests/test_ci_jaula.py"]
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+
+    def test_resolved_sin_archivo_pertinente_en_el_delta_sigue_abierto(self):
+        for caso in (self.JAULA, self.TOPE):
+            with self.subTest(caso=caso["id"]):
+                f = self._aceptar(
+                    self._previo(caso),
+                    self._entrada(caso),
+                    delta=["README.md", "docs/otra-cosa.md"],
+                )
+                self.assertIsInstance(f.status, domain.StatusOpen)
+                self.assertTrue(self._sin_cambio_pertinente(f))
+
+    def test_cambio_en_un_archivo_que_el_modelo_no_nombra_no_cierra(self):
+        f = self._aceptar(
+            self._previo(self.JAULA),
+            self._entrada(self.JAULA, files=[]),
+            delta=["tests/test_ci_jaula.py"],
+        )
+        self.assertIsInstance(f.status, domain.StatusOpen)
+        self.assertTrue(self._sin_cambio_pertinente(f))
+
+    def test_el_ancla_original_sigue_acreditando_sin_nombrar_nada(self):
+        f = self._aceptar(
+            self._previo(self.JAULA),
+            self._entrada(self.JAULA, files=[]),
+            delta=[".github/workflows/pruebas.yml"],
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+
+    def test_un_descarte_no_reaparece_ni_se_resuelve(self):
+        previo = self._previo(self.JAULA, estado=domain.StatusDismissed(command_id=7))
+        f = self._aceptar(
+            previo, self._entrada(self.JAULA), delta=["tests/test_ci_jaula.py"]
+        )
+        self.assertEqual(f.status, domain.StatusDismissed(command_id=7))
+
+    def test_regresion_en_el_archivo_del_arreglo_reabre(self):
+        cerrado = self._aceptar(
+            self._previo(self.JAULA),
+            self._entrada(self.JAULA),
+            delta=["tests/test_ci_jaula.py"],
+        )
+        self.assertIsInstance(cerrado.status, domain.StatusResolved)
+        reabierto = self._aceptar(
+            cerrado,
+            self._entrada(self.JAULA, state="open", files=[]),
+            delta=["tests/test_ci_jaula.py"],
+        )
+        self.assertIsInstance(reabierto.status, domain.StatusOpen)
+
+    def test_resuelto_sin_regresion_se_conserva(self):
+        cerrado = self._aceptar(
+            self._previo(self.JAULA),
+            self._entrada(self.JAULA),
+            delta=["tests/test_ci_jaula.py"],
+        )
+        igual = self._aceptar(
+            cerrado,
+            self._entrada(self.JAULA, state="open", files=[]),
+            delta=["README.md"],
+        )
+        self.assertIsInstance(igual.status, domain.StatusResolved)
+
+
 OBSERVACIONES_PILOTO2 = json.loads(
     (ROOT / "tests" / "fixtures" / "t16_piloto2_observaciones.json").read_text()
 )

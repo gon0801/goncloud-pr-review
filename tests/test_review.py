@@ -7454,6 +7454,133 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     f2.status, domain.StatusOpen, "sin cambio pertinente sigue abierto"
                 )
 
+    def test_resuelto_en_otro_archivo_nombrado_en_files_cierra_el_hallazgo(self):
+        """#148 F1 y #152 F4 de gon0801/goncloud-motor: el arreglo vive en otro
+        archivo (o en uno nuevo) que el modelo nombra en `files`."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        casos = [
+            (
+                "F1",
+                "High",
+                "El nuevo job de bateria rompe tests/test_ci_jaula.py",
+                ".github/workflows/pruebas.yml",
+                54,
+                ["tests/test_ci_jaula.py"],
+                ["tests/test_ci_jaula.py"],
+            ),
+            (
+                "F4",
+                "Medium",
+                "El tope del modelo no tiene comprobación automática que detecte el desvío",
+                "verificacion/inspeccion/main.cfg",
+                5,
+                ["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+                ["tests/test_tope_del_modelo.py", ".github/workflows/pruebas.yml"],
+            ),
+        ]
+
+        def previo(schema, fid, severidad, titulo, ruta, linea):
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=5,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id=fid,
+                        title=titulo,
+                        severity=severidad,
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLegacy(path=ruta, line=linea),
+                    )
+                ],
+                command_cursor=0,
+            )
+            return domain.snapshot_a_v3(base) if schema == 3 else base
+
+        def modelo(fid, severidad, titulo, ruta, linea, files):
+            return (
+                "COVERAGE: partial\n\n## Detalle\n\n"
+                + domain.FINDINGS_PREFIX
+                + json.dumps(
+                    {
+                        "findings": [
+                            {
+                                "id": fid,
+                                "file": ruta,
+                                "line": linea,
+                                "files": files,
+                                "severity": severidad,
+                                "title": titulo,
+                                "state": "resolved",
+                            }
+                        ],
+                        "next": 5,
+                    }
+                )
+                + domain.FINDINGS_SUFFIX
+            )
+
+        def publicar(schema, caso, delta, files):
+            fid, sev, titulo, ruta, linea, _, _ = caso
+            encoded = domain.encode_snapshot(
+                previo(schema, fid, sev, titulo, ruta, linea), domain.StorageBudget()
+            )
+            manifest = {
+                "base": "b" * 40,
+                "head": "e" * 40,
+                "mode": "incremental",
+                "changed_files": delta,
+                "reviewed": delta,
+            }
+            with mock.patch.object(
+                review, "collect_dismissals", return_value=(set(), False, 0)
+            ):
+                r = review.build_findings(
+                    {"result": modelo(fid, sev, titulo, ruta, linea, files)},
+                    manifest,
+                    {"body": encoded.block if schema == 3 else encoded},
+                    "o/r",
+                    1,
+                    "bot",
+                    [],
+                )
+            self.assertIsNone(r.get("keep"))
+            return next(
+                f
+                for f in domain.read_snapshot(r["block"]).snapshot.findings
+                if f.id == fid
+            )
+
+        for schema in (2, 3):
+            for caso in casos:
+                fid, _, _, _, _, files, delta = caso
+                with self.subTest(schema=schema, hallazgo=fid):
+                    cerrado = publicar(schema, caso, delta, files)
+                    self.assertIsInstance(cerrado.status, domain.StatusResolved)
+                    self.assertEqual(cerrado.status.at_sha, "e" * 40)
+                with self.subTest(schema=schema, hallazgo=fid, caso="sin cambio"):
+                    abierto = publicar(schema, caso, ["README.md"], files)
+                    self.assertIsInstance(
+                        abierto.status,
+                        domain.StatusOpen,
+                        "ni el ancla ni lo que el modelo nombra cambiaron",
+                    )
+                with self.subTest(schema=schema, hallazgo=fid, caso="sin nombrar"):
+                    abierto = publicar(schema, caso, delta, [])
+                    self.assertIsInstance(
+                        abierto.status,
+                        domain.StatusOpen,
+                        "el modelo no nombra el archivo del arreglo",
+                    )
+
     def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
         import sys
 
