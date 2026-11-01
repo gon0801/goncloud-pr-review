@@ -1886,6 +1886,13 @@ _EVIDENCIA_SIN_CAMBIO_PERTINENTE = EvidenceUnverified(
 )
 
 
+def _evidencia_del_modelo(obs):
+    """La evidencia que trae el modelo, sin la nota que solo escribe el programa:
+    si el modelo la fabricara, el comentario atribuiría al programa un rechazo
+    que no ocurrió."""
+    return tuple(e for e in obs.evidence if e != _EVIDENCIA_SIN_CAMBIO_PERTINENTE)
+
+
 def _sin_cambio_pertinente(finding):
     return _EVIDENCIA_SIN_CAMBIO_PERTINENTE in tuple(finding.evidence)
 
@@ -1995,7 +2002,7 @@ def accept_report(current, plan, report):
                 causa = f"posible duplicado de {fid}"
                 if obs.cause_hint:
                     causa = f"{causa}; {obs.cause_hint}"
-                evidencia_dup = tuple(obs.evidence)
+                evidencia_dup = _evidencia_del_modelo(obs)
                 if marca_severidad:
                     evidencia_dup = evidencia_dup + (
                         EvidenceUnverified(text=marca_severidad),
@@ -2015,7 +2022,7 @@ def accept_report(current, plan, report):
                 next_id += 1
                 continue
             tocados.add(fid)
-            evidencia = tuple(obs.evidence)
+            evidencia = _evidencia_del_modelo(obs)
             if marca_severidad:
                 evidencia = evidencia + (EvidenceUnverified(text=marca_severidad),)
             arreglo = _rutas_nombradas(obs) & cambiadas
@@ -2084,7 +2091,7 @@ def accept_report(current, plan, report):
             primary_anchor=obs.primary_anchor,
             related_anchors=tuple(obs.related_anchors),
             cause_hint=obs.cause_hint,
-            evidence=tuple(obs.evidence),
+            evidence=_evidencia_del_modelo(obs),
         )
         next_id += 1
         findings.append(nueva)
