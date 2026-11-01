@@ -1003,15 +1003,9 @@ def compose_with_findings(
     )
     no_acreditados = tuple(findings.get("no_acreditados", ()))
     sections = sections_for(merged, new_ids, no_acreditados)
-    # El detalle es prosa del modelo: si dice "resuelto" de un hallazgo que el
-    # veredicto deja abierto, el motivo va también junto a esa prosa.
-    notas = [
-        f"> **Nota del publicador:** {fid} sigue abierto: {MOTIVO_SIN_CAMBIO_PERTINENTE}."
-        for fid in no_acreditados
-        if re.search(rf"\b{re.escape(fid)}\b", review)
-    ]
-    if notas:
-        review = review + "\n\n" + "\n".join(notas)
+    # El detalle es prosa del modelo: ahí el programa no escribe nada. Si dice
+    # "resuelto" de un hallazgo que el veredicto deja abierto, el motivo está
+    # encima, en "Siguen abiertos", que el modelo no puede escribir.
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
         # commit como revisado; sólo el aviso visible, dentro del tope.
