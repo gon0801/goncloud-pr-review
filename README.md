@@ -132,5 +132,7 @@ al modelo.
   el diagnóstico sea correcto).
 - `accept_report(current, plan, report) -> Transition`: el programa asigna los
   ids; título y causa son mutables. Resolver exige cambio pertinente o
-  reversión exacta; un match `Ambiguous` entra como hallazgo separado con la
+  reversión exacta: cambió un archivo ancla del hallazgo o uno que la
+  observación del modelo nombra (`files`, ancla primaria o relacionada), y en
+  ambos casos está en el delta real; un match `Ambiguous` entra como hallazgo separado con la
   indicación de posible duplicado; en estado legado devuelve `Keep`.

@@ -86,7 +86,7 @@ On the line(s) right BEFORE the `COVERAGE:` line (never after it), emit the mach
 Rules:
 
 - One entry per finding you report, with the same file, line, severity and title as the text above.
-- `file` is where the problem is. `files` lists the OTHER files involved, above all where the fix has to land (for example the callers or tests that break). A finding can only be marked resolved when one of these files changed, so list them.
+- `file` is where the problem is. `files` lists the OTHER files involved, above all where the fix has to land (for example the callers or tests that break). A finding can only be marked resolved when one of these files changed, so list them, and when you mark one resolved because of a fix elsewhere, list that file in the same entry.
 - `state` is `open` or `resolved`. Never emit `dismissed`: only a human discards.
 - Previous findings (see `prev_findings.md` when it exists) keep their same `id` for the same issue in the same file. New findings use `"id": "F-new"` (the publisher numbers them).
 - Never write `-->` inside any string of the block (titles, paths). Keep the block on as few lines as possible. The verdict counts only `open` findings.
@@ -110,7 +110,7 @@ Rules:
 When the user message says this is an INCREMENTAL review, the rest of the PR is already reviewed:
 
 1. Read `prev_findings.md` and verify each OPEN finding against the new diff.
-2. Mark `resolved` only what the new diff actually fixed. The fix may be in a related file (for example, tests updated to a renamed function): add that file to the finding's `files`. A finding none of whose files changed since the last review stays `open`.
+2. Mark `resolved` only what the new diff actually fixed. The fix may be in another file, including a new one (for example, a test or a check added for the finding): when you mark a finding `resolved` because of a fix outside its original file, name that file in the finding's `files` in the same entry. The publisher accepts `resolved` only if a file you name there, or one of the finding's own files, is in the real diff since the last review; otherwise the finding stays `open`.
 3. Look for NEW bugs only in the changed files listed in the user message.
 4. Carry every previous open and resolved finding into the new block with the same ids. Dismissed findings: leave them out of the block and never describe them in the text.
 5. In the text, describe in detail only NEW findings. Previous findings that stay open are already listed by the publisher: do not describe them again, and mention one only if something about it changed (severity, location, or a partial fix).
@@ -141,7 +141,7 @@ For each finding in the block, add:
 
 - `"anchor"`: `{"path", "blob_sha", "range": [from, to], "excerpt_digest"}` pointing at the exact lines of the HEAD blob (`git rev-parse HEAD:<path>` for the blob, `git show <blob>` for the content). `excerpt_digest` is the SHA-256 of those lines joined with `\n`, indentation included, no trailing newline. A digest you did not compute that way is rejected.
 - `"evidence"`: what backs the finding. Code you actually located goes as a located anchor. Claims you could NOT verify offline (reproductions, behavior of external services or libraries) must be listed as unverified: never present them as reproduced or tested, the publisher labels them separately.
-- `"claim"` is `open` or `resolved`. Mark `resolved` only when a change in one of the finding's files (or an exact revert) is part of this PR. If what convinced you is your own evaluation, say so in one unverified line: the publisher records it as an evaluation, not as proof.
+- `"claim"` is `open` or `resolved`. Mark `resolved` only when a change in one of the finding's files, or in a file you name for it (an entry in `files` or a related anchor, which is where the fix lives when it is not the original file), or an exact revert, is part of this PR. If what convinced you is your own evaluation, say so in one unverified line: the publisher records it as an evaluation, not as proof.
 - Two bugs with the same title on different files are different findings: anchor each one to its own file. If you cannot tell which previous finding a new one corresponds to, say so explicitly; the publisher keeps them separate instead of guessing.
 
 Without that instruction from the user message, emit the block exactly as before (no anchors, no evidence fields).

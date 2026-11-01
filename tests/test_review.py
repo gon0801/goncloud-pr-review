@@ -6170,6 +6170,15 @@ class IncrementalRun(unittest.TestCase):
         self.assertNotIn("EXPLAIN", prompt)
         self.assertNotIn("Aprueba", prompt)
 
+    def test_el_prompt_pide_nombrar_el_archivo_donde_vive_el_arreglo(self):
+        prompt = (ROOT / "prompt.md").read_text()
+        incremental = prompt.split("## Incremental review", 1)[1].split(
+            "## Continuation review", 1
+        )[0]
+        for token in ("including a new one", "name that file", "`files`"):
+            self.assertIn(token, incremental)
+        self.assertIn("in a file you name for it", prompt.split("## Anchors", 1)[1])
+
     def test_el_prompt_de_sistema_define_las_explicaciones(self):
         sistema = (ROOT / "prompt.md").read_text()
         self.assertIn("## Explanation requests", sistema)
