@@ -1878,6 +1878,28 @@ def _con_arreglo_registrado(previo, relacionadas, arreglo):
     return tuple(relacionadas)[: tope - len(nuevas)] + nuevas
 
 
+EVIDENCIA_SIN_CAMBIO_PERTINENTE = (
+    "el modelo lo evalúa resuelto; sin cambio pertinente registrado"
+)
+_EVIDENCIA_SIN_CAMBIO_PERTINENTE = EvidenceUnverified(
+    text=EVIDENCIA_SIN_CAMBIO_PERTINENTE
+)
+
+
+def _sin_cambio_pertinente(finding):
+    return _EVIDENCIA_SIN_CAMBIO_PERTINENTE in tuple(finding.evidence)
+
+
+def resoluciones_sin_acreditar(snapshot):
+    """Ids abiertos que el modelo dio por resueltos en la última pasada que los
+    tocó y que el programa no aceptó por falta de cambio pertinente."""
+    return tuple(
+        f.id
+        for f in snapshot.findings
+        if isinstance(f.status, StatusOpen) and _sin_cambio_pertinente(f)
+    )
+
+
 def _cobertura_persistida(report, plan):
     """La cobertura completa exige reporte válido, runtime terminado, sin
     omisiones obligatorias, obligaciones entregadas y claim completo del
@@ -2016,9 +2038,7 @@ def accept_report(current, plan, report):
                 _cambio_pertinente(previo, cambiadas) or arreglo
             ):
                 evidencia = evidencia + (
-                    EvidenceUnverified(
-                        text="el modelo lo evalúa resuelto; sin cambio pertinente registrado"
-                    ),
+                    EvidenceUnverified(text=EVIDENCIA_SIN_CAMBIO_PERTINENTE),
                 )
                 estado = StatusOpen()
             elif obs.claim == RESOLVED:
@@ -2071,6 +2091,14 @@ def accept_report(current, plan, report):
     for i, f in enumerate(findings):
         if f.id in tocados or isinstance(f.status, StatusDismissed):
             continue
+        if _sin_cambio_pertinente(f):
+            # la nota fecha de un reclamo anterior: esta pasada no lo repitió
+            f = findings[i] = replace(
+                f,
+                evidence=tuple(
+                    e for e in f.evidence if e != _EVIDENCIA_SIN_CAMBIO_PERTINENTE
+                ),
+            )
         if _ruta_primaria(f) in revertidas and not isinstance(f.status, StatusResolved):
             findings[i] = replace(
                 f,

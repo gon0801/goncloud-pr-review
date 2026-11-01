@@ -3467,6 +3467,43 @@ class ResolucionEnOtroArchivo(unittest.TestCase):
             reabierto.status, domain.StatusOpen, "una regresión en el arreglo reabre"
         )
 
+    def test_resoluciones_sin_acreditar_solo_cuenta_la_ultima_pasada_que_toco_el_hallazgo(self):
+        previo = self._previo(self.JAULA)
+        sin_acreditar = self._aceptar(
+            previo, self._entrada(self.JAULA), delta=["README.md"]
+        )
+
+        def snapshot(f):
+            return domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=self.REVISION,
+                next_id=5,
+                completion=domain.UNKNOWN,
+                findings=[f],
+                command_cursor=0,
+            )
+
+        self.assertEqual(domain.resoluciones_sin_acreditar(snapshot(sin_acreditar)), ("F1",))
+        hechos = domain.RepositoryFacts(
+            revision=self.REVISION, changed_paths=("README.md",), delta_calculado=True
+        )
+        omitido = domain.accept_report(
+            snapshot(sin_acreditar),
+            domain.ReviewPlan(revision=self.REVISION, policy=domain.ReviewPolicy()),
+            domain.validar_reporte([], "partial", hechos),
+        ).snapshot
+        self.assertEqual(
+            domain.resoluciones_sin_acreditar(omitido),
+            (),
+            "el modelo no repitió el reclamo: la nota vieja ya no aplica",
+        )
+        self.assertIsInstance(omitido.findings[0].status, domain.StatusOpen)
+        repetido = self._aceptar(
+            sin_acreditar, self._entrada(self.JAULA, state="open"), delta=["README.md"]
+        )
+        self.assertFalse(self._sin_cambio_pertinente(repetido), "un open limpia la nota")
+
     def test_el_ancla_original_sigue_acreditando_sin_nombrar_nada(self):
         f = self._aceptar(
             self._previo(self.JAULA),

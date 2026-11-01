@@ -644,6 +644,46 @@ class CoordinadorComandos(unittest.TestCase):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         return falso.leer()[0]["body"]
 
+    def test_el_motivo_de_una_resolucion_no_aceptada_sobrevive_a_un_comando(self):
+        base = snapshot_base()
+        con_nota = domain.replace(
+            base,
+            findings=[
+                base.findings[0],
+                domain.replace(
+                    base.findings[1],
+                    evidence=(
+                        domain.EvidenceUnverified(
+                            text=domain.EVIDENCIA_SIN_CAMBIO_PERTINENTE
+                        ),
+                    ),
+                ),
+            ],
+        )
+        previo = review.revision_visible(
+            self.REVISION_PREVIA, con_nota, {"F1", "F2"}, "a" * 40
+        )(domain.encode_snapshot(con_nota).block, "")
+        self.assertIn("  - ↳ el modelo lo da por resuelto", previo)
+        falso = self._falso(previo, [(5, "ai-review: descartar F1")])
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            with self._entorno(
+                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        with mock.patch.object(
+                            review, "collaborator_permission", return_value="write"
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        cuerpo = falso.leer()[0]["body"]
+        self.assertIn("1 descartado", cuerpo)
+        self.assertIn(
+            "· F2\n  - ↳ el modelo lo da por resuelto, pero no cambió ningún archivo pertinente\n",
+            cuerpo,
+        )
+
     def test_un_sha_en_el_motivo_no_cambia_el_comando_de_descarte(self):
         """goncloud-motor #152: "f7" dentro de c2b1af7 sumaba una segunda
         coincidencia y el comando se ignoraba en silencio."""

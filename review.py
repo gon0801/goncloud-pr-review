@@ -706,7 +706,20 @@ def finding_line(finding):
     )
 
 
-def sections_for(merged, new_ids):
+MOTIVO_SIN_CAMBIO_PERTINENTE = (
+    "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
+)
+
+
+def motivo_line(finding_id, no_acreditados):
+    """Una línea bajo el hallazgo abierto que el modelo dio por resuelto sin que
+    el programa lo acepte. Sangrada: no termina en ` · Fn` como una de hallazgo."""
+    if finding_id not in no_acreditados:
+        return []
+    return [f"  - ↳ {MOTIVO_SIN_CAMBIO_PERTINENTE}"]
+
+
+def sections_for(merged, new_ids, no_acreditados=()):
     new = {i for i in new_ids}
     fresh = [f for f in merged if f["id"] in new and f["state"] == OPEN]
     still = [f for f in merged if f["id"] not in new and f["state"] == OPEN]
@@ -715,7 +728,11 @@ def sections_for(merged, new_ids):
     parts = ["## Nuevos en este push", ""]
     parts += [finding_line(f) for f in fresh] or ["Ninguno."]
     parts += ["", "## Siguen abiertos", ""]
-    parts += [finding_line(f) for f in still] or ["Ninguno."]
+    parts += [
+        line
+        for f in still
+        for line in [finding_line(f), *motivo_line(f["id"], no_acreditados)]
+    ] or ["Ninguno."]
     if done:
         parts += ["", f"<details><summary>Resueltos ({len(done)})</summary>", ""]
         parts += [finding_line(f) for f in done]
@@ -984,7 +1001,17 @@ def compose_with_findings(
     review = neutralizar_marcadores(
         strip_model_verdict(strip_model_findings_block(review))
     )
-    sections = sections_for(merged, new_ids)
+    no_acreditados = tuple(findings.get("no_acreditados", ()))
+    sections = sections_for(merged, new_ids, no_acreditados)
+    # El detalle es prosa del modelo: si dice "resuelto" de un hallazgo que el
+    # veredicto deja abierto, el motivo va también junto a esa prosa.
+    notas = [
+        f"> **Nota del publicador:** {fid} sigue abierto: {MOTIVO_SIN_CAMBIO_PERTINENTE}."
+        for fid in no_acreditados
+        if re.search(rf"\b{re.escape(fid)}\b", review)
+    ]
+    if notas:
+        review = review + "\n\n" + "\n".join(notas)
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
         # commit como revisado; sólo el aviso visible, dentro del tope.
@@ -2561,6 +2588,7 @@ def actualizar_memoria_valida(
         "block": encoded.block if snapshot.schema == 3 else encoded,
         "model_ok": model_ok,
         "completion": decision.snapshot.completion,
+        "no_acreditados": review_domain.resoluciones_sin_acreditar(decision.snapshot),
     }
 
 
@@ -2670,11 +2698,25 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
             "model_ok": model_ok,
             "keep": motivo,
         }
+    antes = {f["id"]: f["state"] for f in (prev or {}).get("findings", []) if f.get("id")}
+    resueltos_por_el_modelo = [
+        e for e in (model or {}).get("findings", []) if e.get("state") == RESOLVED
+    ]
     return {
         "merged": merged["findings"],
         "new_ids": new_ids,
         "block": bloque,
         "model_ok": model_ok,
+        "no_acreditados": tuple(
+            f["id"]
+            for f in merged["findings"]
+            if f["state"] == OPEN
+            and antes.get(f["id"]) == OPEN
+            and any(
+                e.get("id") == f["id"] or same_issue(e, f)
+                for e in resueltos_por_el_modelo
+            )
+        ),
     }
 
 
@@ -3865,6 +3907,7 @@ def revision_visible(artifact, snapshot, previos, head):
                 "block": bloque,
                 "model_ok": model_ok,
                 "completion": snapshot.completion,
+                "no_acreditados": review_domain.resoluciones_sin_acreditar(snapshot),
             },
             libro=libro,
             budget=review_domain.StorageBudget(),
@@ -4025,7 +4068,9 @@ def estado_visible(snapshot, explicacion=None, avisos=()):
             ),
             verdict_for(merged),
             "",
-            *sections_for(merged, nuevos),
+            *sections_for(
+                merged, nuevos, review_domain.resoluciones_sin_acreditar(snapshot)
+            ),
         ]
         for aviso in todos_avisos[-AVISOS_VISIBLES:]:
             cuerpo += ["", aviso]
