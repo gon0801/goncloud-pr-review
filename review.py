@@ -546,18 +546,32 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
     return dict(state, findings=findings)
 
 
-def dismiss_wants_all(rest):
-    """Whether `todo` is the explicit target. `todo` inside prose
-    ("todo bien") must never discard everything: strip F-ids, commas and
-    conjunctions, then accept only `todo` plus optional `lo demás`."""
-    tmp = re.sub(r"F\d+", " ", rest, flags=re.IGNORECASE)
-    tmp = re.sub(r"\b(?:y|e|o)\b", " ", tmp, flags=re.IGNORECASE)
-    tmp = tmp.replace(",", " ").strip()
-    return bool(
-        re.fullmatch(
-            DISMISS_ALL_WORD + r"(\s+lo\s+dem[áa]s)?[\s.,;:!¡?¿]*", tmp, re.IGNORECASE
-        )
+DISMISS_TARGETS_RE = re.compile(
+    r"(?:\s*(?:[,;]|\b[yeo]\b|F\d+\b|"
+    + DISMISS_ALL_WORD
+    + r"\b(?:\s+lo\s+dem[áa]s\b)?))*",
+    re.IGNORECASE,
+)
+DISMISS_FIRST_TOKEN_RE = re.compile(
+    r"\s*(?:F\d+\b|" + DISMISS_ALL_WORD + r"\b)", re.IGNORECASE
+)
+
+
+def dismiss_targets(rest):
+    """(ids, todo) de lo que sigue a "descartar". Solo el tramo inicial de ids,
+    comas, conjunciones y `todo [lo demás]` es el objetivo; el resto es el
+    motivo y no cambia el comando (un SHA como c2b1af7 trae "f7"). El primer
+    token tiene que ser un id o `todo`. `todo` seguido de una palabra
+    ("todo bien") es prosa y nunca descarta todo."""
+    if not DISMISS_FIRST_TOKEN_RE.match(rest):
+        return set(), False
+    end = DISMISS_TARGETS_RE.match(rest).end()
+    lead, tail = rest[:end], rest[end:]
+    ids = {f"F{int(n)}" for n in re.findall(r"\bF(\d+)", lead, re.IGNORECASE)}
+    todo = bool(re.search(r"\btodo\b", lead, re.IGNORECASE)) and not re.match(
+        r"\s*\w", tail
     )
+    return ids, todo
 
 
 def parse_comando_reconcile(body):
@@ -570,12 +584,11 @@ def parse_comando_reconcile(body):
         return {"action": "revisar", "arg": ""}
     m = re.match(r"ai-review:\s*descartar\s+(.+)", texto, re.IGNORECASE)
     if m:
-        rest = m.group(1)
-        if dismiss_wants_all(rest):
+        ids, todo = dismiss_targets(m.group(1))
+        if todo:
             return {"action": "descartar", "arg": "todo"}
-        numeros = re.findall(r"F(\d+)", rest, re.IGNORECASE)
-        if len(numeros) == 1:
-            return {"action": "descartar", "arg": f"F{int(numeros[0])}"}
+        if len(ids) == 1:
+            return {"action": "descartar", "arg": next(iter(ids))}
     return None
 
 
@@ -583,11 +596,9 @@ def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
     ids, all_open = set(), False
     for match in DISMISS_RE.finditer(body or ""):
-        rest = match.group(1)
-        if dismiss_wants_all(rest):
-            all_open = True
-        for number in re.findall(r"F(\d+)", rest, re.IGNORECASE):
-            ids.add(f"F{int(number)}")
+        found, todo = dismiss_targets(match.group(1))
+        ids |= found
+        all_open = all_open or todo
     return ids, all_open
 
 
@@ -3284,9 +3295,12 @@ def _comandos_de_comentarios(comentarios, login, cursor):
         autor = _login_de(c)
         if login and autor == login:
             continue
-        parsed = parse_comando_reconcile(c.get("body") or "")
+        cuerpo = c.get("body") or ""
+        parsed = parse_comando_reconcile(cuerpo)
         if parsed is None:
-            continue
+            if not re.match(r"\s*ai-review:", cuerpo, re.IGNORECASE):
+                continue
+            parsed = {"action": review_domain.ACCION_NO_ENTENDIDA, "arg": ""}
         comandos.append(
             {
                 "cid": cid,
@@ -3538,6 +3552,7 @@ def cmd_reconcile(args):
         evento = _evento_de_entorno(repo, pr, head, base, digest)
         decision = review_domain.reconcile(current, evento, facts, policy)
     elif event_name == "issue_comment":
+        avisos = ()
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
         if payload.get("action") != "created":
             print(
@@ -3562,6 +3577,11 @@ def cmd_reconcile(args):
         )
         for cid, effect in rechazos:
             print(f"ai-review: comando {cid} rechazado ({effect})")
+        avisos = tuple(
+            aviso_de_comando_no_entendido(cid)
+            for cid, effect in rechazos
+            if effect == review_domain.RECHAZO_NO_ENTENDIDO
+        )
         decision = review_domain.Commit(snapshot=snapshot, work_after_commit=work)
     else:
         sys.exit(
@@ -3600,7 +3620,7 @@ def cmd_reconcile(args):
             artifact.get("pr_head_sha") or head,
         )
     elif isinstance(decision, review_domain.Commit) and event_name == "issue_comment":
-        visible = estado_visible(decision.snapshot)
+        visible = estado_visible(decision.snapshot, avisos=avisos)
     elif (
         artifact is not None
         and isinstance(decision, review_domain.Commit)
@@ -3859,6 +3879,16 @@ ALCANCE_INICIO = "<details><summary>Alcance de la revisión</summary>"
 EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
+AVISO_COMANDO_PREFIX = "> **Comando no entendido:** "
+AVISOS_VISIBLES = 3
+
+
+def aviso_de_comando_no_entendido(cid):
+    return (
+        f"{AVISO_COMANDO_PREFIX}el comentario {cid} empieza con `ai-review:` pero no "
+        "es un comando que entienda; usa `ai-review: descartar F3`, "
+        "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
+    )
 
 
 def neutralizar_marcadores(texto):
@@ -3882,13 +3912,14 @@ def texto_de_explicacion(artifact):
     return texto or "_El revisor no devolvió texto._"
 
 
-def estado_visible(snapshot, explicacion=None):
+def estado_visible(snapshot, explicacion=None, avisos=()):
     """Re-render del comentario cuando un comando o una explicación cambian la
     memoria sin una revisión nueva: veredicto y secciones salen del snapshot;
     los marcadores sha=/completion=, los avisos, el título y el detalle del
     revisor se conservan (nada de esto acredita un SHA). explicacion es
-    (finding_id, texto). Un cuerpo sin la forma de una revisión conserva el
-    resto tal cual."""
+    (finding_id, texto). avisos son líneas de comandos que no se entendieron:
+    se ven tras las secciones y se conservan los últimos en los re-renders. Un
+    cuerpo sin la forma de una revisión conserva el resto tal cual."""
     merged = review_domain.hallazgos_legacy(snapshot)
     titulos = {f["id"]: f["title"] for f in merged}
     nueva = []
@@ -3924,9 +3955,9 @@ def estado_visible(snapshot, explicacion=None):
         )
         if veredicto is None:
             cuerpo = cuerpo_con_cabecera(bloque, resto)
-            return "\n".join([cuerpo, *(["", *nueva] if nueva else [])])[
-                :GITHUB_COMMENT_MAX
-            ]
+            return "\n".join(
+                [cuerpo, *(["", *avisos] if avisos else []), *(["", *nueva] if nueva else [])]
+            )[:GITHUB_COMMENT_MAX]
         marcas = (SHA_PREFIX, COMPLETION_PREFIX, COVERED_PREFIX)
         # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
         # modelo publicados antes de neutralizarse.
@@ -3951,11 +3982,15 @@ def estado_visible(snapshot, explicacion=None):
                 m.group(1) for linea in tramo if (m := re.search(r" · (\S+)$", linea))
             ]
         explicaciones = []
+        previos_avisos = []
         for linea in region:
             if linea.startswith(EXPLICACION_PREFIX):
                 explicaciones.append([linea])
             elif explicaciones:
                 explicaciones[-1].append(linea)
+            elif linea.startswith(AVISO_COMANDO_PREFIX):
+                previos_avisos.append(linea)
+        todos_avisos = [a for a in previos_avisos if a not in avisos] + list(avisos)
         if nueva:
             explicaciones = [
                 e
@@ -3978,6 +4013,8 @@ def estado_visible(snapshot, explicacion=None):
             "",
             *sections_for(merged, nuevos),
         ]
+        for aviso in todos_avisos[-AVISOS_VISIBLES:]:
+            cuerpo += ["", aviso]
         for e in explicaciones[-EXPLICACIONES_VISIBLES:]:
             while e and not e[-1]:
                 e = e[:-1]

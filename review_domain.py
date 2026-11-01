@@ -2416,6 +2416,10 @@ def _consumido(current, cid, efecto=None, recibo=True):
     )
 
 
+ACCION_NO_ENTENDIDA = "no-entendida"
+RECHAZO_NO_ENTENDIDO = "comando no entendido"
+
+
 def procesar_comandos(current, comandos, permisos, target):
     """Procesa el prefijo confirmado de comentarios-comando (T09).
 
@@ -2451,7 +2455,10 @@ def procesar_comandos(current, comandos, permisos, target):
             snapshot = _consumido(snapshot, cid, rechazos[-1][1])
             continue
         action, arg = comando["action"], comando["arg"]
-        if action == "descartar":
+        if action == ACCION_NO_ENTENDIDA:
+            rechazos.append((cid, RECHAZO_NO_ENTENDIDO))
+            snapshot = _consumido(snapshot, cid, RECHAZO_NO_ENTENDIDO)
+        elif action == "descartar":
             ids_hallazgos = {f.id for f in snapshot.findings}
             if arg != "todo" and arg not in ids_hallazgos:
                 rechazos.append((cid, f"el hallazgo {arg} no existe"))

@@ -628,6 +628,106 @@ class CoordinadorComandos(unittest.TestCase):
         )
         self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
 
+    def _reconciliar_comentario(self, texto):
+        falso = self._falso(self._visible_previo(snapshot_base()), [(5, texto)])
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            with self._entorno(
+                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        with mock.patch.object(
+                            review, "collaborator_permission", return_value="write"
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        return falso.leer()[0]["body"]
+
+    def test_un_sha_en_el_motivo_no_cambia_el_comando_de_descarte(self):
+        """goncloud-motor #152: "f7" dentro de c2b1af7 sumaba una segunda
+        coincidencia y el comando se ignoraba en silencio."""
+        comando = (
+            "ai-review: descartar F1 — ya está resuelto desde c2b1af7: "
+            "tests/test_tope_del_modelo.py"
+        )
+        self.assertEqual(
+            review.parse_comando_reconcile(comando),
+            {"action": "descartar", "arg": "F1"},
+        )
+        self.assertEqual(review.parse_dismiss_command(comando), ({"F1"}, False))
+        cuerpo = self._reconciliar_comentario(comando)
+        carga = domain.read_snapshot(cuerpo)
+        self.assertEqual(carga.snapshot.command_cursor, 5)
+        estados = {f.id: type(f.status).__name__ for f in carga.snapshot.findings}
+        self.assertEqual(
+            estados, {"F1": "StatusDismissed", "F2": "StatusOpen"}, "F7 no existe ni se toca"
+        )
+        self.assertNotIn("Comando no entendido", cuerpo)
+
+    def test_el_primer_token_decide_el_objetivo_del_descarte(self):
+        for texto, esperado in (
+            ("ai-review: descartar F4 — resuelto desde c2b1af7", "F4"),
+            ("ai-review: descartar f4: ya resuelto en abc1f23", "F4"),
+            ("ai-review: descartar todo — resuelto desde c2b1af7", "todo"),
+            ("ai-review: descartar F3 y todo lo demás (ver f12)", "todo"),
+        ):
+            with self.subTest(texto=texto):
+                self.assertEqual(
+                    review.parse_comando_reconcile(texto),
+                    {"action": "descartar", "arg": esperado},
+                )
+        for texto in (
+            "ai-review: descartar el hallazgo F4",
+            "ai-review: descartar F1 y F2",
+            "ai-review: descartar todo bien",
+            "ai-review: descartar c2b1af7 F4",
+        ):
+            with self.subTest(texto=texto):
+                self.assertIsNone(review.parse_comando_reconcile(texto))
+
+    def test_un_comando_ambiguo_deja_una_linea_visible(self):
+        cuerpo = self._reconciliar_comentario("ai-review: descartar F1 y F2")
+        carga = domain.read_snapshot(cuerpo)
+        self.assertEqual(carga.snapshot.command_cursor, 5, "el cursor avanza una vez")
+        self.assertTrue(
+            all(isinstance(f.status, domain.StatusOpen) for f in carga.snapshot.findings),
+            "un comando que no se entiende no descarta nada",
+        )
+        lineas = [l for l in cuerpo.split("\n") if l.startswith("> **Comando no entendido:**")]
+        self.assertEqual(len(lineas), 1)
+        self.assertIn("comentario 5", lineas[0])
+        self.assertIn("ai-review: descartar F3", lineas[0])
+        self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
+
+    def test_el_aviso_de_comando_no_entendido_sobrevive_al_siguiente_re_render(self):
+        primero = self._reconciliar_comentario("ai-review: hola")
+        falso = self._falso(primero, [(9, "ai-review: descartar F1")])
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            with self._entorno(
+                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        with mock.patch.object(
+                            review, "collaborator_permission", return_value="write"
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        cuerpo = falso.leer()[0]["body"]
+        self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
+        self.assertIn("comentario 5", cuerpo)
+        self.assertIn("1 descartado", cuerpo)
+
+    def test_comentarios_que_no_son_del_revisor_no_dejan_aviso(self):
+        for texto in ("descartar F1", "por favor ai-review: descartar F1x", "gracias"):
+            with self.subTest(texto=texto):
+                comandos = review._comandos_de_comentarios(
+                    [{"id": 5, "body": texto, "user": "jefe"}], login="bot", cursor=0
+                )
+                self.assertEqual(comandos, ())
+
     def test_rerender_sin_cambios_reproduce_el_comentario(self):
         estado = snapshot_base()
         original = self._visible_previo(estado)
