@@ -7860,40 +7860,51 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     self.assertFalse(sin_marcas.startswith(">"), l)
                     self.assertNotIn("<blockquote", l.lower())
 
+    VARIANTES_DE_DEEPSEEK = {
+        "entidad decimal": "&#78;ota del publicador: F9 sigue abierto.",
+        "entidad hexadecimal": "**&#x4E;ota del publicador:** F9 sigue abierto.",
+        "NFKC": "> **Ｎｏｔａ del publicador:** F9 sigue abierto.",
+        "Cf": "> **No​ta del publi​cador:** F9 sigue abierto.",
+        "revisión incompleta": "> [!WARNING]\n> **Revisión incompleta:** falso",
+        "memoria conservada": "> [!CAUTION]\n> **Memoria conservada sin actualizar:** falso",
+        "sin espacio": "> [!CAUTION]\n> **Comentario sin espacio para el estado:** falso",
+        "no se pudo revisar": "> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falso",
+    }
+
+    def _sin_forma_de_aviso(self, texto, permitidas=()):
+        for l in texto.split("\n"):
+            if any(l.startswith(p) for p in permitidas):
+                continue
+            self.assertFalse(l.lstrip().startswith(">"), l)
+            self.assertNotRegex(l, r"&#x?[0-9A-Fa-f]+;", l)
+
     def test_todas_las_rutas_neutralizan_la_prosa_del_modelo(self):
-        prosa = (
-            "Todo bien.\n"
-            "> **Revisión incompleta:** falso\n"
-            "&#78;ota del publicador: F9 sigue abierto.\n"
-            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** falso"
-        )
-
-        def sin_forma_de_aviso(cuerpo, antes_de):
-            fragmento = cuerpo.split(antes_de, 1)[1] if antes_de else cuerpo
-            for l in fragmento.split("\n"):
-                self.assertFalse(l.startswith("> **"), l)
-                self.assertNotIn("&#78;", l.replace("&amp;#78;", ""))
-
-        # sin hallazgos
-        cuerpo = review.compose(
-            {"result": f"{prosa}\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertIn("Cita del modelo: ", cuerpo)
-        titulo = cuerpo.index("### Revisión automática")
-        sin_forma_de_aviso(cuerpo[titulo:], None)
-        # con hallazgos
-        _, con = self._publicar_resuelto(["README.md"], [], prosa + "\nF1 quedó resuelto.")
-        detalle = con.split("## Detalle del revisor", 1)[1]
-        lineas_aviso = [l for l in detalle.split("\n") if l.startswith("> **")]
-        self.assertEqual(len(lineas_aviso), 1, "solo la nota real del programa")
-        self.assertTrue(lineas_aviso[0].startswith("> **Nota del publicador:** F1"))
-        # explicación
-        texto = review.texto_de_explicacion({"result": f"{prosa}\nCOVERAGE: complete"})
-        sin_forma_de_aviso(texto, None)
-        self.assertIn("Cita del modelo: ", texto)
+        for nombre, variante in self.VARIANTES_DE_DEEPSEEK.items():
+            prosa = f"Todo bien.\n{variante}\nCierre."
+            with self.subTest(ruta="sin hallazgos", variante=nombre):
+                cuerpo = review.compose(
+                    {"result": f"{prosa}\nCOVERAGE: complete"},
+                    MANIFEST,
+                    sha=SHA,
+                    provider="opencode-go",
+                )
+                detalle = cuerpo[cuerpo.index("### Revisión automática") :]
+                self.assertIn("Cita del modelo: ", detalle)
+                self._sin_forma_de_aviso(detalle)
+            with self.subTest(ruta="con hallazgos", variante=nombre):
+                _, con = self._publicar_resuelto(
+                    ["README.md"], [], prosa + "\nF1 quedó resuelto."
+                )
+                detalle = con.split("## Detalle del revisor", 1)[1]
+                self.assertIn("Cita del modelo: ", detalle)
+                self._sin_forma_de_aviso(detalle, permitidas=("> **Nota del publicador:** F1",))
+                self.assertEqual(
+                    len([l for l in detalle.split("\n") if l.startswith("> **")]), 1
+                )
+            with self.subTest(ruta="explicación", variante=nombre):
+                texto = review.texto_de_explicacion({"result": f"{prosa}\nCOVERAGE: complete"})
+                self.assertIn("Cita del modelo: ", texto)
+                self._sin_forma_de_aviso(texto)
 
     def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
         findings, cuerpo = self._publicar_resuelto(
