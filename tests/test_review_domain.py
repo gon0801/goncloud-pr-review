@@ -3445,6 +3445,28 @@ class ResolucionEnOtroArchivo(unittest.TestCase):
         self.assertIsInstance(f.status, domain.StatusOpen)
         self.assertTrue(self._sin_cambio_pertinente(f))
 
+    def test_con_el_tope_de_anclas_lleno_el_archivo_del_arreglo_se_conserva(self):
+        viejas = [
+            domain.AnchorLegacy(path=f"src/vieja{i}.py", line=1) for i in range(4)
+        ]
+        previo = self._previo(self.JAULA, relacionadas=viejas)
+        f = self._aceptar(
+            previo, self._entrada(self.JAULA), delta=["tests/test_ci_jaula.py"]
+        )
+        self.assertIsInstance(f.status, domain.StatusResolved)
+        rutas = [a.path for a in f.related_anchors]
+        self.assertIn("tests/test_ci_jaula.py", rutas)
+        self.assertLessEqual(len(rutas) + 1, domain.FINDING_FILES_MAX)
+        self.assertEqual(rutas[:3], ["src/vieja0.py", "src/vieja1.py", "src/vieja2.py"])
+        reabierto = self._aceptar(
+            f,
+            self._entrada(self.JAULA, state="open", files=[]),
+            delta=["tests/test_ci_jaula.py"],
+        )
+        self.assertIsInstance(
+            reabierto.status, domain.StatusOpen, "una regresión en el arreglo reabre"
+        )
+
     def test_el_ancla_original_sigue_acreditando_sin_nombrar_nada(self):
         f = self._aceptar(
             self._previo(self.JAULA),

@@ -3883,6 +3883,13 @@ AVISO_COMANDO_PREFIX = "> **Comando no entendido:** "
 AVISOS_VISIBLES = 3
 
 
+def es_aviso_de_comando(linea):
+    """Solo la línea exacta que escribe el programa para un comentario real se
+    conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
+    m = re.fullmatch(re.escape(AVISO_COMANDO_PREFIX) + r"el comentario (\d+) .*", linea)
+    return bool(m) and linea == aviso_de_comando_no_entendido(int(m.group(1)))
+
+
 def aviso_de_comando_no_entendido(cid):
     return (
         f"{AVISO_COMANDO_PREFIX}el comentario {cid} empieza con `ai-review:` pero no "
@@ -3902,10 +3909,17 @@ def neutralizar_marcadores(texto):
 def texto_de_explicacion(artifact):
     """Prosa de una explicación del worker, sin cobertura, bloque ni veredicto.
     Además de neutralizar_marcadores, no puede imitar las secciones que el
-    re-render busca (encabezados bajan a ####, también con sangría)."""
+    re-render busca (encabezados bajan a ####, también con sangría) ni los
+    avisos del programa (una cita `> **Comando no entendido:**` deja de serlo)."""
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
+    texto = re.sub(
+        r"^[ \t]*>(?=[ \t]*\*\*Comando no entendido)",
+        "&gt;",
+        texto,
+        flags=re.M | re.I,
+    )
     texto = neutralizar_marcadores(texto)
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
@@ -3988,7 +4002,7 @@ def estado_visible(snapshot, explicacion=None, avisos=()):
                 explicaciones.append([linea])
             elif explicaciones:
                 explicaciones[-1].append(linea)
-            elif linea.startswith(AVISO_COMANDO_PREFIX):
+            elif es_aviso_de_comando(linea):
                 previos_avisos.append(linea)
         todos_avisos = [a for a in previos_avisos if a not in avisos] + list(avisos)
         if nueva:

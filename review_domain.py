@@ -1864,14 +1864,18 @@ def _rutas_nombradas(obs):
 
 def _con_arreglo_registrado(previo, relacionadas, arreglo):
     """El archivo donde el modelo ubica el arreglo pasa a ser ancla relacionada
-    del hallazgo resuelto: un cambio posterior ahí lo reabre."""
+    del hallazgo resuelto: un cambio posterior ahí lo reabre. Con el tope de
+    anclas lleno, el arreglo desplaza a las relacionadas más viejas y nunca
+    se recorta él."""
     conocidas = {_ruta_primaria(previo)} | {a.path for a in relacionadas}
     nuevas = tuple(
         AnchorLegacy(path=ruta, line=0) for ruta in sorted(arreglo - conocidas)
     )
     if not nuevas:
         return tuple(relacionadas)
-    return (tuple(relacionadas) + nuevas)[: FINDING_FILES_MAX - 1]
+    tope = FINDING_FILES_MAX - 1
+    nuevas = nuevas[:tope]
+    return tuple(relacionadas)[: tope - len(nuevas)] + nuevas
 
 
 def _cobertura_persistida(report, plan):

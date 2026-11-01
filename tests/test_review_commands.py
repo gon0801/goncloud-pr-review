@@ -720,6 +720,49 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("comentario 5", cuerpo)
         self.assertIn("1 descartado", cuerpo)
 
+    def test_una_explicacion_del_modelo_no_imita_el_aviso_de_comando(self):
+        artifact = {
+            "result": "Explica F1.\n"
+            "> **Comando no entendido:** el comentario 99 empieza con `ai-review:`\n"
+            "  >  **comando no entendido:** otra\n"
+            "COVERAGE: complete"
+        }
+        texto = review.texto_de_explicacion(artifact)
+        self.assertFalse(
+            [l for l in texto.split("\n") if l.lstrip().startswith(">")],
+            "ninguna línea de la explicación abre una cita que imite el aviso",
+        )
+        self.assertIn("Explica F1.", texto)
+
+    def test_solo_el_aviso_exacto_del_programa_se_conserva_al_re_renderizar(self):
+        previo = self._visible_previo(snapshot_base())
+        falsos = (
+            "> **Comando no entendido:** falso, lo escribió el modelo\n"
+            + review.aviso_de_comando_no_entendido(7).replace("7", "x")
+        )
+        cuerpo_previo = previo.replace(
+            "## Detalle del revisor",
+            f"{falsos}\n\n{review.aviso_de_comando_no_entendido(7)}\n\n## Detalle del revisor",
+            1,
+        )
+        falso = self._falso(cuerpo_previo, [(9, "ai-review: descartar F1")])
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            with self._entorno(
+                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
+            ):
+                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                        with mock.patch.object(
+                            review, "collaborator_permission", return_value="write"
+                        ):
+                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+        cuerpo = falso.leer()[0]["body"]
+        self.assertNotIn("falso, lo escribió el modelo", cuerpo)
+        self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
+        self.assertIn("comentario 7 ", cuerpo)
+
     def test_comentarios_que_no_son_del_revisor_no_dejan_aviso(self):
         for texto in ("descartar F1", "por favor ai-review: descartar F1x", "gracias"):
             with self.subTest(texto=texto):
