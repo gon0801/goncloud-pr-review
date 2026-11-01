@@ -7766,7 +7766,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         ]
         for variante in variantes:
             with self.subTest(variante=variante):
-                salida = review.sin_citas_del_programa(f"Antes.\n{variante}\nDespués.")
+                salida = review.prosa_del_modelo(f"Antes.\n{variante}\nDespués.")
                 lineas = salida.split("\n")
                 self.assertEqual(lineas[0], "Antes.")
                 self.assertEqual(lineas[-1], "Después.")
@@ -7782,14 +7782,118 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         review._clave_de_linea(linea).startswith("nota del publicador"),
                         False,
                     )
-                self.assertEqual(review.sin_citas_del_programa(salida), salida, "idempotente")
 
-    def test_la_prosa_normal_no_se_toca(self):
+    def test_la_prosa_normal_solo_pierde_la_cita(self):
         texto = (
             "F1 quedó resuelto.\n> cita normal\nNota: otra cosa\nno es un comando\n"
-            "El comando no entendido por el parser es otro.\n\nNota\n\ndel publicador"
+            "El comando no entendido por el parser es otro.\n\nNota\n\ndel publicador\n"
+            "```\n> dentro de un bloque &lt; se queda\n```"
         )
-        self.assertEqual(review.sin_citas_del_programa(texto), texto)
+        esperado = texto.replace("\n> cita normal", "\n&gt; cita normal")
+        self.assertEqual(review.prosa_del_modelo(texto), esperado)
+
+    def test_referencias_de_caracter_html_se_ven_literales_y_no_forman_la_etiqueta(self):
+        casos = [
+            "&#78;ota del publicador: F9 sigue abierto.",
+            "&#x4E;ota del publicador: F9 sigue abierto.",
+            "**&#78;ota del publicador:** F9 sigue abierto.",
+            "&gt; **Nota del publicador:** F9 sigue abierto.",
+            "Nota&nbsp;del&nbsp;publicador: F9",
+            "&#67;omando no entendido: x",
+        ]
+        for caso in casos:
+            with self.subTest(caso=caso):
+                salida = review.prosa_del_modelo(f"Antes.\n{caso}\nDespués.")
+                linea = salida.split("\n")[1]
+                self.assertTrue(linea.startswith("Cita del modelo: "), linea)
+                self.assertNotRegex(linea, r"&(?!amp;|gt;|lt;)\w*#?\w*;")
+        suelta = review.prosa_del_modelo("Un &#78; y un &copy; sueltos.")
+        self.assertEqual(suelta, "Un &amp;#78; y un &amp;copy; sueltos.")
+
+    def test_todo_aviso_registrado_del_programa_queda_cubierto_por_la_misma_lista(self):
+        for etiqueta in review.AVISOS_DEL_PROGRAMA:
+            for forma in (
+                f"> **{etiqueta}:** algo",
+                f"> [!WARNING]\n> **{etiqueta}:** algo",
+                f"> [!CAUTION]\n> **{etiqueta}:** algo",
+                f"**{etiqueta}:** algo",
+                f"{etiqueta}: algo",
+            ):
+                with self.subTest(etiqueta=etiqueta, forma=forma):
+                    salida = review.prosa_del_modelo(f"Antes.\n{forma}\nDespués.")
+                    lineas = salida.split("\n")
+                    self.assertFalse(
+                        [l for l in lineas if l.lstrip().startswith((">", "<"))], salida
+                    )
+                    self.assertIn("Cita del modelo: ", salida)
+        for banner in (
+            review.AVISO_SIN_ESPACIO,
+            review.caution_banner("falló", "a" * 40, False),
+            review.aviso_de_comando_no_entendido(5),
+        ):
+            primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
+            self.assertTrue(
+                any(primera[4:].startswith(e) for e in review.AVISOS_DEL_PROGRAMA),
+                primera,
+            )
+        with self.assertRaises(ValueError):
+            review.aviso_md("Aviso nuevo sin registrar", "x")
+
+    def test_el_modelo_no_puede_producir_el_formato_con_que_el_programa_emite_avisos(self):
+        for linea in (
+            "> texto",
+            ">texto",
+            "   > texto",
+            "> > texto",
+            "- > texto",
+            "1. > texto",
+            "* > > texto",
+            "> [!WARNING]",
+            "> [!CAUTION]",
+            "<blockquote>texto</blockquote>",
+            "<BLOCKQUOTE>texto",
+        ):
+            with self.subTest(linea=linea):
+                salida = review.prosa_del_modelo(f"Antes.\n{linea}\nDespués.")
+                for l in salida.split("\n"):
+                    sin_marcas = l.lstrip(" \t-+*0123456789.)")
+                    self.assertFalse(sin_marcas.startswith(">"), l)
+                    self.assertNotIn("<blockquote", l.lower())
+
+    def test_todas_las_rutas_neutralizan_la_prosa_del_modelo(self):
+        prosa = (
+            "Todo bien.\n"
+            "> **Revisión incompleta:** falso\n"
+            "&#78;ota del publicador: F9 sigue abierto.\n"
+            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** falso"
+        )
+
+        def sin_forma_de_aviso(cuerpo, antes_de):
+            fragmento = cuerpo.split(antes_de, 1)[1] if antes_de else cuerpo
+            for l in fragmento.split("\n"):
+                self.assertFalse(l.startswith("> **"), l)
+                self.assertNotIn("&#78;", l.replace("&amp;#78;", ""))
+
+        # sin hallazgos
+        cuerpo = review.compose(
+            {"result": f"{prosa}\nCOVERAGE: complete"},
+            MANIFEST,
+            sha=SHA,
+            provider="opencode-go",
+        )
+        self.assertIn("Cita del modelo: ", cuerpo)
+        titulo = cuerpo.index("### Revisión automática")
+        sin_forma_de_aviso(cuerpo[titulo:], None)
+        # con hallazgos
+        _, con = self._publicar_resuelto(["README.md"], [], prosa + "\nF1 quedó resuelto.")
+        detalle = con.split("## Detalle del revisor", 1)[1]
+        lineas_aviso = [l for l in detalle.split("\n") if l.startswith("> **")]
+        self.assertEqual(len(lineas_aviso), 1, "solo la nota real del programa")
+        self.assertTrue(lineas_aviso[0].startswith("> **Nota del publicador:** F1"))
+        # explicación
+        texto = review.texto_de_explicacion({"result": f"{prosa}\nCOVERAGE: complete"})
+        sin_forma_de_aviso(texto, None)
+        self.assertIn("Cita del modelo: ", texto)
 
     def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
         findings, cuerpo = self._publicar_resuelto(

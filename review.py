@@ -868,10 +868,34 @@ def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
     return "\n".join(partes)
 
 
-AVISO_SIN_ESPACIO = (
-    "> [!CAUTION]\n> **Comentario sin espacio para el estado:** el cuerpo fijo "
-    "del sticky no cabe en el presupuesto del comentario (con y sin libro de "
-    "cobertura); esta revisión no se marca como revisada ni confirma cobertura."
+# Única fuente de verdad de los avisos que escribe el programa en el comentario.
+# Todos salen de aviso_md, que los emite como cita de markdown (`> **Etiqueta:**`).
+# La prosa del modelo pasa por prosa_del_modelo, que no deja salir de ella ninguna
+# cita ni ninguna línea que, decodificada y normalizada, abra con una de estas
+# etiquetas: un aviso se reconoce por cómo lo emite el programa, no por su texto.
+AVISOS_DEL_PROGRAMA = (
+    "Revisión incompleta",
+    "Memoria conservada sin actualizar",
+    "Comentario sin espacio para el estado",
+    "No se pudo revisar el commit",
+    "Comando no entendido",
+    "Nota del publicador",
+)
+
+
+def aviso_md(etiqueta, texto, nivel=None):
+    if not any(etiqueta.startswith(e) for e in AVISOS_DEL_PROGRAMA):
+        raise ValueError(f"aviso sin registrar en AVISOS_DEL_PROGRAMA: {etiqueta!r}")
+    cabeza = f"> [!{nivel}]\n" if nivel else ""
+    return f"{cabeza}> **{etiqueta}:** {texto}"
+
+
+AVISO_SIN_ESPACIO = aviso_md(
+    "Comentario sin espacio para el estado",
+    "el cuerpo fijo del sticky no cabe en el presupuesto del comentario (con y "
+    "sin libro de cobertura); esta revisión no se marca como revisada ni "
+    "confirma cobertura.",
+    "CAUTION",
 )
 
 
@@ -921,7 +945,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
         )
 
     if findings is not None:
-        review = neutralizar_marcadores(strip_model_findings_block(review))
+        review = strip_model_findings_block(review)
+    review = neutralizar_marcadores(prosa_del_modelo(review))
     parts = [
         MARKER,
         f"{SHA_PREFIX}{sha} -->",
@@ -935,8 +960,9 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
     parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
     if warnings:
         parts += [
-            "> [!WARNING]",
-            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            *aviso_md(
+                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
+            ).split("\n"),
             "",
         ]
     scope = [
@@ -999,18 +1025,20 @@ def compose_with_findings(
         findings.get("new_ids", []),
         findings["block"],
     )
-    review = sin_citas_del_programa(
-        neutralizar_marcadores(strip_model_verdict(strip_model_findings_block(review)))
+    review = neutralizar_marcadores(
+        prosa_del_modelo(strip_model_verdict(strip_model_findings_block(review)))
     )
     no_acreditados = tuple(findings.get("no_acreditados", ()))
     sections = sections_for(merged, new_ids, no_acreditados)
     if isinstance(block, review_domain.CapacityExceeded):
         # Memoria íntegra que no cabe: no se publica bloque ni se marca el
         # commit como revisado; sólo el aviso visible, dentro del tope.
-        aviso = (
-            "> [!CAUTION]\n> **Memoria conservada sin actualizar:** el estado "
-            f"({block.needed} bytes) no cabe en el bloque de {block.limit} "
-            "bytes; esta revisión no se marca como revisada ni confirma cobertura."
+        aviso = aviso_md(
+            "Memoria conservada sin actualizar",
+            f"el estado ({block.needed} bytes) no cabe en el bloque de "
+            f"{block.limit} bytes; esta revisión no se marca como revisada ni "
+            "confirma cobertura.",
+            "CAUTION",
         )
         return _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso)
     title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
@@ -1029,8 +1057,9 @@ def compose_with_findings(
         parts.insert(3, linea_libro)
     if warnings:
         parts += [
-            "> [!WARNING]",
-            "> **Revisión incompleta:** " + "; ".join(warnings) + ".",
+            *aviso_md(
+                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
+            ).split("\n"),
             "",
         ]
     parts += [verdict_for(merged), ""]
@@ -1049,8 +1078,11 @@ def compose_with_findings(
     for fid in no_acreditados:
         if re.search(rf"\b{re.escape(fid)}\b", review):
             parts += [
-                f"> **Nota del publicador:** {fid} sigue abierto: "
-                f"{MOTIVO_SIN_CAMBIO_PERTINENTE}; ver «Siguen abiertos».",
+                aviso_md(
+                    "Nota del publicador",
+                    f"{fid} sigue abierto: {MOTIVO_SIN_CAMBIO_PERTINENTE}; "
+                    "ver «Siguen abiertos».",
+                ),
                 "",
             ]
     i_prosa = len(parts)
@@ -1108,7 +1140,9 @@ CAUTION_MARK = "> [!CAUTION]"
 
 
 def caution_banner(reason, head, has_previous):
-    banner = f"{CAUTION_MARK}\n> **No se pudo revisar el commit {head[:7]}:** {reason}."
+    banner = aviso_md(
+        f"No se pudo revisar el commit {head[:7]}", f"{reason}.", "CAUTION"
+    )
     if has_previous:
         banner += (
             " Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
@@ -3924,7 +3958,7 @@ ALCANCE_INICIO = "<details><summary>Alcance de la revisión</summary>"
 EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
-AVISO_COMANDO_PREFIX = "> **Comando no entendido:** "
+AVISO_COMANDO_PREFIX = aviso_md("Comando no entendido", "")
 AVISOS_VISIBLES = 3
 
 
@@ -3943,35 +3977,52 @@ def aviso_de_comando_no_entendido(cid):
     )
 
 
-ETIQUETAS_DEL_PROGRAMA = ("nota del publicador", "comando no entendido")
+ETIQUETAS_DEL_PROGRAMA = tuple(e.casefold() for e in AVISOS_DEL_PROGRAMA)
 _ADORNO_INICIAL_RE = re.compile(r"^(?:<[^>]*>|[\s>*_`#\-\[\(\|])+")
+_MARCAS_DE_INICIO_RE = re.compile(r"(?:[ \t]|[-+*]|\d{1,9}[.)]|>)*")
+_ENTIDAD_RE = re.compile(r"&(?!amp;)(?=#?\w+;)")
+_ETIQUETA_BLOCKQUOTE_RE = re.compile(r"<(/?)blockquote", re.IGNORECASE)
 
 
 def _clave_de_linea(linea):
     """La línea tal como la lee quien la ve renderizada: sin adornos de markdown
     ni HTML al inicio, sin énfasis, sin caracteres invisibles, en minúsculas y
     con la forma compatible de Unicode (ancho completo, etc.)."""
-    texto = unicodedata.normalize("NFKC", linea)
+    texto = unicodedata.normalize("NFKC", html.unescape(linea))
     texto = "".join(c for c in texto if unicodedata.category(c) != "Cf")
     texto = _ADORNO_INICIAL_RE.sub("", texto)
     texto = re.sub(r"[*_`]", "", texto)
     return re.sub(r"\s+", " ", texto).strip().casefold()
 
 
-def sin_citas_del_programa(texto):
-    """Prosa del modelo: una línea que abra como un aviso o una nota del programa
-    (`> **Comando no entendido:**`, `> **Nota del publicador:**`, con cualquier
-    adorno, mayúsculas, caracteres invisibles o la etiqueta partida en varias
-    líneas del mismo párrafo) deja de serlo: se escapa y queda rotulada como
-    cita del modelo."""
+def prosa_del_modelo(texto):
+    """Todo texto del modelo pasa por aquí antes de entrar al comentario, en todas
+    las rutas (con y sin hallazgos, detalle y explicaciones). Garantías, fuera de
+    los bloques de código:
+
+    1. Ninguna línea suya abre una cita de markdown (`>`, anidada o dentro de una
+       lista) ni un `<blockquote>`, que es el formato con que el programa emite
+       sus avisos (aviso_md): el modelo no puede producir ese formato.
+    2. Una referencia de carácter (`&#78;`, `&nbsp;`) se ve literal: `&` se escapa.
+    3. Una línea que, decodificada y normalizada (sin adornos, énfasis ni caracteres
+       invisibles, NFKC, etiqueta posiblemente partida en varias líneas del mismo
+       párrafo), abre con la etiqueta de un aviso de AVISOS_DEL_PROGRAMA se escapa
+       por completo y queda rotulada "Cita del modelo:"."""
     lineas = texto.split("\n")
+    en_codigo, fuera = False, []
+    for linea in lineas:
+        if linea.lstrip().startswith(("```", "~~~")):
+            en_codigo = not en_codigo
+            fuera.append(False)
+        else:
+            fuera.append(not en_codigo)
     marcadas = set()
     for i, linea in enumerate(lineas):
-        if not linea.strip():
+        if not fuera[i] or not linea.strip():
             continue
         acumulado = ""
         for j in range(i, min(i + 4, len(lineas))):
-            if not lineas[j].strip():
+            if not fuera[j] or not lineas[j].strip():
                 break
             acumulado = f"{acumulado} {_clave_de_linea(lineas[j])}".strip()
             if any(acumulado.startswith(e) for e in ETIQUETAS_DEL_PROGRAMA):
@@ -3979,15 +4030,19 @@ def sin_citas_del_programa(texto):
                 break
             if not any(e.startswith(acumulado) for e in ETIQUETAS_DEL_PROGRAMA):
                 break
-    return "\n".join(
-        (
-            ("Cita del modelo: " if n - 1 not in marcadas else "")
-            + html.escape(linea.strip(), quote=False)
-            if n in marcadas
-            else linea
-        )
-        for n, linea in enumerate(lineas)
-    )
+    salida = []
+    for n, linea in enumerate(lineas):
+        if not fuera[n]:
+            salida.append(linea)
+        elif n in marcadas:
+            rotulo = "Cita del modelo: " if n - 1 not in marcadas else ""
+            salida.append(rotulo + html.escape(linea.strip(), quote=False))
+        else:
+            linea = _ENTIDAD_RE.sub("&amp;", linea)
+            inicio = _MARCAS_DE_INICIO_RE.match(linea)
+            linea = inicio.group().replace(">", "&gt;") + linea[inicio.end() :]
+            salida.append(_ETIQUETA_BLOCKQUOTE_RE.sub(r"&lt;\1blockquote", linea))
+    return "\n".join(salida)
 
 
 def neutralizar_marcadores(texto):
@@ -4006,8 +4061,7 @@ def texto_de_explicacion(artifact):
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
-    texto = sin_citas_del_programa(texto)
-    texto = neutralizar_marcadores(texto)
+    texto = neutralizar_marcadores(prosa_del_modelo(texto))
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
     return texto or "_El revisor no devolvió texto._"
