@@ -4880,6 +4880,26 @@ class VerdictSections(unittest.TestCase):
         self.assertIn("<details><summary>Descartados (1)</summary>", body)
         self.assertIn("## Detalle del revisor", body)
 
+    def test_el_motivo_de_una_resolucion_no_aceptada_sale_bajo_el_hallazgo_abierto(self):
+        merged = [make_finding("F1"), make_finding("F2")]
+        partes = review.sections_for(merged, [], no_acreditados=("F1",))
+        siguen = partes.index("## Siguen abiertos")
+        bloque = partes[siguen:]
+        i = next(n for n, linea in enumerate(bloque) if linea.endswith(" · F1"))
+        self.assertEqual(
+            bloque[i + 1],
+            "  - ↳ el modelo lo da por resuelto, pero no cambió ningún archivo pertinente",
+        )
+        self.assertTrue(bloque[i + 2].endswith(" · F2"), "F2 no lleva motivo")
+        self.assertEqual(
+            len([l for l in partes if "no cambió ningún archivo pertinente" in l]), 1
+        )
+        self.assertEqual(
+            review.sections_for(merged, [], no_acreditados=()),
+            review.sections_for(merged, []),
+            "sin resoluciones no aceptadas el render no cambia",
+        )
+
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
         body = review.compose(
@@ -7589,6 +7609,149 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         domain.StatusOpen,
                         "el modelo no nombra el archivo del arreglo",
                     )
+
+    def _publicar_resuelto(self, delta, files, prosa, modo="v3", previo=None, estado="resolved"):
+        """build_findings + compose con un F1 anclado en pruebas.yml que el modelo
+        da por resuelto; devuelve (findings, comentario)."""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        import review_domain as domain
+
+        titulo = "El nuevo job de bateria rompe tests/test_ci_jaula.py"
+        ruta = ".github/workflows/pruebas.yml"
+        if previo is None:
+            base = domain.Snapshot(
+                schema=2,
+                generation=1,
+                revision=domain.Revision(
+                    base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+                ),
+                next_id=2,
+                completion=domain.UNKNOWN,
+                findings=[
+                    domain.Finding(
+                        id="F1",
+                        title=titulo,
+                        severity="High",
+                        status=domain.StatusOpen(),
+                        primary_anchor=domain.AnchorLegacy(path=ruta, line=54),
+                    )
+                ],
+                command_cursor=0,
+            )
+            previo = domain.encode_snapshot(
+                domain.snapshot_a_v3(base) if modo == "v3" else base,
+                domain.StorageBudget(),
+            )
+            previo = previo.block if modo == "v3" else previo
+        entrada = {
+            "id": "F1",
+            "file": ruta,
+            "line": 54,
+            "files": files,
+            "severity": "High",
+            "title": titulo,
+            "state": estado,
+        }
+        modelo = (
+            prosa
+            + "\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps({"findings": [entrada], "next": 2})
+            + domain.FINDINGS_SUFFIX
+            + "\nCOVERAGE: partial"
+        )
+        manifest = {
+            "base": "b" * 40,
+            "head": "e" * 40,
+            "mode": "incremental",
+            "changed_files": delta,
+            "reviewed": delta,
+        }
+        with mock.patch.object(
+            review, "collect_dismissals", return_value=(set(), False, 0)
+        ):
+            findings = review.build_findings(
+                {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
+            )
+        self.assertIsNone(findings.get("keep"))
+        cuerpo = review.compose(
+            {"result": modelo},
+            {"reviewed": delta, "excluded": [], **manifest},
+            sha="e" * 40,
+            provider="opencode-go",
+            findings=findings,
+        )
+        return findings, cuerpo
+
+    MOTIVO = "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
+
+    def test_resuelto_sin_cambio_pertinente_se_explica_en_siguen_abiertos(self):
+        for modo in ("v2", "v3"):
+            with self.subTest(modo=modo):
+                findings, cuerpo = self._publicar_resuelto(
+                    ["README.md"], [], "F1 quedó resuelto.", modo=modo
+                )
+                self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+                siguen = cuerpo[cuerpo.index("## Siguen abiertos") :]
+                self.assertIn(
+                    f"· F1\n  - ↳ {self.MOTIVO}\n", siguen.split("## Detalle")[0]
+                )
+                self.assertIn("**Veredicto:** 1 High abierto.", cuerpo)
+                detalle = cuerpo.split("## Detalle del revisor", 1)[1]
+                self.assertIn(
+                    f"> **Nota del publicador:** F1 sigue abierto: {self.MOTIVO}.",
+                    detalle,
+                    "la prosa que dice resuelto lleva el motivo al lado",
+                )
+
+    def test_sin_mencion_en_la_prosa_no_hay_nota_en_el_detalle(self):
+        _, cuerpo = self._publicar_resuelto(["README.md"], [], "Sin novedades.")
+        self.assertIn(f"- ↳ {self.MOTIVO}", cuerpo)
+        self.assertNotIn("Nota del publicador", cuerpo)
+
+    def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
+        findings, cuerpo = self._publicar_resuelto(
+            ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], "F1 quedó resuelto."
+        )
+        self.assertEqual(tuple(findings["no_acreditados"]), ())
+        self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
+        self.assertIn("**Veredicto:** sin problemas abiertos (1 resuelto).", cuerpo)
+
+    def test_el_motivo_no_sobrevive_a_una_pasada_que_no_repite_el_reclamo(self):
+        findings, _ = self._publicar_resuelto(["README.md"], [], "F1 resuelto.")
+        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        siguiente, cuerpo = self._publicar_resuelto(
+            ["README.md"], [], "F1 sigue.", previo=findings["block"], estado="open"
+        )
+        self.assertEqual(tuple(siguiente["no_acreditados"]), ())
+        self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
+
+    def test_camino_legado_tambien_explica_la_resolucion_no_aceptada(self):
+        titulo = "El nuevo job de bateria rompe tests/test_ci_jaula.py"
+        ruta = ".github/workflows/pruebas.yml"
+        previo = review.serialize_findings(
+            {
+                "findings": [
+                    {
+                        "id": "F1",
+                        "file": ruta,
+                        "line": 54,
+                        "files": [ruta],
+                        "severity": "High",
+                        "title": titulo,
+                        "state": "open",
+                    }
+                ],
+                "next": 2,
+            }
+        )
+        findings, cuerpo = self._publicar_resuelto(
+            ["README.md"], [], "F1 resuelto.", previo=previo
+        )
+        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertIn(f"· F1\n  - ↳ {self.MOTIVO}\n", cuerpo)
 
     def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
         import sys
