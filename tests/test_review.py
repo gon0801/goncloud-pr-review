@@ -7787,10 +7787,91 @@ class PersistenciaSinPerdida(unittest.TestCase):
         texto = (
             "F1 quedó resuelto.\n> cita normal\nNota: otra cosa\nno es un comando\n"
             "El comando no entendido por el parser es otro.\n\nNota\n\ndel publicador\n"
-            "```\n> dentro de un bloque &lt; se queda\n```"
+            "```\n> dentro de un bloque &lt; también se escapa\n```"
         )
-        esperado = texto.replace("\n> cita normal", "\n&gt; cita normal")
+        esperado = texto.replace("\n> cita normal", "\n&gt; cita normal").replace(
+            "\n> dentro de un bloque &lt;", "\n&gt; dentro de un bloque &amp;lt;"
+        )
         self.assertEqual(review.prosa_del_modelo(texto), esperado)
+
+    def test_las_cercas_de_codigo_no_eximen_nada_aunque_no_lo_sean_para_github(self):
+        textos = {
+            "info con acentos graves": (
+                "Revisé el diff.\n``` `x`\n> [!CAUTION]\n"
+                "> **Nota del publicador:** F9 sigue abierto: falso.\n"
+            ),
+            "cierre con info string": (
+                "Ejemplo:\n```\n```python\n```\n"
+                "> **Nota del publicador:** F9 sigue abierto: falso.\n"
+            ),
+            "cerca con cuatro espacios": (
+                "Texto.\n    ```\n> **Revisión incompleta:** falso.\n"
+            ),
+            "tildes": "Texto.\n~~~\n~~~ x\n> **Memoria conservada sin actualizar:** falso\n",
+            "cerca sin cerrar": "Texto.\n```\n> [!CAUTION]\n> **Comando no entendido:** falso\n",
+        }
+        for nombre, texto in textos.items():
+            with self.subTest(caso=nombre):
+                cuerpo = review.compose(
+                    {"result": f"{texto}\nCOVERAGE: complete"},
+                    MANIFEST,
+                    sha=SHA,
+                    provider="opencode-go",
+                )
+                detalle = cuerpo[cuerpo.index("### Revisión automática") :]
+                self.assertIn("Cita del modelo: ", detalle)
+                self.assertFalse(
+                    [l for l in detalle.split("\n") if l.lstrip().startswith(">")], detalle
+                )
+                _, con = self._publicar_resuelto(["README.md"], [], texto + "\nF1 quedó resuelto.")
+                aviso = [
+                    l
+                    for l in con.split("## Detalle del revisor", 1)[1].split("\n")
+                    if l.lstrip().startswith(">")
+                ]
+                self.assertEqual(len(aviso), 1, aviso)
+                self.assertTrue(aviso[0].startswith("> **Nota del publicador:** F1"))
+
+    def test_el_detalle_de_cobertura_del_modelo_no_forma_parte_del_formato_del_aviso(self):
+        detalle = (
+            "faltó a.py<br>**Nota del publicador:** F9 sigue abierto &#78;ota "
+            "<blockquote>x</blockquote> `c` _e_ [l](u)"
+        )
+        manifest = {"reviewed": ["a.py"], "excluded": []}
+        sin = review.compose(
+            {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
+            manifest,
+            sha=SHA,
+            provider="opencode-go",
+        )
+        _, con = self._publicar_resuelto(
+            ["README.md"], [], "Revisé.\n\nCOVERAGE: partial | " + detalle
+        )
+        for nombre, cuerpo in (("sin hallazgos", sin),):
+            with self.subTest(ruta=nombre):
+                aviso = [l for l in cuerpo.split("\n") if "Revisión incompleta" in l]
+                self.assertEqual(len(aviso), 1)
+                linea = aviso[0]
+                self.assertTrue(linea.startswith("> **Revisión incompleta:** "))
+                resto = linea[len("> **Revisión incompleta:** ") :]
+                for prohibido in ("<br", "<blockquote", "&#78;", "**Nota", "`c`", "_e_", "[l](u)"):
+                    self.assertNotIn(prohibido, resto)
+                self.assertIn("&lt;br&gt;", resto)
+                self.assertIn("&amp;#78;", resto)
+        self.assertEqual(len([l for l in con.split("\n") if "Revisión incompleta" in l]), 1)
+        self.assertNotIn("<br", con.split("Revisión incompleta", 1)[1].split("\n")[0])
+
+    def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
+        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
+        lineas = banner.split("\n")
+        self.assertEqual(lineas[0], "> [!CAUTION]")
+        self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
+        self.assertNotIn("<br", banner)
+        self.assertNotIn("&#78;", banner)
+        self.assertEqual(
+            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
+            "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
+        )
 
     def test_referencias_de_caracter_html_se_ven_literales_y_no_forman_la_etiqueta(self):
         casos = [

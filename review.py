@@ -914,7 +914,7 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
     elif coverage == "partial":
         warnings.append(
             "el revisor no alcanzó a revisar todo"
-            + (f": {neutralizar_marcadores(detail)}" if detail else "")
+            + (f": {una_linea_literal(detail)}" if detail else "")
         )
     if budget_cut:
         warnings.append(
@@ -1141,7 +1141,9 @@ CAUTION_MARK = "> [!CAUTION]"
 
 def caution_banner(reason, head, has_previous):
     banner = aviso_md(
-        f"No se pudo revisar el commit {head[:7]}", f"{reason}.", "CAUTION"
+        f"No se pudo revisar el commit {head[:7]}",
+        f"{una_linea_literal(reason)}.",
+        "CAUTION",
     )
     if has_previous:
         banner += (
@@ -3997,8 +3999,12 @@ def _clave_de_linea(linea):
 
 def prosa_del_modelo(texto):
     """Todo texto del modelo pasa por aquí antes de entrar al comentario, en todas
-    las rutas (con y sin hallazgos, detalle y explicaciones). Garantías, fuera de
-    los bloques de código:
+    las rutas (con y sin hallazgos, detalle y explicaciones). Garantías, en todas
+    las líneas, también las que el modelo ponga entre cercas de código: no se
+    intenta reproducir las reglas de cercas de CommonMark (una cerca con acentos
+    graves en su info string, una de cierre con info string o una con cuatro
+    espacios de sangría no lo son para GitHub), así que ninguna línea queda
+    exenta. Dentro de una cerca real el costo es cosmético (`&gt;` literal).
 
     1. Ninguna línea suya abre una cita de markdown (`>`, anidada o dentro de una
        lista) ni un `<blockquote>`, que es el formato con que el programa emite
@@ -4009,20 +4015,13 @@ def prosa_del_modelo(texto):
        párrafo), abre con la etiqueta de un aviso de AVISOS_DEL_PROGRAMA se escapa
        por completo y queda rotulada "Cita del modelo:"."""
     lineas = texto.split("\n")
-    en_codigo, fuera = False, []
-    for linea in lineas:
-        if linea.lstrip().startswith(("```", "~~~")):
-            en_codigo = not en_codigo
-            fuera.append(False)
-        else:
-            fuera.append(not en_codigo)
     marcadas = set()
     for i, linea in enumerate(lineas):
-        if not fuera[i] or not linea.strip():
+        if not linea.strip():
             continue
         acumulado = ""
         for j in range(i, min(i + 4, len(lineas))):
-            if not fuera[j] or not lineas[j].strip():
+            if not lineas[j].strip():
                 break
             acumulado = f"{acumulado} {_clave_de_linea(lineas[j])}".strip()
             if any(acumulado.startswith(e) for e in ETIQUETAS_DEL_PROGRAMA):
@@ -4032,9 +4031,7 @@ def prosa_del_modelo(texto):
                 break
     salida = []
     for n, linea in enumerate(lineas):
-        if not fuera[n]:
-            salida.append(linea)
-        elif n in marcadas:
+        if n in marcadas:
             rotulo = "Cita del modelo: " if n - 1 not in marcadas else ""
             salida.append(rotulo + html.escape(linea.strip(), quote=False))
         else:
@@ -4043,6 +4040,16 @@ def prosa_del_modelo(texto):
             linea = inicio.group().replace(">", "&gt;") + linea[inicio.end() :]
             salida.append(_ETIQUETA_BLOCKQUOTE_RE.sub(r"&lt;\1blockquote", linea))
     return "\n".join(salida)
+
+
+def una_linea_literal(texto):
+    """Texto del modelo (o de una causa externa) que el programa interpola dentro
+    de uno de sus propios avisos: una sola línea, sin HTML (`<br>`, `<blockquote>`,
+    referencias de carácter) y sin énfasis ni código de markdown que forme otra
+    línea o etiqueta dentro del aviso. Se ve literal."""
+    texto = " ".join(str(texto).split())
+    texto = html.escape(texto, quote=False)
+    return re.sub(r"([\\`*_~\[\]])", r"\\\1", texto)
 
 
 def neutralizar_marcadores(texto):
