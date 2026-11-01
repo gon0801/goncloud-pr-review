@@ -12,7 +12,6 @@ import shutil
 import signal
 import subprocess
 import tempfile
-import unicodedata
 import sys
 import time
 import urllib.request
@@ -852,6 +851,8 @@ def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
         MARKER,
         aviso,
         "",
+        DETALLE_DEL_REVISOR,
+        "",
         "",
         "",
         ALCANCE_INICIO,
@@ -862,24 +863,22 @@ def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
     ]
     overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
     disponible = max(0, GITHUB_COMMENT_MAX - overhead)
-    partes[3] = (recorte() if len(review) > disponible else review) or (
+    partes[5] = (recorte() if len(review) > disponible else review) or (
         "_El revisor no devolvió texto._"
     )
     return "\n".join(partes)
 
 
-# Única fuente de verdad de los avisos que escribe el programa en el comentario.
-# Todos salen de aviso_md, que los emite como cita de markdown (`> **Etiqueta:**`).
-# La prosa del modelo pasa por prosa_del_modelo, que no deja salir de ella ninguna
-# cita ni ninguna línea que, decodificada y normalizada, abra con una de estas
-# etiquetas: un aviso se reconoce por cómo lo emite el programa, no por su texto.
+# Avisos que escribe el programa en el comentario. La autoridad la da el lugar:
+# solo salen de secciones que arma el programa y su texto lo sabe el programa;
+# nunca llevan texto del modelo, que va únicamente en su sección ("Detalle del
+# revisor" y las explicaciones). Todos salen de aviso_md.
 AVISOS_DEL_PROGRAMA = (
     "Revisión incompleta",
     "Memoria conservada sin actualizar",
     "Comentario sin espacio para el estado",
     "No se pudo revisar el commit",
     "Comando no entendido",
-    "Nota del publicador",
 )
 
 
@@ -912,10 +911,13 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
     if coverage is None and reviewed_any:
         warnings.append("el revisor no declaró su cobertura")
     elif coverage == "partial":
-        warnings.append(
-            "el revisor no alcanzó a revisar todo"
-            + (f": {una_linea_literal(detail)}" if detail else "")
-        )
+        # El aviso dice solo lo que sabe el programa. El motivo que dio el modelo
+        # es texto suyo y va en su sección, tras su prosa.
+        warnings.append("el revisor no alcanzó a revisar todo")
+        if detail:
+            review = (
+                f"{review}\n\n" if review else ""
+            ) + f"Cobertura declarada por el revisor: parcial | {detail}"
     if budget_cut:
         warnings.append(
             f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff"
@@ -965,6 +967,8 @@ def compose(result, manifest, *, sha, provider, findings=None, budget=None, libr
             ).split("\n"),
             "",
         ]
+    # El texto del modelo va en una sola sección, rotulada, también aquí.
+    parts += [DETALLE_DEL_REVISOR, ""]
     scope = [
         ALCANCE_INICIO,
         "",
@@ -1072,19 +1076,9 @@ def compose_with_findings(
         else:
             review = "_El revisor no devolvió texto._"
     parts += ["", "## Detalle del revisor", ""]
-    # Posición fija del programa: justo bajo el encabezado y antes de la prosa,
-    # que el modelo no puede preceder. Si esa prosa nombra un hallazgo que el
-    # veredicto deja abierto, la explicación está a su lado.
-    for fid in no_acreditados:
-        if re.search(rf"\b{re.escape(fid)}\b", review):
-            parts += [
-                aviso_md(
-                    "Nota del publicador",
-                    f"{fid} sigue abierto: {MOTIVO_SIN_CAMBIO_PERTINENTE}; "
-                    "ver «Siguen abiertos».",
-                ),
-                "",
-            ]
+    # Esta sección es del modelo y el programa no escribe en ella: si su prosa
+    # dice "resuelto" de un hallazgo que el veredicto deja abierto, la
+    # explicación está en la línea del hallazgo, en "Siguen abiertos".
     i_prosa = len(parts)
     parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
@@ -3979,74 +3973,25 @@ def aviso_de_comando_no_entendido(cid):
     )
 
 
-ETIQUETAS_DEL_PROGRAMA = tuple(e.casefold() for e in AVISOS_DEL_PROGRAMA)
-_ADORNO_INICIAL_RE = re.compile(r"^(?:<[^>]*>|[\s>*_`#\-\[\(\|])+")
-_MARCAS_DE_INICIO_RE = re.compile(r"(?:[ \t]|[-+*]|\d{1,9}[.)]|>)*")
 _ENTIDAD_RE = re.compile(r"&(?!amp;)(?=#?\w+;)")
-_ETIQUETA_BLOCKQUOTE_RE = re.compile(r"<(/?)blockquote", re.IGNORECASE)
-
-
-def _clave_de_linea(linea):
-    """La línea tal como la lee quien la ve renderizada: sin adornos de markdown
-    ni HTML al inicio, sin énfasis, sin caracteres invisibles, en minúsculas y
-    con la forma compatible de Unicode (ancho completo, etc.)."""
-    texto = unicodedata.normalize("NFKC", html.unescape(linea))
-    texto = "".join(c for c in texto if unicodedata.category(c) != "Cf")
-    texto = _ADORNO_INICIAL_RE.sub("", texto)
-    texto = re.sub(r"[*_`]", "", texto)
-    return re.sub(r"\s+", " ", texto).strip().casefold()
 
 
 def prosa_del_modelo(texto):
-    """Todo texto del modelo pasa por aquí antes de entrar al comentario, en todas
-    las rutas (con y sin hallazgos, detalle y explicaciones). Garantías, en todas
-    las líneas, también las que el modelo ponga entre cercas de código: no se
-    intenta reproducir las reglas de cercas de CommonMark (una cerca con acentos
-    graves en su info string, una de cierre con info string o una con cuatro
-    espacios de sangría no lo son para GitHub), así que ninguna línea queda
-    exenta. Dentro de una cerca real el costo es cosmético (`&gt;` literal).
-
-    1. Ninguna línea suya abre una cita de markdown (`>`, anidada o dentro de una
-       lista) ni un `<blockquote>`, que es el formato con que el programa emite
-       sus avisos (aviso_md): el modelo no puede producir ese formato.
-    2. Una referencia de carácter (`&#78;`, `&nbsp;`) se ve literal: `&` se escapa.
-    3. Una línea que, decodificada y normalizada (sin adornos, énfasis ni caracteres
-       invisibles, NFKC, etiqueta posiblemente partida en varias líneas del mismo
-       párrafo), abre con la etiqueta de un aviso de AVISOS_DEL_PROGRAMA se escapa
-       por completo y queda rotulada "Cita del modelo:"."""
-    lineas = texto.split("\n")
-    marcadas = set()
-    for i, linea in enumerate(lineas):
-        if not linea.strip():
-            continue
-        acumulado = ""
-        for j in range(i, min(i + 4, len(lineas))):
-            if not lineas[j].strip():
-                break
-            acumulado = f"{acumulado} {_clave_de_linea(lineas[j])}".strip()
-            if any(acumulado.startswith(e) for e in ETIQUETAS_DEL_PROGRAMA):
-                marcadas.update(range(i, j + 1))
-                break
-            if not any(e.startswith(acumulado) for e in ETIQUETAS_DEL_PROGRAMA):
-                break
-    salida = []
-    for n, linea in enumerate(lineas):
-        if n in marcadas:
-            rotulo = "Cita del modelo: " if n - 1 not in marcadas else ""
-            salida.append(rotulo + html.escape(linea.strip(), quote=False))
-        else:
-            linea = _ENTIDAD_RE.sub("&amp;", linea)
-            inicio = _MARCAS_DE_INICIO_RE.match(linea)
-            linea = inicio.group().replace(">", "&gt;") + linea[inicio.end() :]
-            salida.append(_ETIQUETA_BLOCKQUOTE_RE.sub(r"&lt;\1blockquote", linea))
-    return "\n".join(salida)
+    """Texto del modelo, listo para ir en la única sección que lo lleva ("Detalle
+    del revisor" y las explicaciones). La autoridad la da el lugar, no el texto:
+    los avisos del programa solo salen de secciones que arma el programa
+    (aviso_md, sections_for, estado_visible) y nunca contienen texto del modelo,
+    así que lo que parezca un aviso dentro de la sección del modelo se lee como
+    del modelo. Aquí solo hace falta el escapado básico para que no rompa el resto
+    del comentario: el `&` de una referencia de carácter se escapa para que se vea
+    literal (`<!--` y `<details` los neutraliza neutralizar_marcadores)."""
+    return _ENTIDAD_RE.sub("&amp;", texto)
 
 
 def una_linea_literal(texto):
-    """Texto del modelo (o de una causa externa) que el programa interpola dentro
-    de uno de sus propios avisos: una sola línea, sin HTML (`<br>`, `<blockquote>`,
-    referencias de carácter) y sin énfasis ni código de markdown que forme otra
-    línea o etiqueta dentro del aviso. Se ve literal."""
+    """Causa externa (no del modelo, p. ej. el error del worker) que el programa
+    interpola en un aviso suyo: una sola línea, con HTML y markdown escapados para
+    que se vea literal y no forme otra línea o etiqueta dentro del aviso."""
     texto = " ".join(str(texto).split())
     texto = html.escape(texto, quote=False)
     return re.sub(r"([\\`*_~\[\]])", r"\\\1", texto)

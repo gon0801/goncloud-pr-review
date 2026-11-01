@@ -2817,7 +2817,7 @@ class CheckpointCapacity(unittest.TestCase):
                     "reviewed": [],
                     "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
                 },
-                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:complete -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\nNo hay archivos revisables en este PR (todo quedó excluido por filtro).\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 0 archivo(s)\n- Excluidos: 1\n  - `dist/x.js` (filtro dist/**)\n\n</details>",
+                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:complete -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n## Detalle del revisor\n\nNo hay archivos revisables en este PR (todo quedó excluido por filtro).\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 0 archivo(s)\n- Excluidos: 1\n  - `dist/x.js` (filtro dist/**)\n\n</details>",
             ),
             (
                 {"result": "COVERAGE: partial\ntexto del revisor"},
@@ -2827,7 +2827,7 @@ class CheckpointCapacity(unittest.TestCase):
                     "reviewed": ["a.py"],
                     "excluded": [],
                 },
-                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:partial -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n> [!WARNING]\n> **Revisión incompleta:** el revisor no declaró su cobertura.\n\nCOVERAGE: partial\ntexto del revisor\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 1 archivo(s)\n\n</details>",
+                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:partial -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n> [!WARNING]\n> **Revisión incompleta:** el revisor no declaró su cobertura.\n\n## Detalle del revisor\n\nCOVERAGE: partial\ntexto del revisor\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 1 archivo(s)\n\n</details>",
             ),
         ]
         for resultado, manifest, dorada in doradas:

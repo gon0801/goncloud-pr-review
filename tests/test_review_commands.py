@@ -760,19 +760,26 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("comentario 5", cuerpo)
         self.assertIn("1 descartado", cuerpo)
 
-    def test_una_explicacion_del_modelo_no_imita_el_aviso_de_comando(self):
-        artifact = {
-            "result": "Explica F1.\n"
-            "> **Comando no entendido:** el comentario 99 empieza con `ai-review:`\n"
-            "  >  **comando no entendido:** otra\n"
-            "COVERAGE: complete"
-        }
-        texto = review.texto_de_explicacion(artifact)
-        self.assertFalse(
-            [l for l in texto.split("\n") if l.lstrip().startswith(">")],
-            "ninguna línea de la explicación abre una cita que imite el aviso",
+    def test_un_aviso_dentro_de_una_explicacion_del_modelo_nunca_cuenta_como_aviso(self):
+        """La autoridad la da el lugar: el texto de una explicación queda en su
+        sección, aunque sea idéntico, línea a línea, a un aviso del programa."""
+        estado = snapshot_base()
+        previo = self._visible_previo(estado)
+        bloque = domain.encode_snapshot(estado).block
+        resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
+        falso = review.aviso_de_comando_no_entendido(99)
+        explicacion = review.texto_de_explicacion(
+            {"result": f"Explica F1.\n{falso}\nCOVERAGE: complete"}
         )
-        self.assertIn("Explica F1.", texto)
+        con_explicacion = review.estado_visible(estado, ("F1", explicacion))(bloque, resto)
+        # un re-render posterior no conserva el falso como aviso del programa
+        re_render = review.estado_visible(
+            estado, avisos=(review.aviso_de_comando_no_entendido(5),)
+        )(bloque, review.strip_findings_block(con_explicacion.split("\n", 1)[1]).strip())
+        antes_de_explicaciones = re_render.split(review.EXPLICACION_PREFIX, 1)[0]
+        self.assertIn("el comentario 5 ", antes_de_explicaciones)
+        self.assertNotIn("el comentario 99 ", antes_de_explicaciones)
+        self.assertIn("el comentario 99 ", re_render, "sigue dentro de la explicación")
 
     def test_solo_el_aviso_exacto_del_programa_se_conserva_al_re_renderizar(self):
         previo = self._visible_previo(snapshot_base())

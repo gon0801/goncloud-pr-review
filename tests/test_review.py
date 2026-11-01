@@ -134,7 +134,10 @@ class Compose(unittest.TestCase):
             sha=SHA,
             provider="opencode-go",
         )
-        self.assertIn("el revisor no alcanzó a revisar todo: tests/ sin leer", body)
+        self.assertIn("> **Revisión incompleta:** el revisor no alcanzó a revisar todo.", body)
+        detalle = body.split("## Detalle del revisor", 1)[1]
+        self.assertIn("Cobertura declarada por el revisor: parcial | tests/ sin leer", detalle)
+        self.assertNotIn("tests/ sin leer", body.split("## Detalle del revisor", 1)[0])
 
     def test_usage_line_uses_deepseek_prices(self):
         usage = {
@@ -7610,7 +7613,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         "el modelo no nombra el archivo del arreglo",
                     )
 
-    def _publicar_resuelto(self, delta, files, prosa, modo="v3", previo=None, estado="resolved"):
+    def _publicar_resuelto(self, delta, files, prosa, modo="v3", previo=None, estado="resolved", cobertura="COVERAGE: partial"):
         """build_findings + compose con un F1 anclado en pruebas.yml que el modelo
         da por resuelto; devuelve (findings, comentario)."""
         import sys
@@ -7660,7 +7663,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
             + domain.FINDINGS_PREFIX
             + json.dumps({"findings": [entrada], "next": 2})
             + domain.FINDINGS_SUFFIX
-            + "\nCOVERAGE: partial"
+            + "\n" + cobertura
         )
         manifest = {
             "base": "b" * 40,
@@ -7686,7 +7689,6 @@ class PersistenciaSinPerdida(unittest.TestCase):
         return findings, cuerpo
 
     MOTIVO = "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
-    NOTA_F1 = f"> **Nota del publicador:** F1 sigue abierto: {MOTIVO}; ver «Siguen abiertos»."
 
     def test_resuelto_sin_cambio_pertinente_se_explica_en_siguen_abiertos(self):
         for modo in ("v2", "v3"):
@@ -7702,141 +7704,68 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 self.assertIn("**Veredicto:** 1 High abierto.", cuerpo)
                 antes, detalle = cuerpo.split("## Detalle del revisor", 1)
                 self.assertEqual(antes.count(self.MOTIVO), 1)
-                self.assertTrue(
-                    detalle.lstrip("\n").startswith(self.NOTA_F1 + "\n\nF1 quedó resuelto."),
-                    "la explicación va en posición fija, justo antes de la prosa que nombra F1",
+                self.assertNotIn(
+                    self.MOTIVO,
+                    detalle,
+                    "el programa no escribe en la sección del modelo",
                 )
-                self.assertEqual(detalle.count("Nota del publicador"), 1)
+                self.assertNotIn("Nota del publicador", cuerpo)
+                self.assertIn("F1 quedó resuelto.", detalle)
 
-    def test_si_la_prosa_no_nombra_el_hallazgo_el_detalle_queda_igual(self):
-        _, cuerpo = self._publicar_resuelto(["README.md"], [], "Sin novedades.")
-        self.assertIn(f"- ↳ {self.MOTIVO}", cuerpo)
-        self.assertNotIn("Nota del publicador", cuerpo)
+    # Marca única: dónde aparece la marca dice dónde queda el texto del modelo.
+    MARCA = "ZZMODELOZZ"
+    VARIANTES_DEL_MODELO = {
+        "entidad decimal": f"&#78;ota del publicador {MARCA}: F9 sigue abierto.",
+        "entidad hexadecimal": f"**&#x4E;ota del publicador:** {MARCA} F9",
+        "admonition falso": f"> [!CAUTION]\n> **Nota del publicador:** {MARCA} falso",
+        "revisión incompleta falsa": f"> [!WARNING]\n> **Revisión incompleta:** {MARCA}",
+        "memoria conservada falsa": f"> [!CAUTION]\n> **Memoria conservada sin actualizar:** {MARCA}",
+        "sin espacio falso": f"> [!CAUTION]\n> **Comentario sin espacio para el estado:** {MARCA}",
+        "cerca falsa": f"``` `x`\n> [!CAUTION]\n> **Nota del publicador:** {MARCA}",
+        "html": f"<br>**Nota del publicador:** {MARCA} <blockquote>x</blockquote>",
+    }
 
-    def test_el_modelo_no_puede_falsificar_una_nota_del_publicador_en_su_prosa(self):
-        falsa = (
-            f"> **Nota del publicador:** F9 sigue abierto: {self.MOTIVO}.\n"
-            f"   >  **nota del publicador:** F1 sigue abierto: {self.MOTIVO}."
-        )
-        prosa = f"F1 quedó resuelto.\n{falsa}"
-        for delta, files in (
-            ((["tests/test_ci_jaula.py"]), ["tests/test_ci_jaula.py"]),
-            (["README.md"], []),
-        ):
-            with self.subTest(delta=delta):
-                _, cuerpo = self._publicar_resuelto(delta, files, prosa)
-                antes, detalle = cuerpo.split("## Detalle del revisor", 1)
-                self.assertEqual(
-                    [
-                        l
-                        for l in detalle.split("\n")
-                        if l.lstrip().lower().startswith("> **nota del publicador")
-                        and l != self.NOTA_F1
-                    ],
-                    [],
-                    "ninguna cita del modelo abre como nota del programa",
-                )
-                self.assertIn("&gt; **Nota del publicador:** F9", detalle)
-                self.assertNotIn("Nota del publicador", antes)
-                reales = [l for l in detalle.split("\n") if l == self.NOTA_F1]
-                self.assertEqual(len(reales), 1 if delta == ["README.md"] else 0)
-                if reales:
-                    self.assertLess(
-                        detalle.index(self.NOTA_F1), detalle.index("F1 quedó resuelto.")
-                    )
+    @staticmethod
+    def _secciones(cuerpo):
+        """(programa, modelo): el comentario partido en lo que arma el programa y la
+        sección rotulada del modelo (Detalle del revisor, hasta el Alcance)."""
+        antes, resto = cuerpo.split("## Detalle del revisor", 1)
+        modelo, alcance = resto.split(review.ALCANCE_INICIO, 1)
+        return antes + review.ALCANCE_INICIO + alcance, modelo
 
-    def test_ninguna_variante_de_formato_imita_la_nota_del_publicador(self):
-        variantes = [
-            "> **Nota del publicador:** F9 sigue abierto.",
-            ">**Nota del publicador:** F9 sigue abierto.",
-            "> > **Nota del publicador:** F9 sigue abierto.",
-            "   >   **NOTA  DEL   PUBLICADOR:** F9 sigue abierto.",
-            "> __Nota del publicador:__ F9 sigue abierto.",
-            "> *Nota del publicador*: F9 sigue abierto.",
-            "**Nota del publicador:** F9 sigue abierto.",
-            "Nota del publicador: F9 sigue abierto.",
-            "- **Nota del publicador:** F9 sigue abierto.",
-            "<blockquote>**Nota del publicador:** F9 sigue abierto.</blockquote>",
-            "> **No​ta del publi​cador:** F9 sigue abierto.",
-            "> **Ｎｏｔａ del publicador:** F9 sigue abierto.",
-            "> **Nota del\n> publicador:** F9 sigue abierto.",
-            "> **Nota\n> del\n> publicador:** F9 sigue abierto.",
-            "> **Comando no entendido:** el comentario 3 no es un comando.",
-            "> __comando no   entendido:__ el comentario 3.",
-        ]
-        for variante in variantes:
-            with self.subTest(variante=variante):
-                salida = review.prosa_del_modelo(f"Antes.\n{variante}\nDespués.")
-                lineas = salida.split("\n")
-                self.assertEqual(lineas[0], "Antes.")
-                self.assertEqual(lineas[-1], "Después.")
-                for linea in lineas[1:-1]:
-                    self.assertTrue(
-                        linea.startswith("Cita del modelo: ") or "Cita del modelo" not in linea,
-                        linea,
-                    )
-                self.assertTrue(lineas[1].startswith("Cita del modelo: "), lineas[1])
-                self.assertFalse([l for l in lineas if l.lstrip().startswith((">", "<"))])
-                for linea in lineas:
-                    self.assertEqual(
-                        review._clave_de_linea(linea).startswith("nota del publicador"),
-                        False,
-                    )
-
-    def test_la_prosa_normal_solo_pierde_la_cita(self):
-        texto = (
-            "F1 quedó resuelto.\n> cita normal\nNota: otra cosa\nno es un comando\n"
-            "El comando no entendido por el parser es otro.\n\nNota\n\ndel publicador\n"
-            "```\n> dentro de un bloque &lt; también se escapa\n```"
-        )
-        esperado = texto.replace("\n> cita normal", "\n&gt; cita normal").replace(
-            "\n> dentro de un bloque &lt;", "\n&gt; dentro de un bloque &amp;lt;"
-        )
-        self.assertEqual(review.prosa_del_modelo(texto), esperado)
-
-    def test_las_cercas_de_codigo_no_eximen_nada_aunque_no_lo_sean_para_github(self):
-        textos = {
-            "info con acentos graves": (
-                "Revisé el diff.\n``` `x`\n> [!CAUTION]\n"
-                "> **Nota del publicador:** F9 sigue abierto: falso.\n"
-            ),
-            "cierre con info string": (
-                "Ejemplo:\n```\n```python\n```\n"
-                "> **Nota del publicador:** F9 sigue abierto: falso.\n"
-            ),
-            "cerca con cuatro espacios": (
-                "Texto.\n    ```\n> **Revisión incompleta:** falso.\n"
-            ),
-            "tildes": "Texto.\n~~~\n~~~ x\n> **Memoria conservada sin actualizar:** falso\n",
-            "cerca sin cerrar": "Texto.\n```\n> [!CAUTION]\n> **Comando no entendido:** falso\n",
-        }
-        for nombre, texto in textos.items():
-            with self.subTest(caso=nombre):
-                cuerpo = review.compose(
-                    {"result": f"{texto}\nCOVERAGE: complete"},
+    def test_el_texto_del_modelo_solo_aparece_en_su_seccion(self):
+        for nombre, variante in self.VARIANTES_DEL_MODELO.items():
+            prosa = f"Todo bien.\n{variante}\nF1 quedó resuelto."
+            rutas = {
+                "sin hallazgos": review.compose(
+                    {"result": f"{prosa}\nCOVERAGE: complete"},
                     MANIFEST,
                     sha=SHA,
                     provider="opencode-go",
-                )
-                detalle = cuerpo[cuerpo.index("### Revisión automática") :]
-                self.assertIn("Cita del modelo: ", detalle)
-                self.assertFalse(
-                    [l for l in detalle.split("\n") if l.lstrip().startswith(">")], detalle
-                )
-                _, con = self._publicar_resuelto(["README.md"], [], texto + "\nF1 quedó resuelto.")
-                aviso = [
-                    l
-                    for l in con.split("## Detalle del revisor", 1)[1].split("\n")
-                    if l.lstrip().startswith(">")
-                ]
-                self.assertEqual(len(aviso), 1, aviso)
-                self.assertTrue(aviso[0].startswith("> **Nota del publicador:** F1"))
+                ),
+                "con hallazgos": self._publicar_resuelto(["README.md"], [], prosa)[1],
+                "con hallazgos y pertinente": self._publicar_resuelto(
+                    ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], prosa
+                )[1],
+            }
+            for ruta, cuerpo in rutas.items():
+                with self.subTest(variante=nombre, ruta=ruta):
+                    programa, modelo = self._secciones(cuerpo)
+                    self.assertIn(self.MARCA, modelo)
+                    self.assertNotIn(self.MARCA, programa)
+                    self.assertNotRegex(modelo, r"(?<!amp;)&#x?[0-9A-Fa-f]+;")
 
-    def test_el_detalle_de_cobertura_del_modelo_no_forma_parte_del_formato_del_aviso(self):
-        detalle = (
-            "faltó a.py<br>**Nota del publicador:** F9 sigue abierto &#78;ota "
-            "<blockquote>x</blockquote> `c` _e_ [l](u)"
-        )
+    def test_las_explicaciones_son_texto_del_modelo_y_no_forman_un_aviso_del_programa(self):
+        for nombre, variante in self.VARIANTES_DEL_MODELO.items():
+            with self.subTest(variante=nombre):
+                texto = review.texto_de_explicacion(
+                    {"result": f"Causa.\n{variante}\nCOVERAGE: complete"}
+                )
+                self.assertIn(self.MARCA, texto)
+                self.assertNotRegex(texto, r"(?<!amp;)&#x?[0-9A-Fa-f]+;")
+
+    def test_los_avisos_del_programa_no_contienen_texto_del_modelo(self):
+        detalle = f"faltó a.py<br>**Nota del publicador:** {self.MARCA} &#78;ota <blockquote>x"
         manifest = {"reviewed": ["a.py"], "excluded": []}
         sin = review.compose(
             {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
@@ -7845,68 +7774,28 @@ class PersistenciaSinPerdida(unittest.TestCase):
             provider="opencode-go",
         )
         _, con = self._publicar_resuelto(
-            ["README.md"], [], "Revisé.\n\nCOVERAGE: partial | " + detalle
+            ["README.md"], [], "F1 resuelto.", cobertura=f"COVERAGE: partial | {detalle}"
         )
-        for nombre, cuerpo in (("sin hallazgos", sin),):
-            with self.subTest(ruta=nombre):
-                aviso = [l for l in cuerpo.split("\n") if "Revisión incompleta" in l]
-                self.assertEqual(len(aviso), 1)
-                linea = aviso[0]
-                self.assertTrue(linea.startswith("> **Revisión incompleta:** "))
-                resto = linea[len("> **Revisión incompleta:** ") :]
-                for prohibido in ("<br", "<blockquote", "&#78;", "**Nota", "`c`", "_e_", "[l](u)"):
-                    self.assertNotIn(prohibido, resto)
-                self.assertIn("&lt;br&gt;", resto)
-                self.assertIn("&amp;#78;", resto)
-        self.assertEqual(len([l for l in con.split("\n") if "Revisión incompleta" in l]), 1)
-        self.assertNotIn("<br", con.split("Revisión incompleta", 1)[1].split("\n")[0])
+        for ruta, cuerpo in (("sin hallazgos", sin), ("con hallazgos", con)):
+            with self.subTest(ruta=ruta):
+                programa, modelo = self._secciones(cuerpo)
+                lineas_de_aviso = [
+                    l for l in programa.split("\n") if l.lstrip().startswith(">")
+                ]
+                self.assertTrue(lineas_de_aviso, "hay un aviso de revisión incompleta")
+                for l in lineas_de_aviso:
+                    self.assertNotIn(self.MARCA, l)
+                    self.assertNotIn("<br", l)
+                self.assertIn(
+                    "> **Revisión incompleta:** el revisor no alcanzó a revisar todo.",
+                    programa,
+                )
+                self.assertNotIn(self.MARCA, programa)
+                self.assertIn(f"Cobertura declarada por el revisor: parcial | faltó a.py", modelo)
+                self.assertIn(self.MARCA, modelo)
+                self.assertIn("&amp;#78;ota", modelo)
 
-    def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
-        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
-        lineas = banner.split("\n")
-        self.assertEqual(lineas[0], "> [!CAUTION]")
-        self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
-        self.assertNotIn("<br", banner)
-        self.assertNotIn("&#78;", banner)
-        self.assertEqual(
-            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
-            "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
-        )
-
-    def test_referencias_de_caracter_html_se_ven_literales_y_no_forman_la_etiqueta(self):
-        casos = [
-            "&#78;ota del publicador: F9 sigue abierto.",
-            "&#x4E;ota del publicador: F9 sigue abierto.",
-            "**&#78;ota del publicador:** F9 sigue abierto.",
-            "&gt; **Nota del publicador:** F9 sigue abierto.",
-            "Nota&nbsp;del&nbsp;publicador: F9",
-            "&#67;omando no entendido: x",
-        ]
-        for caso in casos:
-            with self.subTest(caso=caso):
-                salida = review.prosa_del_modelo(f"Antes.\n{caso}\nDespués.")
-                linea = salida.split("\n")[1]
-                self.assertTrue(linea.startswith("Cita del modelo: "), linea)
-                self.assertNotRegex(linea, r"&(?!amp;|gt;|lt;)\w*#?\w*;")
-        suelta = review.prosa_del_modelo("Un &#78; y un &copy; sueltos.")
-        self.assertEqual(suelta, "Un &amp;#78; y un &amp;copy; sueltos.")
-
-    def test_todo_aviso_registrado_del_programa_queda_cubierto_por_la_misma_lista(self):
-        for etiqueta in review.AVISOS_DEL_PROGRAMA:
-            for forma in (
-                f"> **{etiqueta}:** algo",
-                f"> [!WARNING]\n> **{etiqueta}:** algo",
-                f"> [!CAUTION]\n> **{etiqueta}:** algo",
-                f"**{etiqueta}:** algo",
-                f"{etiqueta}: algo",
-            ):
-                with self.subTest(etiqueta=etiqueta, forma=forma):
-                    salida = review.prosa_del_modelo(f"Antes.\n{forma}\nDespués.")
-                    lineas = salida.split("\n")
-                    self.assertFalse(
-                        [l for l in lineas if l.lstrip().startswith((">", "<"))], salida
-                    )
-                    self.assertIn("Cita del modelo: ", salida)
+    def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
         for banner in (
             review.AVISO_SIN_ESPACIO,
             review.caution_banner("falló", "a" * 40, False),
@@ -7920,72 +7809,23 @@ class PersistenciaSinPerdida(unittest.TestCase):
         with self.assertRaises(ValueError):
             review.aviso_md("Aviso nuevo sin registrar", "x")
 
-    def test_el_modelo_no_puede_producir_el_formato_con_que_el_programa_emite_avisos(self):
-        for linea in (
-            "> texto",
-            ">texto",
-            "   > texto",
-            "> > texto",
-            "- > texto",
-            "1. > texto",
-            "* > > texto",
-            "> [!WARNING]",
-            "> [!CAUTION]",
-            "<blockquote>texto</blockquote>",
-            "<BLOCKQUOTE>texto",
-        ):
-            with self.subTest(linea=linea):
-                salida = review.prosa_del_modelo(f"Antes.\n{linea}\nDespués.")
-                for l in salida.split("\n"):
-                    sin_marcas = l.lstrip(" \t-+*0123456789.)")
-                    self.assertFalse(sin_marcas.startswith(">"), l)
-                    self.assertNotIn("<blockquote", l.lower())
+    def test_referencias_de_caracter_en_la_prosa_se_ven_literales(self):
+        self.assertEqual(
+            review.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
+            "Un &amp;#78; y &amp;#x4E; y &amp;copy; y &amp; sueltos.",
+        )
 
-    VARIANTES_DE_DEEPSEEK = {
-        "entidad decimal": "&#78;ota del publicador: F9 sigue abierto.",
-        "entidad hexadecimal": "**&#x4E;ota del publicador:** F9 sigue abierto.",
-        "NFKC": "> **Ｎｏｔａ del publicador:** F9 sigue abierto.",
-        "Cf": "> **No​ta del publi​cador:** F9 sigue abierto.",
-        "revisión incompleta": "> [!WARNING]\n> **Revisión incompleta:** falso",
-        "memoria conservada": "> [!CAUTION]\n> **Memoria conservada sin actualizar:** falso",
-        "sin espacio": "> [!CAUTION]\n> **Comentario sin espacio para el estado:** falso",
-        "no se pudo revisar": "> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falso",
-    }
-
-    def _sin_forma_de_aviso(self, texto, permitidas=()):
-        for l in texto.split("\n"):
-            if any(l.startswith(p) for p in permitidas):
-                continue
-            self.assertFalse(l.lstrip().startswith(">"), l)
-            self.assertNotRegex(l, r"&#x?[0-9A-Fa-f]+;", l)
-
-    def test_todas_las_rutas_neutralizan_la_prosa_del_modelo(self):
-        for nombre, variante in self.VARIANTES_DE_DEEPSEEK.items():
-            prosa = f"Todo bien.\n{variante}\nCierre."
-            with self.subTest(ruta="sin hallazgos", variante=nombre):
-                cuerpo = review.compose(
-                    {"result": f"{prosa}\nCOVERAGE: complete"},
-                    MANIFEST,
-                    sha=SHA,
-                    provider="opencode-go",
-                )
-                detalle = cuerpo[cuerpo.index("### Revisión automática") :]
-                self.assertIn("Cita del modelo: ", detalle)
-                self._sin_forma_de_aviso(detalle)
-            with self.subTest(ruta="con hallazgos", variante=nombre):
-                _, con = self._publicar_resuelto(
-                    ["README.md"], [], prosa + "\nF1 quedó resuelto."
-                )
-                detalle = con.split("## Detalle del revisor", 1)[1]
-                self.assertIn("Cita del modelo: ", detalle)
-                self._sin_forma_de_aviso(detalle, permitidas=("> **Nota del publicador:** F1",))
-                self.assertEqual(
-                    len([l for l in detalle.split("\n") if l.startswith("> **")]), 1
-                )
-            with self.subTest(ruta="explicación", variante=nombre):
-                texto = review.texto_de_explicacion({"result": f"{prosa}\nCOVERAGE: complete"})
-                self.assertIn("Cita del modelo: ", texto)
-                self._sin_forma_de_aviso(texto)
+    def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
+        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
+        lineas = banner.split("\n")
+        self.assertEqual(lineas[0], "> [!CAUTION]")
+        self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
+        self.assertNotIn("<br", banner)
+        self.assertNotIn("&#78;", banner)
+        self.assertEqual(
+            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
+            "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
+        )
 
     def test_resuelto_con_cambio_pertinente_no_deja_motivo(self):
         findings, cuerpo = self._publicar_resuelto(
