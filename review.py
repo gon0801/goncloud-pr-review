@@ -998,8 +998,8 @@ def compose_with_findings(
         findings.get("new_ids", []),
         findings["block"],
     )
-    review = neutralizar_marcadores(
-        strip_model_verdict(strip_model_findings_block(review))
+    review = sin_citas_del_programa(
+        neutralizar_marcadores(strip_model_verdict(strip_model_findings_block(review)))
     )
     no_acreditados = tuple(findings.get("no_acreditados", ()))
     sections = sections_for(merged, new_ids, no_acreditados)
@@ -3941,6 +3941,18 @@ def aviso_de_comando_no_entendido(cid):
     )
 
 
+CITAS_DEL_PROGRAMA_RE = re.compile(
+    r"^[ \t]*>(?=[ \t]*\*\*(?:Comando no entendido|Nota del publicador))",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def sin_citas_del_programa(texto):
+    """Prosa del modelo: una cita que abra como un aviso o una nota del programa
+    (`> **Comando no entendido:**`, `> **Nota del publicador:**`) deja de serlo."""
+    return CITAS_DEL_PROGRAMA_RE.sub("&gt;", texto)
+
+
 def neutralizar_marcadores(texto):
     """Prosa del modelo (sale del contenido del PR) dentro del comentario: no
     puede imitar los marcadores ai-review:* ni dejar un comentario HTML abierto
@@ -3957,12 +3969,7 @@ def texto_de_explicacion(artifact):
     texto, _, _ = split_coverage(artifact.get("result") or "")
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
-    texto = re.sub(
-        r"^[ \t]*>(?=[ \t]*\*\*Comando no entendido)",
-        "&gt;",
-        texto,
-        flags=re.M | re.I,
-    )
+    texto = sin_citas_del_programa(texto)
     texto = neutralizar_marcadores(texto)
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
