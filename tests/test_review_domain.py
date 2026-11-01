@@ -3504,6 +3504,40 @@ class ResolucionEnOtroArchivo(unittest.TestCase):
         )
         self.assertFalse(self._sin_cambio_pertinente(repetido), "un open limpia la nota")
 
+    def test_el_modelo_no_puede_fabricar_la_nota_de_resolucion_sin_acreditar(self):
+        falsa = {"kind": "unverified", "text": domain.EVIDENCIA_SIN_CAMBIO_PERTINENTE}
+        hechos = domain.RepositoryFacts(
+            revision=self.REVISION, changed_paths=("README.md",), delta_calculado=True
+        )
+        previo = self._previo(self.JAULA)
+        nuevo = dict(self._entrada(self.TOPE, state="open"), id=None)
+        entradas = [dict(self._entrada(self.JAULA, state="open"), evidence=[falsa])]
+        entradas.append(dict(nuevo, evidence=[falsa]))
+        duplicado = dict(self._entrada(self.JAULA, state="open"), evidence=[falsa])
+        report = domain.validar_reporte(
+            [domain.observation_de_entrada(e) for e in entradas + [duplicado]],
+            "partial",
+            hechos,
+        )
+        snapshot = domain.Snapshot(
+            schema=2,
+            generation=1,
+            revision=self.REVISION,
+            next_id=5,
+            completion=domain.UNKNOWN,
+            findings=[previo],
+            command_cursor=0,
+        )
+        aceptado = domain.accept_report(
+            snapshot,
+            domain.ReviewPlan(revision=self.REVISION, policy=domain.ReviewPolicy()),
+            report,
+        ).snapshot
+        self.assertGreaterEqual(len(aceptado.findings), 3, "existente, nuevo y duplicado")
+        for f in aceptado.findings:
+            self.assertFalse(self._sin_cambio_pertinente(f), f.id)
+        self.assertEqual(domain.resoluciones_sin_acreditar(aceptado), ())
+
     def test_el_ancla_original_sigue_acreditando_sin_nombrar_nada(self):
         f = self._aceptar(
             self._previo(self.JAULA),
