@@ -1372,6 +1372,10 @@ class Observation:
     cause_hint: str | None = None
     evidence: list = field(default_factory=list)
     claim: str = OPEN
+    # Otros archivos que el modelo nombra para el hallazgo (`files` del bloque),
+    # sobre todo donde vive el arreglo; con las anclas de la observación
+    # acreditan el cambio pertinente que resuelve.
+    archivos: tuple = ()
     # Id de un previo que el modelo repite (lo ve en prev_findings.md); solo
     # decide la identidad fuera de `anchors`, como en merge_findings.
     claimed_id: str | None = None
@@ -1750,7 +1754,8 @@ def observation_de_entrada(entry):
     """
     if not isinstance(entry, dict):
         return ObservationRejected(motivo="hallazgo sin estructura válida")
-    if sanitize_finding(entry, allow_dismissed=True) is None:
+    limpio = sanitize_finding(entry, allow_dismissed=True)
+    if limpio is None:
         return ObservationRejected(motivo="hallazgo sin archivo o título")
     for campo in ("related_anchors", "evidence"):
         valor = entry.get(campo)
@@ -1826,6 +1831,7 @@ def observation_de_entrada(entry):
         cause_hint=entry.get("cause_hint"),
         evidence=tuple(evidencia),
         claim=claim,
+        archivos=tuple(p for p in limpio["files"] if p != limpio["file"]),
         claimed_id=entry.get("id") if finding_number(entry.get("id") or "") else None,
     )
 
@@ -1844,6 +1850,28 @@ def _severidad_de(valor):
 def _cambio_pertinente(finding, cambiadas):
     rutas = {_ruta_primaria(finding)} | {a.path for a in finding.related_anchors}
     return bool(rutas & set(cambiadas))
+
+
+def _rutas_nombradas(obs):
+    """Archivos que la observación señala para el hallazgo: su ancla primaria,
+    las relacionadas y `files`."""
+    return (
+        {_ruta_primaria(obs)}
+        | {a.path for a in obs.related_anchors}
+        | set(obs.archivos)
+    ) - {""}
+
+
+def _con_arreglo_registrado(previo, relacionadas, arreglo):
+    """El archivo donde el modelo ubica el arreglo pasa a ser ancla relacionada
+    del hallazgo resuelto: un cambio posterior ahí lo reabre."""
+    conocidas = {_ruta_primaria(previo)} | {a.path for a in relacionadas}
+    nuevas = tuple(
+        AnchorLegacy(path=ruta, line=0) for ruta in sorted(arreglo - conocidas)
+    )
+    if not nuevas:
+        return tuple(relacionadas)
+    return (tuple(relacionadas) + nuevas)[: FINDING_FILES_MAX - 1]
 
 
 def _cobertura_persistida(report, plan):
@@ -1895,7 +1923,9 @@ def accept_report(current, plan, report):
 
     Requiere estado v2 o v3 (schema 2/3): en legado devuelve Keep. El programa asigna
     los ids; título y causa son mutables. Resolver exige cambio pertinente o
-    reversión exacta; la evaluación del modelo queda etiquetada como
+    reversión exacta: cambió un archivo ancla del hallazgo o uno que la
+    observación del modelo nombra (ancla, ancla relacionada o `files`), siempre
+    dentro del delta real; la evaluación del modelo queda etiquetada como
     UnverifiedClaim. Un match Ambiguous entra como hallazgo separado con la
     indicación de posible duplicado, sin fusionar. Los descartes nunca
     reaparecen.
@@ -1962,6 +1992,7 @@ def accept_report(current, plan, report):
             evidencia = tuple(obs.evidence)
             if marca_severidad:
                 evidencia = evidencia + (EvidenceUnverified(text=marca_severidad),)
+            arreglo = _rutas_nombradas(obs) & cambiadas
             reverting = _cambio_pertinente(previo, revertidas)
             if reverting:
                 estado = StatusResolved(
@@ -1977,7 +2008,9 @@ def accept_report(current, plan, report):
                 estado = (
                     previo.status
                 )  # la resolución se conserva sin cambio que la rompa
-            elif obs.claim == RESOLVED and not _cambio_pertinente(previo, cambiadas):
+            elif obs.claim == RESOLVED and not (
+                _cambio_pertinente(previo, cambiadas) or arreglo
+            ):
                 evidencia = evidencia + (
                     EvidenceUnverified(
                         text="el modelo lo evalúa resuelto; sin cambio pertinente registrado"
@@ -1996,6 +2029,10 @@ def accept_report(current, plan, report):
                 else previo.primary_anchor
             )
             relacionadas = tuple(obs.related_anchors) or previo.related_anchors
+            if isinstance(estado, StatusResolved) and not isinstance(
+                previo.status, StatusResolved
+            ):
+                relacionadas = _con_arreglo_registrado(previo, relacionadas, arreglo)
             findings[findings.index(previo)] = replace(
                 previo,
                 title=obs.title,
