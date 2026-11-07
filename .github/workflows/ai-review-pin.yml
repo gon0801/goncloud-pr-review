@@ -1,0 +1,36 @@
+name: ai-review-pin
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: comprobar el pin solicitado del revisor
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          expected = "23d92bd4b579eec66bd4c4865ece2edc06c4677f"
+          failed = False
+          for name in ("ai-review-worker.yml", "ai-review-publish.yml"):
+              path = Path(".github/workflows") / name
+              refs = re.findall(r"(?m)^[ \t]+ref:[ \t]*(.*)$", path.read_text(encoding="utf-8"))
+              if refs != [expected]:
+                  print(f"::error file={path}::Expected reviewer ref {expected}; found {refs!r}")
+                  failed = True
+              else:
+                  print(f"PASS {name}: {expected}")
+          raise SystemExit(failed)
+          PY
