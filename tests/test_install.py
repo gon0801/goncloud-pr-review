@@ -468,10 +468,8 @@ class AtomicInstall(InstaladorTest):
         abiertos = [p for p in repo["prs"] if p["head"] == "chore/ai-review"]
         self.assertEqual(len(abiertos), 1)
         self.assertIn("a" * 40, abiertos[0]["body"])
-        self.assertIn("AI_REVIEW_API_KEY", abiertos[0]["body"])
         self.assertIn("DEEPSEEK_API_KEY", abiertos[0]["body"])
         self.assertNotIn("FALLBACK_API_KEY", abiertos[0]["body"])
-        self.assertIn("AI_REVIEW_API_KEY", commit["message"])
         self.assertIn("DEEPSEEK_API_KEY", commit["message"])
 
     def test_retry_preserves_unrelated_changes(self):

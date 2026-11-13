@@ -49,7 +49,7 @@ merge), el instalador primero fusiona la rama por defecto en ella sin forzar.
 Si esa fusión tiene conflicto (HTTP 409) o falla por otra causa, sale con
 error sin publicar nada.
 
-`AI_REVIEW_API_KEY` guarda la llave del proveedor principal (`opencode-go` por defecto). Con esa configuración la suscripción es la única vía: ningún fallo del proveedor cambia a la API de pago y no se configura llave de respaldo. En una cuenta personal los secrets van repo por repo. Si se configura `provider: deepseek` como principal (pagando por uso), se usa esa llave como `AI_REVIEW_API_KEY` y, para conservar el respaldo en sentido contrario (hacia la suscripción), `fallback_api_key` con una llave de OpenCode Go.
+El worker del modo coordinado usa `DEEPSEEK_API_KEY` para la API de DeepSeek. Los repos que aún no tengan ese secret deben configurarlo antes de instalar el worker nuevo. En una cuenta personal los secrets van repo por repo. La action simple conserva `opencode-go` como valor por defecto y usa `AI_REVIEW_API_KEY`; se puede elegir `provider: deepseek` explícitamente y poner la llave de DeepSeek en ese mismo secret.
 
 ## Operación
 
@@ -64,9 +64,9 @@ error sin publicar nada.
 
 ## Proveedor y costo
 
-**Principal: `provider: opencode-go`.** Usa la suscripción OpenCode Go ($10 al mes) con el modelo `deepseek-v4.1-flash`. Si OpenCode no completa la revisión por cuota o saldo, proxy, historial `reasoning_content`, tiempo límite, saturación o caída, la revisión queda pendiente con su causa en un aviso amarillo, sin marcar el commit como revisado: la suscripción es la única vía y ningún fallo despacha la API de pago. La saturación y los fallos pasajeros se recuperan con el siguiente push o re-run.
+**Worker coordinado: `provider: deepseek`.** Usa directamente la API de DeepSeek con `DEEPSEEK_API_KEY`. No intenta OpenCode Go como respaldo. La action simple sigue usando `opencode-go` por defecto para no cambiar los consumidores antiguos sin su llave de DeepSeek.
 
-**Alternativa: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal:
+**Action simple: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal en esa action:
 
 1. Carga saldo en platform.deepseek.com y crea una llave.
 2. Corre `scripts/set-secret.sh` con la llave nueva en los mismos repos.

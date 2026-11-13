@@ -117,15 +117,15 @@ jobs:
         with:
           path: ~/.cache/ai-review
           key: ai-review-install-${{ runner.os }}-py${{ steps.py.outputs.version }}-claude-2.1.282-litellm-1.102.1
-      - name: instalar Claude Code (y LiteLLM para opencode-go)
+      - name: instalar Claude Code
         env:
-          PROVIDER: opencode-go
+          PROVIDER: deepseek
         run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" install --work "${RUNNER_TEMP}/ai-review"
       - name: modelo
         working-directory: pr
         env:
-          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
-          PROVIDER: opencode-go
+          API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: deepseek
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
           MAX_TURNS: ${{ vars.AI_REVIEW_MAX_TURNS || 'auto' }}
@@ -134,8 +134,8 @@ jobs:
       - name: cerrar el resultado para el coordinador
         id: cerrar
         env:
-          API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
-          PROVIDER: opencode-go
+          API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          PROVIDER: deepseek
         run: python "$GITHUB_WORKSPACE/ai-review-code/review.py" close-result --work "${RUNNER_TEMP}/ai-review"
       - name: subir resultado como datos
         uses: actions/upload-artifact@v4
