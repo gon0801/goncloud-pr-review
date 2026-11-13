@@ -1169,31 +1169,26 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn(review.ERROR_KEY, result)
 
-    def test_opencode_insufficient_funds_stays_on_the_subscription(self):
+    def test_opencode_quota_switches_to_deepseek_api(self):
         reply = {
             "result": "API Error: 402 Insufficient account funds",
             "is_error": True,
             "api_error_status": 402,
         }
         proc, calls, result, proxy, _ = self.run_agent(
-            reply,
+            OK_REPLY,
             provider="opencode-go",
             FALLBACK_API_KEY="sk-deepseek-key",
+            FAKE_CLAUDE_REPLIES=json.dumps([reply, OK_REPLY]),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
-            [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
+            [call["ANTHROPIC_MODEL"] for call in calls],
+            ["deepseek-v4.1-flash", "deepseek-flash[1m]"],
         )
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-key-123")
-        self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
-        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
-        self.assertEqual(
-            result,
-            {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
-                "y no se cambia a la API de pago"
-            },
-        )
+        self.assertEqual(calls[1]["ANTHROPIC_API_KEY"], "sk-deepseek-key")
+        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
 
     def test_opencode_saturation_stays_on_the_subscription(self):
         reply = {
@@ -1241,28 +1236,6 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proxy["env"]["UPSTREAM_API_KEY"], "sk-go-fallback")
         self.assertEqual(result["review_provider"], "opencode-go")
-
-    def test_opencode_quota_leaves_commit_unreviewed_without_paid_fallback(self):
-        reply = {
-            "result": "API Error: 402 Insufficient account funds",
-            "is_error": True,
-            "api_error_status": 402,
-        }
-        proc, calls, result, _, _ = self.run_agent(
-            reply,
-            provider="opencode-go",
-            FALLBACK_API_KEY="sk-deepseek-key",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(len(calls), 1)
-        motivo = review.FallaDelProveedor.cuota("opencode-go").motivo
-        self.assertEqual(
-            result,
-            {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
-                "y no se cambia a la API de pago"
-            },
-        )
 
     def test_quota_without_fallback_key_reports_missing_secret_without_retry(self):
         reply = {
@@ -2431,10 +2404,9 @@ class Workflows(unittest.TestCase):
             worker.index('review.py" run'),
             "el worker instala Claude Code y LiteLLM antes del paso modelo",
         )
-        self.assertEqual(worker.count("PROVIDER: deepseek"), 3)
-        # El worker usa la API directa sin intentar la suscripción agotada.
+        self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
         self.assertNotIn("FALLBACK_ENABLED", worker)
-        self.assertNotIn("FALLBACK_API_KEY", worker)
+        self.assertEqual(worker.count("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}"), 2)
         self.assertEqual(worker.count("secrets.DEEPSEEK_API_KEY"), 2)
 
     def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
@@ -2542,9 +2514,9 @@ class Workflows(unittest.TestCase):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
         cierre = cierre.split("- name:")[0]
-        self.assertIn("API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
-        self.assertNotIn("FALLBACK_API_KEY", cierre)
-        self.assertIn("PROVIDER: deepseek", cierre)
+        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", cierre)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
+        self.assertIn("PROVIDER: opencode-go", cierre)
 
     def test_action_caches_install_with_pinned_versions(self):
         action = (ROOT / "action.yml").read_text()
@@ -2609,9 +2581,8 @@ class Workflows(unittest.TestCase):
 
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        self.assertIn("API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
-        self.assertNotIn("FALLBACK_API_KEY", worker)
-        self.assertNotIn("secrets.AI_REVIEW_API_KEY", worker)
+        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", worker)
+        self.assertIn("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
         self.assertNotIn("secrets.API_KEY", worker)
         self.assertNotIn("secrets.FALLBACK_API_KEY", worker)
         self.assertIn("retention-days: 7", worker)

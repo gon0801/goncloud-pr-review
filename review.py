@@ -1878,10 +1878,9 @@ def cmd_run(args):
     if primaria is None:
         reparar_bloque(work, result_path, name, key, cmd, deadline)
         return
-    if name == "opencode-go":
-        # La suscripción es la única vía del repositorio: ningún fallo del
-        # proveedor despacha la API de pago y la revisión queda pendiente con
-        # su clasificación (cuota, saturación, proxy, tiempo...).
+    if name == "opencode-go" and primaria.tipo != "quota":
+        # Solo una cuota agotada autoriza pasar de la suscripción a la API de pago.
+        # La saturación, un timeout o un fallo del proxy quedan pendientes.
         soft_fail(
             result_path,
             f"{primaria.motivo}; la suscripción es la única vía y no se cambia "

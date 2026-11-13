@@ -44,4 +44,5 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         with:
           api_key: ${{ secrets.AI_REVIEW_API_KEY }}
+          fallback_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           disabled: ${{ vars.AI_REVIEW_DISABLED }}
