@@ -2431,12 +2431,11 @@ class Workflows(unittest.TestCase):
             worker.index('review.py" run'),
             "el worker instala Claude Code y LiteLLM antes del paso modelo",
         )
-        self.assertEqual(worker.count("PROVIDER: opencode-go"), 3)
-        # La suscripción no recibe llave de la API de pago: sin FALLBACK ni
-        # consumo de DEEPSEEK_API_KEY, un fallo del proveedor queda pendiente.
+        self.assertEqual(worker.count("PROVIDER: deepseek"), 3)
+        # El worker usa la API directa sin intentar la suscripción agotada.
         self.assertNotIn("FALLBACK_ENABLED", worker)
         self.assertNotIn("FALLBACK_API_KEY", worker)
-        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
+        self.assertEqual(worker.count("secrets.DEEPSEEK_API_KEY"), 2)
 
     def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
         # Orbit #419/#420: dos PRs nuevos piden la solicitud 1 a la vez; con el
@@ -2543,10 +2542,9 @@ class Workflows(unittest.TestCase):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
         cierre = cierre.split("- name:")[0]
-        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", cierre)
+        self.assertIn("API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", cierre)
         self.assertNotIn("FALLBACK_API_KEY", cierre)
-        self.assertNotIn("secrets.DEEPSEEK_API_KEY", cierre)
-        self.assertIn("PROVIDER: opencode-go", cierre)
+        self.assertIn("PROVIDER: deepseek", cierre)
 
     def test_action_caches_install_with_pinned_versions(self):
         action = (ROOT / "action.yml").read_text()
@@ -2611,9 +2609,9 @@ class Workflows(unittest.TestCase):
 
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        self.assertIn("API_KEY: ${{ secrets.AI_REVIEW_API_KEY }}", worker)
+        self.assertIn("API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}", worker)
         self.assertNotIn("FALLBACK_API_KEY", worker)
-        self.assertNotIn("secrets.DEEPSEEK_API_KEY", worker)
+        self.assertNotIn("secrets.AI_REVIEW_API_KEY", worker)
         self.assertNotIn("secrets.API_KEY", worker)
         self.assertNotIn("secrets.FALLBACK_API_KEY", worker)
         self.assertIn("retention-days: 7", worker)

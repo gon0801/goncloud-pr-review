@@ -182,13 +182,13 @@ else:
         f"{titulo}\n\n"
         f"Instala ai-review-publish.yml y ai-review-worker.yml fijados al SHA\n"
         f"confiable {action_sha} de {central} y retira ai-review.yml.\n"
-        "Usa los secrets AI_REVIEW_API_KEY (opencode-go) y DEEPSEEK_API_KEY (respaldo) de este repo."
+        "Usa el secret DEEPSEEK_API_KEY para la API de DeepSeek de este repo."
     )
     cuerpo_pr = (
         f"Instala el conjunto coordinado (publicador + worker) fijado al SHA\n"
         f"confiable `{action_sha}` de {central} y retira el escritor anterior\n"
         "ai-review.yml en un único commit.\n\n"
-        "Usa los secrets `AI_REVIEW_API_KEY` (opencode-go) y `DEEPSEEK_API_KEY` (respaldo) de este repo.\n"
+        "Usa el secret `DEEPSEEK_API_KEY` para la API de DeepSeek de este repo.\n"
         "Corte: detener admisión, drenar ejecuciones antiguas, verificar el\n"
         "checkpoint y solo entonces fusionar (docs/reviewer-rollout.md del repo central)."
     )
