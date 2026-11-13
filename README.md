@@ -49,7 +49,7 @@ merge), el instalador primero fusiona la rama por defecto en ella sin forzar.
 Si esa fusión tiene conflicto (HTTP 409) o falla por otra causa, sale con
 error sin publicar nada.
 
-El worker del modo coordinado usa `DEEPSEEK_API_KEY` para la API de DeepSeek. Los repos que aún no tengan ese secret deben configurarlo antes de instalar el worker nuevo. En una cuenta personal los secrets van repo por repo. La action simple conserva `opencode-go` como valor por defecto y usa `AI_REVIEW_API_KEY`; se puede elegir `provider: deepseek` explícitamente y poner la llave de DeepSeek en ese mismo secret.
+El revisor usa `AI_REVIEW_API_KEY` para OpenCode Go. Si se agota su cuota, usa `DEEPSEEK_API_KEY` para continuar por la API de DeepSeek. Sin esa segunda llave, deja el commit pendiente y muestra un aviso. En una cuenta personal los secrets van repo por repo.
 
 ## Operación
 
@@ -64,7 +64,7 @@ El worker del modo coordinado usa `DEEPSEEK_API_KEY` para la API de DeepSeek. Lo
 
 ## Proveedor y costo
 
-**Worker coordinado: `provider: deepseek`.** Usa directamente la API de DeepSeek con `DEEPSEEK_API_KEY`. No intenta OpenCode Go como respaldo. La action simple sigue usando `opencode-go` por defecto para no cambiar los consumidores antiguos sin su llave de DeepSeek.
+**Proveedor principal: `opencode-go`.** Si su cuota se agota y existe `DEEPSEEK_API_KEY`, el worker comienza otra revisión con la API de DeepSeek. La API de pago no se usa por saturación, timeout, fallo del proxy o error de historial. La action simple también usa OpenCode Go por defecto y acepta `fallback_api_key: ${{ secrets.DEEPSEEK_API_KEY }}`.
 
 **Action simple: `provider: deepseek`, la API de DeepSeek, pagando por uso.** Para cambiar el proveedor principal en esa action:
 
@@ -78,7 +78,7 @@ Con la API de DeepSeek ($0.30/M de entrada, $0.006/M en caché, $1.20/M de salid
 
 Las fallas que el repo no puede arreglar (falta la llave, el proxy no arrancó, el binario de Claude Code no se instaló, el proveedor está caído, un error permanente del API) nunca tumban el check en rojo ni lo dejan "omitido": el job termina en verde con una anotación amarilla (`::warning::ai-review: ...` en el log del paso "Review"), y si ya había una revisión previa de este PR, el comentario fijo le agrega arriba un aviso "No se pudo revisar el commit..." sin borrar la revisión anterior. El commit no queda marcado como revisado, así que el siguiente push (o un "Re-run jobs") lo vuelve a intentar.
 
-Con OpenCode Go, el HTTP 400 que pide devolver `reasoning_content` indica que el proveedor rechazó el historial de razonamiento de la conversación. El bot puede iniciar una conversación nueva dentro del límite de intentos y del tiempo disponible. Si vuelve a fallar y hay llave de respaldo, se prueba el otro proveedor; sin respaldo, el aviso identifica ese problema. Los HTTP 402/429 y los 400/403 con mensaje de cuota también prueban el respaldo; los demás 400 y los 401, 403 y 404 no se reintentan.
+Con OpenCode Go, el HTTP 400 que pide devolver `reasoning_content` indica que el proveedor rechazó el historial de razonamiento de la conversación. El bot puede iniciar una conversación nueva dentro del límite de intentos y del tiempo disponible. Si vuelve a fallar, deja el commit pendiente. Los HTTP 402/429 y los 400/403 con mensaje de cuota usan la API de DeepSeek cuando existe la llave de respaldo; un 429 de saturación sin mensaje de cuota no la usa. Los demás 400 y los 401, 403 y 404 no se reintentan.
 
 | Síntoma | Causa probable |
 |---|---|
