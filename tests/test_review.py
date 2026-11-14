@@ -2562,7 +2562,7 @@ class Workflows(unittest.TestCase):
         for nombre in ("ai-review-publish.yml", "ai-review-worker.yml"):
             texto = (ROOT / "templates" / nombre).read_text()
             bloques = self._bloques_run(texto)
-            self.assertGreaterEqual(len(bloques), 3, nombre)
+            self.assertGreaterEqual(len(bloques), 2, nombre)
             for bloque in bloques:
                 with self.subTest(plantilla=nombre, run=bloque.strip()[:60]):
                     self.assertNotIn("${{", bloque)
@@ -2674,10 +2674,6 @@ class Workflows(unittest.TestCase):
             self.assertIn(f"-f {campo}=", avisar)
         for entrada in ("worker_run_id:", "worker_attempt:"):
             self.assertIn(entrada, publicador)
-        self.assertIn(
-            "(github.event_name == 'workflow_dispatch' && inputs.worker_run_id != '')",
-            publicador,
-        )
         self.assertIn("WORKER_RUN_ID: ${{ inputs.worker_run_id }}", publicador)
 
     def test_dogfood_workflow_matches_template(self):
@@ -2844,54 +2840,36 @@ class Workflows(unittest.TestCase):
                 self.assertIn("REVIEW_BUDGET_SECONDS", str(salida.exception.code))
                 self.assertIn(repr(valor), str(salida.exception.code))
 
-    def test_el_coordinador_baja_solo_el_resultado_del_attempt_avisado(self):
-        # El patrón *attempt-1* también tomaba el artifact del attempt 10.
+    def test_el_coordinador_cosecha_el_artifact_que_sube_el_worker(self):
+        # El nombre sale de la plantilla del worker y el coordinador lo arma
+        # por su cuenta: si dejan de coincidir, toda revisión queda fallida.
         nombre = re.search(
             r"^\s+name: (ai-review-result-.+)$", self.worker_texto, re.M
         ).group(1)
-        corrida = "4242"
-        artefactos = {
-            attempt: nombre.replace("${{ inputs.request_id }}", "7")
-            .replace("${{ github.run_id }}", corrida)
-            .replace("${{ github.run_attempt }}", attempt)
-            for attempt in ("1", "10")
-        }
-        script = self._bloques_run(
-            self._paso_publicador("bajar el resultado del worker")
-        )[0]
+        subido = (
+            nombre.replace("${{ inputs.request_id }}", "7")
+            .replace("${{ github.run_id }}", "4242")
+            .replace("${{ github.run_attempt }}", "3")
+        )
+        pedidos = []
+
+        def sh_falso(*args, **kw):
+            if args[:3] == ("gh", "run", "download"):
+                opciones = dict(zip(args[4::2], args[5::2]))
+                pedidos.append(opciones["--name"])
+                Path(opciones["--dir"]).mkdir(parents=True)
+                Path(opciones["--dir"], "result.json").write_text('{"request_id": 7}')
+                return mock.Mock(stdout="")
+            listado = [{"name": subido, "expired": False}]
+            return mock.Mock(stdout=json.dumps({"artifacts": listado}))
+
         with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp, "bin")
-            bin_dir.mkdir()
-            gh = bin_dir / "gh"
-            gh.write_text(
-                "#!/usr/bin/env bash\n"
-                'while [ "$1" != --dir ]; do shift; done\n'
-                + "".join(
-                    f'mkdir -p "$2/{a}" && printf {a} > "$2/{a}/result.json"\n'
-                    for a in artefactos.values()
+            with mock.patch.object(review, "sh", side_effect=sh_falso):
+                cosechado = review.artefacto_del_run(
+                    "o/r", {"id": 4242, "run_attempt": 3}, 7, tmp
                 )
-            )
-            gh.chmod(0o755)
-            for attempt, artefacto in artefactos.items():
-                with self.subTest(attempt=attempt):
-                    temp = Path(tmp, f"runner-{attempt}")
-                    (temp / "ai-review").mkdir(parents=True)
-                    r = subprocess.run(
-                        ["bash", "-eo", "pipefail", "-c", script],
-                        env={
-                            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                            "RUNNER_TEMP": str(temp),
-                            "GITHUB_REPOSITORY": "o/r",
-                            "WORKER_RUN_ID": corrida,
-                            "WORKER_ATTEMPT": attempt,
-                        },
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(r.returncode, 0, r.stderr)
-                    self.assertEqual(
-                        (temp / "ai-review" / "result.json").read_text(), artefacto
-                    )
+        self.assertEqual(cosechado, {"request_id": 7})
+        self.assertEqual(pedidos, [subido])
 
     def test_el_worker_trae_el_pr_de_un_repo_privado_sin_dejar_credenciales(self):
         # Con el fetch anónimo el worker no traía el PR en un repo privado; con
@@ -3007,9 +2985,6 @@ class Workflows(unittest.TestCase):
         self.assertIn("pull_request_target:", texto)
         self.assertIn("issue_comment:", texto)
         self.assertIn("types: [created]", texto)
-        self.assertIn("workflow_run:", texto)
-        self.assertIn("types: [completed]", texto)
-        self.assertIn("workflows: [ai-review-worker]", texto)
         self.assertIn("workflow_dispatch:", texto)
         grupo = next(
             linea
@@ -3062,13 +3037,7 @@ class Workflows(unittest.TestCase):
         for tramo in tramos:
             self.assertNotIn("workflow_run.head_sha", tramo)
             self.assertNotIn("pull_request.head", tramo)
-        self.assertIn(
-            "github.event.workflow_run.event == 'workflow_dispatch'", self.coord_texto
-        )
-        self.assertIn(
-            "github.event.workflow_run.head_repository.full_name == github.repository",
-            self.coord_texto,
-        )
+        self.assertNotIn("workflow_run", self.coord_texto)
 
     def _render(self, plantilla, contexto):
         def resuelve(expr):
@@ -3087,9 +3056,9 @@ class Workflows(unittest.TestCase):
             r"\$\{\{\s*(.+?)\s*\}\}", lambda m: resuelve(m.group(1)), plantilla
         )
 
-    def test_grupo_y_pr_number_se_evaluan_igual_que_en_pull_request_target(self):
-        """B2 r3: el display_title del worker es el número del PR, así el
-        grupo y PR_NUMBER del workflow_run evalúan igual que en pull_request_target."""
+    def test_el_coordinador_atribuye_cada_run_del_worker_por_su_titulo(self):
+        """El run-name del worker es la única pista de su solicitud cuando
+        terminó sin artifact: la plantilla y la cosecha tienen que coincidir."""
         run_name = next(
             linea.split("run-name: ", 1)[1]
             for linea in self.worker_lineas
@@ -3101,48 +3070,9 @@ class Workflows(unittest.TestCase):
             lambda m: valores[m.group(1)],
             run_name,
         )
-        self.assertEqual(titulo, "12", "el display_title del worker es el número")
-        repo = "gon0801/repo"
-        ctx_pr = {
-            "github": {
-                "repository": repo,
-                "event": {
-                    "pull_request": {"number": 12},
-                    "issue": {},
-                    "inputs": {},
-                    "workflow_run": {},
-                },
-            }
-        }
-        ctx_wr = {
-            "github": {
-                "repository": repo,
-                "event": {
-                    "pull_request": {},
-                    "issue": {},
-                    "inputs": {},
-                    "workflow_run": {"display_title": titulo},
-                },
-            }
-        }
-        grupo = next(
-            linea.strip()
-            for linea in self.coord_lineas
-            if linea.strip().startswith("group: ai-review-")
-        )
-        self.assertEqual(
-            self._render(grupo, ctx_wr),
-            self._render(grupo, ctx_pr),
-            "el grupo del resultado del worker es el mismo grupo del PR",
-        )
-        self.assertNotIn("workflow_run.id", grupo)
-        exportado = next(
-            linea.strip()
-            for linea in self.coord_lineas
-            if linea.strip().startswith("EV_PR: ")
-        )
-        pr_number = self._render(exportado, ctx_wr).split("EV_PR: ", 1)[1].strip()
-        self.assertEqual(int(pr_number), 12, "PR_NUMBER del workflow_run es el número")
+        atribuido = review.TITULO_DEL_WORKER.fullmatch(titulo)
+        self.assertIsNotNone(atribuido, titulo)
+        self.assertEqual(atribuido.groups(), ("12", "3"))
 
     PASOS_Y_VARIABLES = {
         "execute-request": {
@@ -3589,7 +3519,9 @@ class Workflows(unittest.TestCase):
         return " ".join(tramos)
 
     def _evaluar_github(self, expresion, contexto):
-        tokens = re.findall(r"\|\||&&|!=|==|!|\(|\)|'[^']*'|[^\s()!&|=']+", expresion)
+        tokens = re.findall(
+            r"\|\||&&|!=|==|!|\(|\)|,|'[^']*'|[^\s()!&|=',]+", expresion
+        )
 
         def ruta(nombre):
             nodo = contexto
@@ -3622,6 +3554,14 @@ class Workflows(unittest.TestCase):
             if token == "!":
                 pos += 1
                 return not primario()
+            if token == "contains":
+                # Actions compara sin distinguir mayúsculas.
+                pos += 2
+                texto = str(valor() or "").lower()
+                pos += 1
+                buscado = valor().lower()
+                pos += 1
+                return buscado in texto
             if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
                 izquierda = valor()
                 operador = tokens[pos]
@@ -3679,42 +3619,57 @@ class Workflows(unittest.TestCase):
             (ctx("pull_request_target", pr(False, repo)), True),
             (ctx("pull_request_target", pr(True, repo)), False),
             (ctx("pull_request_target", pr(False, "fork/r")), False),
-            (ctx("issue_comment", {"issue": {"number": 5}}), True),
             (
                 ctx(
-                    "workflow_run",
+                    "issue_comment",
+                    {"issue": {"number": 5}, "comment": {"body": "ai-review: revisar"}},
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
+                    {"issue": {"number": 5, "pull_request": {}}, "comment": {}},
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
                     {
-                        "workflow_run": {
-                            "event": "workflow_dispatch",
-                            "head_repository": {"full_name": repo},
-                        }
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "LGTM"},
+                    },
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
+                    {
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "AI-Review: descartar F1"},
                     },
                 ),
                 True,
             ),
             (
+                # El script acepta el comando tras espacios o saltos de línea:
+                # si el filtro lo dejara fuera, se aplicaría tarde, en otro evento.
                 ctx(
-                    "workflow_run",
+                    "issue_comment",
                     {
-                        "workflow_run": {
-                            "event": "pull_request",
-                            "head_repository": {"full_name": repo},
-                        }
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "\n  ai-review: descartar todo"},
                     },
                 ),
-                False,
+                True,
             ),
             (ctx("workflow_dispatch", {"inputs": {"pr_number": "3"}}), True),
         ]
         for contexto, esperado in casos:
             with self.subTest(evento=contexto["github"]["event_name"]):
                 self.assertEqual(self._evaluar_github(guard, contexto), esperado)
-
-    def test_la_descarga_fija_el_attempt_del_resultado(self):
-        paso = self.coord_texto.split("name: bajar el resultado del worker")[1]
-        self.assertIn("attempt-${WORKER_ATTEMPT}", paso)
-        self.assertIn("-ne 1", paso)
-        self.assertNotIn("-exec cp", paso)
 
     def test_close_result_conserva_la_senal_de_error(self):
         import review_domain as domain
@@ -4006,8 +3961,13 @@ class Workflows(unittest.TestCase):
                     returncode=0,
                     stdout=json.dumps(
                         {
-                            "head": {"sha": entorno.get("HEAD_LIVE") or "c" * 40},
+                            "head": {
+                                "sha": entorno.get("HEAD_LIVE") or "c" * 40,
+                                "repo": {"full_name": "o/r"},
+                            },
                             "base": {"sha": "b" * 40},
+                            "state": "open",
+                            "draft": False,
                         }
                     ),
                 )
@@ -4017,54 +3977,40 @@ class Workflows(unittest.TestCase):
                 return mock.Mock(
                     returncode=0, stdout=json.dumps({"permission": "admin"})
                 )
-            for corrida, sha_run in ((79, "e" * 40), (80, "d" * 40)):
-                if f"/actions/runs/{corrida}/attempts/1" in ruta:
-                    return mock.Mock(
-                        returncode=0,
-                        stdout=json.dumps(
-                            {
-                                "id": corrida,
-                                "name": "1",
-                                "path": ".github/workflows/ai-review-worker.yml",
-                                "head_branch": "main",
-                                "head_sha": sha_run,
-                                "run_attempt": 1,
-                            }
-                        ),
-                    )
             if "/compare/" in ruta:
                 estado = "ahead" if f"{'e' * 40}..." in ruta else "diverged"
                 return mock.Mock(returncode=0, stdout=json.dumps({"status": estado}))
-            if "/actions/runs/78/attempts/1" in ruta:
-                return mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
+            # El worker avisado (77 confiable, 78 de otro workflow, 79 de un main
+            # anterior, 80 fuera de main) subió el result.json que dejó la prueba.
+            corrida = int(entorno.get("WORKER_RUN_ID") or 0)
+            artefacto = Path(tmp) / "result.json"
+            rid = json.loads(artefacto.read_text()).get("request_id") if corrida else 0
+            nombre = f"ai-review-result-request-{rid}-run-{corrida}-attempt-1"
+            if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+                runs = []
+                if corrida:
+                    runs.append(
                         {
-                            "id": 78,
-                            "name": "ai-review-worker",
-                            "display_title": "ai-review-worker",
-                            "path": ".github/workflows/otro.yml",
+                            "id": corrida,
+                            "display_title": f"PR 1 solicitud {rid}",
+                            "path": ".github/workflows/"
+                            + ("otro.yml" if corrida == 78 else "ai-review-worker.yml"),
                             "head_branch": "main",
-                            "head_sha": "f" * 40,
+                            "head_sha": {79: "e" * 40, 80: "d" * 40}.get(
+                                corrida, "f" * 40
+                            ),
                             "run_attempt": 1,
+                            "status": "completed",
                         }
-                    ),
-                )
-            if "/actions/runs/77/attempts/1" in ruta:
-                return mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        {
-                            "id": 77,
-                            "name": "1",
-                            "display_title": "1",
-                            "path": ".github/workflows/ai-review-worker.yml",
-                            "head_branch": "main",
-                            "head_sha": "f" * 40,
-                            "run_attempt": 1,
-                        }
-                    ),
-                )
+                    )
+                return mock.Mock(stdout=json.dumps({"workflow_runs": runs}))
+            if ruta.endswith(f"/actions/runs/{corrida}/artifacts?per_page=100"):
+                return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
+            if args[:3] == ("gh", "run", "download"):
+                destino = Path(args[args.index("--dir") + 1])
+                destino.mkdir(parents=True)
+                shutil.copy(artefacto, destino / "result.json")
+                return mock.Mock(stdout="")
             raise AssertionError(f"sh inesperado: {args}")
 
         base_env = {
@@ -4094,23 +4040,6 @@ class Workflows(unittest.TestCase):
 
         estado = self._estado_pendiente()
         with tempfile.TemporaryDirectory() as tmp:
-            evento = Path(tmp) / "event.json"
-            evento.write_text(
-                json.dumps(
-                    {
-                        "workflow_run": {
-                            "id": 77,
-                            "name": "ai-review-worker",
-                            "path": ".github/workflows/ai-review-worker.yml",
-                            "head_branch": "main",
-                            "head_sha": "f" * 40,
-                            "run_attempt": 1,
-                            "event": "workflow_dispatch",
-                            "head_repository": {"full_name": "o/r"},
-                        }
-                    }
-                )
-            )
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
                     {
@@ -4137,7 +4066,7 @@ class Workflows(unittest.TestCase):
                 )
             )
             patches, _ = self._reconciliar(
-                estado, tmp, "workflow_run", GITHUB_EVENT_PATH=str(evento)
+                estado, tmp, "workflow_dispatch", WORKER_RUN_ID="77"
             )
         self.assertTrue(patches, "el checkpoint se publica")
         publicado = domain.read_snapshot(patches[-1][1])
@@ -4523,15 +4452,16 @@ class Workflows(unittest.TestCase):
                     WORKER_ATTEMPT="1",
                 )
 
-    def test_la_recuperacion_redescubre_lo_pendiente(self):
+    def test_la_recuperacion_reemplaza_lo_pendiente_con_una_revision_nueva(self):
+        import review_domain as domain
+
         with tempfile.TemporaryDirectory() as tmp:
             patches, despachados = self._reconciliar(
                 self._estado_pendiente(), tmp, "workflow_dispatch"
             )
-        self.assertEqual(
-            despachados, [1], "la recuperación vuelve a despachar lo pendiente"
-        )
-        self.assertEqual(patches, [], "sin cambio de estado no reescribe")
+        self.assertEqual(despachados, [2], "cada solicitud se despacha una sola vez")
+        publicado = domain.read_snapshot(patches[-1][1]).snapshot
+        self.assertEqual([r.id for r in publicado.pending_requests], [2])
 
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []
