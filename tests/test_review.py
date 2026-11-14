@@ -1352,6 +1352,64 @@ class RunAgent(unittest.TestCase):
             [f["title"] for f in modelo["findings"]], ["División por cero"]
         )
 
+    def test_la_reparacion_completa_la_respuesta_sin_reemplazarla(self):
+        dos = (
+            '<!-- ai-review:findings={"findings":[{"id":"F-new","file":"calc.py","line":3,'
+            '"severity":"High","title":"División por cero","state":"open"},'
+            '{"id":"F-new","file":"calc.py","line":9,"severity":"Critical",'
+            '"title":"Inyección SQL","state":"open"}]} -->'
+        )
+        ambos = ["División por cero", "Inyección SQL"]
+        reparacion_completa = '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: complete'
+        casos = {
+            "parcial sin bloque": (
+                "División por cero en calc.py:3.\n\nCOVERAGE: partial | no leí b.py",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("partial", "no leí b.py"),
+                ["División por cero"],
+            ),
+            "bloque sin COVERAGE": (
+                f"Dos problemas.\n\n{dos}",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin b.py',
+                2,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
+            "frase tras COVERAGE": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                reparacion_completa,
+                1,
+                ("complete", ""),
+                ambos,
+            ),
+            "bloque tras COVERAGE": (
+                f"Dos problemas.\n\nCOVERAGE: complete\n{dos}",
+                reparacion_completa,
+                1,
+                ("complete", ""),
+                ambos,
+            ),
+        }
+        for caso, (original, reparada, llamadas, cobertura, titulos) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {"result": reparada, "subtype": "success"},
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(result["result"].count("COVERAGE:"), 1)
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
+
     def test_si_la_reparacion_tampoco_trae_bloque_queda_parcial(self):
         prosa = {
             "result": "Sigo sin bloque.",
