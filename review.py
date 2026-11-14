@@ -2059,7 +2059,7 @@ def prompt_de_reparacion(work, texto):
     )
 
 
-def partes_de_respuesta(texto, bloque_en_linea_propia=False):
+def partes_de_respuesta(texto):
     lineas = texto.splitlines()
     leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
     leidas = {i: c for i, c in leidas.items() if c[0] is not None}
@@ -2075,12 +2075,7 @@ def partes_de_respuesta(texto, bloque_en_linea_propia=False):
     conservar = politica_de_identidad() == "anchors"
     bloque = None
     if hallado and parse_model_findings(resto, conservar_anclas=conservar) is not None:
-        inicio, fin = hallado[:2]
-        antes = resto[:inicio].rpartition("\n")[2]
-        despues = resto[fin:].partition("\n")[0]
-        # Dentro de una frase es una cita del marcador en la prosa, no el bloque.
-        if not bloque_en_linea_propia or not (antes.strip() or despues.strip()):
-            bloque = resto[inicio:fin]
+        bloque = resto[hallado[0] : hallado[1]]
     return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
 
@@ -2107,7 +2102,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             file=sys.stderr,
         )
         return
-    prosa, bloque, cobertura = partes_de_respuesta(texto, bloque_en_linea_propia=True)
+    prosa, bloque, cobertura = partes_de_respuesta(texto)
     texto_rep = ""
     parcial = cobertura is not None and cobertura[0] == "partial"
     if bloque is not None and parcial:
