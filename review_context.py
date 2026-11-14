@@ -192,13 +192,18 @@ class ContextRef:
 
 @dataclasses.dataclass(frozen=True)
 class GitRepository:
-    """Ventana a Git: todo comando corre con cwd explícito en root."""
+    """Ventana a Git: todo comando corre con cwd explícito en root.
+
+    Con `attr_source`, git lee .gitattributes de ese árbol y no del worktree.
+    """
 
     root: Path
+    attr_source: str = ""
 
     def run(self, *args, check=True):
+        atributos = [f"--attr-source={self.attr_source}"] if self.attr_source else []
         return subprocess.run(
-            ["git", *args], cwd=self.root, check=check, capture_output=True
+            ["git", *atributos, *args], cwd=self.root, check=check, capture_output=True
         )
 
     def merge_base(self, a, b):
@@ -898,6 +903,9 @@ def prepare_review(
     target = request.target or {}
     head = target.get("head_sha", "")
     base = target.get("base_sha", "")
+    # El PR no decide qué es binario: un `-diff` suyo sacaba cualquier archivo
+    # del alcance. Los atributos salen de la base, como las reglas del repo.
+    repo = dataclasses.replace(repo, attr_source=base)
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
 
