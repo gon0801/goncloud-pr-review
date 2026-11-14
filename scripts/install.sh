@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Abre un PR que instala el conjunto de revisión en cada repo dado.
-# Uso: scripts/install.sh [--coordinado] owner/repo [owner/repo ...]
+# Uso: ACTION_SHA=<sha> scripts/install.sh [--coordinado] owner/repo [owner/repo ...]
 #   --coordinado  instala el coordinador y el worker fijados al SHA confiable
 #                 y retira el escritor anterior en un único commit atómico por
 #                 la API Git de árboles y commits.
@@ -8,7 +8,7 @@
 #                 central, presente en este clon. Fija el CLI (`uses:` en el
 #                 modo actual) y es de donde salen las plantillas.
 #   EXCLUDE       exclusiones extra por repo (solo modo actual):
-#                 EXCLUDE=$'data/**\nout/**' scripts/install.sh owner/repo
+#                 ACTION_SHA=<sha> EXCLUDE=$'data/**\nout/**' scripts/install.sh owner/repo
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -424,7 +424,7 @@ PY
     else
       gh pr create -R "$repo" --head "$branch" --base "$default" \
         --title "ci: revisión automática de PRs con IA" \
-        --body "Agrega el workflow de revisión automática (gon0801/goncloud-pr-review). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo."
+        --body "Agrega el workflow de revisión automática (gon0801/goncloud-pr-review@$ACTION_SHA). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo."
     fi
   fi
 done
