@@ -1410,6 +1410,62 @@ class RunAgent(unittest.TestCase):
                 modelo = review.parse_model_findings(result["result"])
                 self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
 
+    def test_la_reparacion_conserva_lo_que_el_modelo_declaro_sin_revisar(self):
+        sin_b = '<!-- ai-review:unreviewed=["b.py"] -->'
+        otra = '<!-- ai-review:unreviewed=["x.py"] -->'
+        vacio = '<!-- ai-review:findings={"findings":[]} -->'
+        casos = {
+            "se reordena": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}\nCOVERAGE: partial | sin b.py"
+                "\n\nEspero que sirva.",
+                f"{vacio}\nCOVERAGE: complete",
+                1,
+                ("partial", "sin b.py"),
+                {"b.py"},
+            ),
+            "vuelta pagada": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: partial | sin b.py",
+                2,
+                ("partial", "sin b.py"),
+                {"b.py"},
+            ),
+            "la reparación dice complete": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+                {"b.py"},
+            ),
+            "dos declaraciones": (
+                f"El formato:\n{otra}\n\nUn problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+                None,
+            ),
+        }
+        for caso, (original, reparada, llamadas, cobertura, sin_leer) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {"result": reparada, "subtype": "success"},
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(review.unreviewed_de(result["result"]), sin_leer)
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual(
+                    [f["title"] for f in modelo["findings"]], ["División por cero"]
+                )
+
     def test_si_la_reparacion_tampoco_trae_bloque_queda_parcial(self):
         prosa = {
             "result": "Sigo sin bloque.",
