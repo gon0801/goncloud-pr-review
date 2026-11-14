@@ -298,6 +298,42 @@ class VueltaDeCierre(unittest.TestCase):
                 self.assertIn("_El revisor no devolvió texto._", cuerpo)
                 self.assertIn("- Turnos: 61/60", cuerpo)
 
+    def test_el_consumo_de_una_sesion_retomada_no_se_cuenta_dos_veces(self):
+        # Salidas de Claude Code 2.1.325 contra un endpoint local: tres llamadas
+        # en la revisión y una en el cierre, cada una de 100 tokens de entrada,
+        # 20 de salida y 0.001 de costo. El cierre trae el costo de la sesión
+        # completa, pero solo sus propios turnos y su propio usage. Su
+        # modelUsage, que sí es de la sesión, dice 400 y 80.
+        revision = {
+            "num_turns": 4,
+            "total_cost_usd": 0.003,
+            "usage": {"input_tokens": 300, "output_tokens": 60},
+        }
+        cierre = {
+            "num_turns": 1,
+            "total_cost_usd": 0.004,
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+        }
+        review.sumar_consumo(revision, cierre, sesion_retomada=True)
+        self.assertEqual(revision["num_turns"], 5)
+        self.assertAlmostEqual(revision["total_cost_usd"], 0.004)
+        self.assertEqual(revision["usage"], {"input_tokens": 400, "output_tokens": 80})
+
+    def test_el_artifact_no_lleva_la_llave_en_la_salida_cruda_de_las_vueltas(self):
+        llave = "sk-go-key-123"
+        con_llave = dict(CIERRE, result=f"la llave es {llave}\n" + CIERRE["result"])
+        self.correr([(900, SIN_TURNOS), (40, con_llave)])
+        (self.work / "repair.json").write_text(
+            json.dumps({"result": f"otra vez {llave}"})
+        )
+        with mock.patch.dict(os.environ, {"API_KEY": llave}):
+            self.cerrar_para_el_coordinador()
+        for cruda in ("cierre.json", "repair.json"):
+            with self.subTest(archivo=cruda):
+                texto = (self.work / cruda).read_text()
+                self.assertNotIn(llave, texto)
+                self.assertIn("[REDACTED]", json.loads(texto)["result"])
+
     def test_una_vuelta_que_tambien_agota_turnos_suma_su_consumo(self):
         otra_vez = dict(SIN_TURNOS, num_turns=3, total_cost_usd=0.43)
         salida, result, claude, _ = self.correr(
