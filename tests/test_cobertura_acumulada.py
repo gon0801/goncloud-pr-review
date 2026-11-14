@@ -1207,6 +1207,15 @@ class LecturaDeLaRespuesta(unittest.TestCase):
         self.assertEqual(marcador, "partial")
         self.assertNotIn("b.py", libro)
 
+    def test_un_par_citado_en_la_prosa_no_es_la_declaracion(self):
+        cuerpo, marcador, libro = self.publicar_texto(
+            f"El formato pide:\n{UNREVIEWED}[] -->\nCOVERAGE: complete\n\n"
+            f"Solo leí a.py.\n{BLOQUE_VACIO}\n"
+            "COVERAGE: partial | no leí b.py, c.py ni d.py"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertEqual(libro, [], "parcial sin declaración: nada acreditado")
+
 
 if __name__ == "__main__":
     unittest.main()
