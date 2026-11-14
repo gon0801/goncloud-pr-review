@@ -149,7 +149,7 @@ class IncrementalContext(unittest.TestCase):
                 policy,
             )
             self.assertEqual(result.modo, "incremental")
-            self.assertEqual(result.plan.changed_paths, ())
+            self.assertEqual(set(result.plan.changed_paths), {"x.py", "z.py"})
             self.assertTrue(result.hechos.delta_calculado)
             self.assertEqual(set(result.hechos.changed_paths), {"x.py", "z.py"})
             self.assertIn("x.py", result.hechos.reverted_paths)

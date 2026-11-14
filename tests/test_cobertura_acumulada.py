@@ -519,6 +519,37 @@ class Continuacion(unittest.TestCase):
         por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
         self.assertEqual(por_id["F1"]["state"], "resolved")
 
+    def test_revertir_o_borrar_lo_que_el_pr_cambiaba_entra_al_alcance(self):
+        for claim, unreviewed, modo in (
+            ("complete", None, "incremental"),
+            ("partial", ["b.py"], "continuation"),
+        ):
+            with self.subTest(modo=modo), tempfile.TemporaryDirectory() as tmp:
+                repo, base, _ = Escenario().escenario(tmp)
+                (repo / "nuevo.py").write_text("n2\n")
+                head1 = commit(repo, "pasada-1 con archivo nuevo")
+                work1 = Path(tmp, "work1")
+                manifest1 = preparar(
+                    repo, work1, base, head1, {"sha": None, "state": None}
+                )
+                result1 = {
+                    "result": texto_pasada(claim, unreviewed=unreviewed, hallazgos=[]),
+                    "subtype": "success",
+                }
+                cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+                (repo / "a.py").write_text("a1\n")
+                (repo / "nuevo.py").unlink()
+                head2 = commit(repo, "pasada-2")
+                prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+                work2 = Path(tmp, "work2")
+                manifest2 = preparar(repo, work2, base, head2, prev)
+                parche = (work2 / "diff.patch").read_text().splitlines()
+                self.assertEqual(manifest2["mode"], modo)
+                self.assertIn("a.py", manifest2["reviewed"])
+                self.assertIn("nuevo.py", manifest2["reviewed"])
+                self.assertIn("-a2", parche)
+                self.assertIn("-n2", parche)
+
 
 class FalloCerrado(unittest.TestCase):
     def test_d_parcial_sin_bloque_unreviewed_no_avanza(self):
