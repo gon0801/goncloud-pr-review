@@ -2721,7 +2721,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(worker.count("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}"), 2)
         self.assertEqual(worker.count("secrets.DEEPSEEK_API_KEY"), 2)
 
-    def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
+    def test_el_worker_trae_el_pr_antes_de_preparar_el_contexto(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         pasos = (
             worker.split("jobs:")[1].split("\n  avisar:")[0].split("\n      - name: ")
@@ -2738,8 +2738,9 @@ class Workflows(unittest.TestCase):
             ],
         )
         # prepare_review lee HEAD_SHA y BASE_SHA con git: en la raíz del checkout
-        # confiable esos objetos no existen y la solicitud caía siempre al plan full.
-        self.assertIn("working-directory: pr", paso["preparar solicitud y paquete"])
+        # confiable esos objetos no existen; preparar contexto corre en pr.
+        self.assertIn("working-directory: pr", paso["preparar contexto"])
+        self.assertNotIn("working-directory:", paso["preparar solicitud y paquete"])
         self.assertIn(
             'review.py" execute-request', paso["preparar solicitud y paquete"]
         )
