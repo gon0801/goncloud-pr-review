@@ -928,14 +928,21 @@ def prepare_review(
             current.revision.base_sha or base, previous_head
         )
         base_movida = merge_base_previo != merge_base
+        alcance_previo = {
+            path.label()
+            for path in repo.changed_files(merge_base_previo, previous_head)
+        }
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
         # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
         # acreditación fina que conservar y el alcance es solo el delta.
+        # Del delta entra lo que el PR cambia en head o cambiaba en
+        # previous_head: así entra una reversión del PR y queda fuera lo que
+        # trae un merge de la base sin que el PR lo haya tocado.
         # Mover la base puede meter en una ruta acreditada un tramo que antes
         # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
-        alcance_pr = set(historicas)
+        alcance_pr = set(historicas) | alcance_previo
         candidatas = [ruta for ruta in delta_rutas if ruta in alcance_pr]
         if previa:
             vistas = set(candidatas)
@@ -957,14 +964,10 @@ def prepare_review(
                     ) != repo.diff_bytes(merge_base, head, ruta):
                         candidatas.append(ruta)
         elif base_movida:
-            viejas = {
-                path.text
-                for path in repo.changed_files(merge_base_previo, previous_head)
-            }
             for ruta in historicas:
                 if ruta in candidatas:
                     continue
-                if ruta not in viejas or repo.diff_bytes(
+                if ruta not in alcance_previo or repo.diff_bytes(
                     merge_base_previo, previous_head, ruta
                 ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)

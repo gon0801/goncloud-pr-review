@@ -275,7 +275,7 @@ Los PRs completos se asignan a ajuste o evaluación reservada. Todos los pushes 
 
 ## D0 y contexto selectivo
 
-El trabajo nuevo procede de `previous_head..head`, acotado a las rutas que el PR cambia contra su merge-base. Lo que trae un merge de la base queda fuera del alcance. El contexto histórico y las obligaciones de hallazgos abiertos se entregan aparte, con su procedencia. El delta que decide si un hallazgo pudo resolverse sigue incluyendo eliminaciones y reversiones aunque el archivo haya desaparecido del diff global del PR. Un renombre se trata como un borrado más un alta en todo el cálculo, y `prepare` no entrega pares de renombre.
+El trabajo nuevo procede de `previous_head..head`, acotado a las rutas que el PR cambia contra su merge-base en head o cambiaba en el head previo. Una reversión del PR entra al alcance aunque el archivo vuelva a su contenido base. Lo que trae un merge de la base sin que el PR lo haya tocado queda fuera. El contexto histórico y las obligaciones de hallazgos abiertos se entregan aparte, con su procedencia. El delta que decide si un hallazgo pudo resolverse sigue incluyendo eliminaciones y reversiones aunque el archivo haya desaparecido del diff global del PR. Un renombre se trata como un borrado más un alta en todo el cálculo, y `prepare` no entrega pares de renombre.
 
 El plan sólo usa delta si existe memoria válida, cobertura previa suficiente, relación de ancestro y compatibilidad de base y política. Rebase, base diferente, política diferente, cobertura parcial o hechos insuficientes fuerzan revisión completa. Aun en modo completo se conserva el delta real para evaluar si un hallazgo pudo resolverse. El nuevo presupuesto estricto declara las obligaciones que no caben.
 
