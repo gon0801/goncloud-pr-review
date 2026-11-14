@@ -760,7 +760,9 @@ class CheckpointRecovery(unittest.TestCase):
         falso = _ComentarioFalso([])
         decision = decision_con_trabajo(estado)
         falso.perder_creacion = True
-        resultado = review.publish_checkpoint(decision, None, falso)
+        resultado = review.publish_checkpoint(
+            decision, None, falso, visible=review.estado_visible(decision.snapshot)
+        )
         self.assertIsInstance(resultado, review.Unconfirmed)
         confirmado = review.publish_checkpoint(decision, falso.leer()[0], falso)
         self.assertIsInstance(confirmado, review.PublishReceipt)

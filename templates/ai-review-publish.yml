@@ -24,25 +24,28 @@ on:
         default: "1"
         type: string
 
-# Un solo escritor por repositorio y PR: los cuatro eventos resuelven el
-# mismo grupo y nunca se cancela al escritor activo.
 permissions:
   contents: read
   pull-requests: write
   actions: write
 
-concurrency:
-  group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
-  cancel-in-progress: false
-
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    # Un solo escritor por repositorio y PR: los cuatro eventos resuelven el
+    # mismo grupo y nunca se cancela al escritor activo. Va en el job y no en
+    # el workflow para que un run que el `if:` descarta no entre al grupo ni
+    # reemplace al run pendiente de otro evento.
+    concurrency:
+      group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
+      cancel-in-progress: false
     # El coordinador corre código confiable: un workflow_run sólo se atiende
-    # si es un dispatch nuestro sobre el propio repo (anti pwn-request).
+    # si es un dispatch nuestro sobre el propio repo (anti pwn-request). Un
+    # comentario solo cuenta en un PR y si empieza con el comando.
     if: >-
       (github.event_name != 'pull_request_target' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository))
       && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_repository.full_name == github.repository))
+      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'ai-review:')))
     steps:
       - name: checkout del código confiable
         uses: actions/checkout@v4

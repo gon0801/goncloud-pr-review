@@ -895,6 +895,7 @@ AVISOS_DEL_PROGRAMA = (
     "Comentario sin espacio para el estado",
     "No se pudo revisar el commit",
     "Comando no entendido",
+    "Revisión en curso",
 )
 
 
@@ -2952,13 +2953,19 @@ def cuerpo_con_cabecera(bloque, resto):
     return f"{cuerpo}\n{cola}" if cola else cuerpo
 
 
+def texto_visible(cuerpo):
+    return re.sub(r"<!--.*?-->", "", cuerpo or "", flags=re.S).strip()
+
+
 def publish_checkpoint(decision, observado, adaptador, login=None, visible=None):
     """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
     bloque y conserva el resto (la prosa puede citar otros), salvo que
     `visible(bloque, resto)` arme el cuerpo completo. Relee antes de
     escribir (duplicados del bot y checkpoint ya aplicado); una respuesta de
     PATCH/POST perdida devuelve Unconfirmed para que el siguiente paso relea.
-    Un Keep no escribe: es un no-op confirmado.
+    Un Keep no escribe: es un no-op confirmado, igual que crear un sticky que
+    no tendría texto visible. La línea de revisión en curso no se arrastra:
+    solo estado_visible la vuelve a poner mientras siga pendiente.
     """
     if not isinstance(decision, review_domain.Commit):
         return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
@@ -2994,6 +3001,10 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
 
     if observado is None:
         cuerpo = visible(bloque, "")
+        if not texto_visible(cuerpo):
+            return PublishReceipt(
+                generacion=0, recibo={"sin_texto_visible": True}, trabajo=()
+            )
         if not cuerpo_publicable(cuerpo, bloque):
             return Unconfirmed(
                 "el comentario no trae el bloque de estado; no se crea sticky"
@@ -3023,7 +3034,11 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
         if lineas_original and lineas_original[0] == MARKER
         else original
     )
-    resto = strip_findings_block(resto, last=False).strip()
+    resto = "\n".join(
+        linea
+        for linea in strip_findings_block(resto, last=False).split("\n")
+        if not linea.startswith(AVISO_EN_CURSO_PREFIX)
+    ).strip()
     cuerpo = visible(bloque, resto)
     if not cuerpo_publicable(cuerpo, bloque):
         motivo = (
@@ -3806,6 +3821,8 @@ def cmd_reconcile(args):
             decision.snapshot,
             (solicitud.finding_id, texto_de_explicacion(artifact)),
         )
+    elif isinstance(decision, review_domain.Commit):
+        visible = estado_visible(decision.snapshot)
     observado = sticky if sticky else None
     resultado = publish_checkpoint(
         decision, observado, adaptador, login=login, visible=visible
@@ -4056,6 +4073,28 @@ EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
 AVISO_COMANDO_PREFIX = aviso_md("Comando no entendido", "")
 AVISOS_VISIBLES = 3
+AVISO_EN_CURSO_PREFIX = aviso_md("Revisión en curso", "")
+
+
+def linea_en_curso(snapshot):
+    """La línea visible de la revisión pendiente, para que un sticky sin
+    revisión publicada nunca quede vacío; None sin revisión pendiente."""
+    pendiente = next(
+        (
+            r
+            for r in reversed(snapshot.pending_requests)
+            if r.kind == "review" and r.state == "pending"
+        ),
+        None,
+    )
+    if pendiente is None:
+        return None
+    head = pendiente.target.get("head_sha", "")
+    commit = f"el commit `{head[:7]}`" if _sha_hexa(head) else "el PR"
+    return (
+        f"{AVISO_EN_CURSO_PREFIX}el revisor está revisando {commit}; este "
+        "comentario se actualiza cuando termine."
+    )
 
 
 def es_aviso_de_comando(linea):
@@ -4162,8 +4201,14 @@ def estado_visible(snapshot, explicacion=None, avisos=()):
         )
         if veredicto is None:
             cuerpo = cuerpo_con_cabecera(bloque, resto)
+            en_curso = linea_en_curso(snapshot)
             return "\n".join(
-                [cuerpo, *(["", *avisos] if avisos else []), *(["", *nueva] if nueva else [])]
+                [
+                    cuerpo,
+                    *(["", en_curso] if en_curso else []),
+                    *(["", *avisos] if avisos else []),
+                    *(["", *nueva] if nueva else []),
+                ]
             )[:GITHUB_COMMENT_MAX]
         marcas = (SHA_PREFIX, COMPLETION_PREFIX, COVERED_PREFIX)
         # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
