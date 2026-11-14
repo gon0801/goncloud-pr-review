@@ -78,6 +78,23 @@ class GitHubFalso:
     def visible(self):
         return re.sub(r"<!--.*?-->", "", self.sticky() or "", flags=re.S).strip()
 
+    def worker(self, rid, artifact=None, run_id=900, estado="completed"):
+        self.corridas.append(
+            {
+                "id": run_id,
+                "display_title": f"PR 12 solicitud {rid}",
+                "path": WORKER_PATH,
+                "head_branch": "main",
+                "head_sha": MAIN,
+                "run_attempt": 1,
+                "status": estado,
+                "conclusion": "success" if estado == "completed" else None,
+                "event": "workflow_dispatch",
+            }
+        )
+        if artifact is not None:
+            self.artefactos[run_id] = artifact
+
     def pr(self):
         return {
             "head": {"sha": self.head, "repo": {"full_name": self.repo_del_head}},
@@ -85,6 +102,61 @@ class GitHubFalso:
             "draft": self.draft,
             "state": "open" if self.abierto else "closed",
         }
+
+
+def hallazgo(n, titulo=None):
+    return domain.Finding(
+        id=f"F{n}",
+        title=titulo or f"Fuga {n}",
+        severity="High",
+        status=domain.StatusOpen(),
+        primary_anchor=domain.AnchorLegacy(path="a.py", line=n),
+    )
+
+
+def revisado(head=A, hallazgos=(), **campos):
+    return domain.Snapshot(
+        schema=3,
+        generation=2,
+        revision=domain.Revision(base_sha=BASE, head_sha=head, policy_digest=DIGEST),
+        next_id=len(hallazgos) + 1,
+        completion=domain.COMPLETE_CLAIM,
+        findings=list(hallazgos),
+        command_cursor=0,
+        **campos,
+    )
+
+
+def resultado(rid, head, titulos=(), run_id=900):
+    """El artifact que sube el worker para la solicitud rid."""
+    bloque = json.dumps(
+        {
+            "findings": [
+                {"title": t, "severity": "High", "file": "a.py", "line": n}
+                for n, t in enumerate(titulos, 1)
+            ]
+        }
+    )
+    return {
+        "request_id": rid,
+        "kind": "review",
+        "run_id": run_id,
+        "attempt": 1,
+        "pr_head_sha": head,
+        "base_sha": BASE,
+        "policy_digest": DIGEST,
+        "finding_identity": "current",
+        "result": f"Revisión.\n<!-- ai-review:findings={bloque} -->\nCOVERAGE: complete",
+        "observaciones": [],
+        "cobertura": domain.COMPLETE_CLAIM,
+        "model_ok": True,
+        "review_provider": "opencode-go",
+        "manifest": {"reviewed": ["a.py"], "excluded": []},
+    }
+
+
+def estados(github):
+    return {f.id: type(f.status).__name__ for f in github.estado().findings}
 
 
 def sticky_con(estado, visible=""):
@@ -107,11 +179,16 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
             return mock.Mock(stdout=json.dumps(github.pr()))
         if "/commits/" in ruta:
             return mock.Mock(stdout=json.dumps({"sha": MAIN}))
+        for corrida in github.corridas:
+            if ruta.endswith(f"/actions/runs/{corrida['id']}/attempts/1"):
+                return mock.Mock(stdout=json.dumps(corrida))
         raise AssertionError(f"llamada inesperada: {args}")
 
     with tempfile.TemporaryDirectory() as tmp:
         evento_json = Path(tmp, "event.json")
         evento_json.write_text(json.dumps({"action": "created"}))
+        if aviso and aviso[0] in github.artefactos:
+            Path(tmp, "result.json").write_text(json.dumps(github.artefactos[aviso[0]]))
         entorno = {
             "REPO": "o/r",
             "PR_NUMBER": "12",
@@ -165,6 +242,62 @@ class StickyNuncaVacio(unittest.TestCase):
         self.assertEqual(github.visible().count("Revisión en curso"), 1)
         self.assertIn(B[:7], github.visible())
         self.assertNotIn(A[:7], github.visible())
+
+
+def solo_jefe(repo, login):
+    return "write" if login == "jefe" else "read"
+
+
+def sin_respuesta(repo, login):
+    return None
+
+
+class ComandosEnCualquierEvento(unittest.TestCase):
+    def test_el_comando_de_un_run_perdido_se_aplica_en_el_push_siguiente(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1), hallazgo(2)]))])
+        github.comentar(20, "ai-review: descartar F1")
+        github.comentar(21, "ai-review: descartar F2", user="visitante")
+        codigo, _, _ = correr(github, "pull_request_target", head=B, permiso=solo_jefe)
+        self.assertEqual(codigo, 0)
+        self.assertEqual(
+            estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
+        )
+        self.assertEqual(github.estado().command_cursor, 21)
+
+    def test_el_mismo_comando_se_aplica_una_vez_aunque_el_run_se_repita(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1), hallazgo(2)]))])
+        github.comentar(20, "ai-review: descartar F1")
+        correr(github, "issue_comment")
+        escrituras, recibos = github.escrituras, github.estado().receipts
+        correr(github, "issue_comment")
+        self.assertEqual(github.escrituras, escrituras, "nada cambió: no escribe")
+        correr(github, "pull_request_target", head=B)
+        self.assertEqual(github.estado().receipts, recibos)
+        self.assertEqual(
+            estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
+        )
+
+    def test_descartar_todo_retenido_no_alcanza_hallazgos_nuevos(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        github.comentar(20, "ai-review: descartar todo")
+        correr(github, "issue_comment", permiso=sin_respuesta)
+        correr(github, "pull_request_target", head=B, permiso=sin_respuesta)
+        rid = github.estado().pending_requests[0].id
+        github.head = B
+        github.worker(rid, resultado(rid, B, ["Fuga 1", "Inyección SQL nueva"]))
+        codigo, _, _ = correr(github, "workflow_dispatch", permiso=sin_respuesta, aviso=(900, 1))
+        self.assertEqual(codigo, 0)
+        self.assertEqual(estados(github), {"F1": "StatusOpen", "F2": "StatusOpen"})
+
+        github.comentar(30, "ai-review: descartar F1")
+        codigo, _, _ = correr(github, "issue_comment")
+        self.assertEqual(codigo, 0)
+        self.assertEqual(
+            estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
+        )
+        self.assertEqual(github.estado().command_cursor, 30)
+        self.assertIn("descartar todo", github.visible())
+        self.assertIn("comentario 20", github.visible())
 
 
 if __name__ == "__main__":
