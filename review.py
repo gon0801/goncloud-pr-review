@@ -1096,7 +1096,7 @@ def compose_with_findings(
         scope.insert(
             0,
             f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
-            f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
+            f"({len(manifest.get('changed_files') or [])} archivo(s) cambiaron)",
         )
     parts += [
         ALCANCE_INICIO,

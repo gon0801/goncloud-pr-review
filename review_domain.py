@@ -1035,7 +1035,7 @@ def rutas_de_cambio(manifest):
         manifest.get("mode") in ("incremental", "continuation")
         or manifest.get("reason") == "incomplete-prev"
     ):
-        return tuple(manifest.get("changed_files", []))
+        return tuple(manifest.get("changed_files") or [])
     if manifest.get("reason") == "same-sha":
         return ()
     return tuple(manifest.get("reviewed", []))
