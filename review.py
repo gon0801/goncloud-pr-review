@@ -195,8 +195,14 @@ LITELLM_VERSION = "1.102.1"
 # reviews short. The whole run step (proxy start + attempts + retry wait) must fit in
 # REVIEW_BUDGET_SECONDS; with install, prepare and publish (~3 min) that stays under the
 # 30 min job limit. A timed-out attempt is not retried: another one would take as long.
+# A second run (retry or fallback) starts only if, after the 30 s margin, the budget
+# still has SEGUNDA_CORRIDA_MIN_SECONDS, or the attempt's own limit when smaller. With
+# less it likely times out without publishing and the paid API still bills the tokens.
+# Model time of 292 successful production runs: 33% within 330 s, 49% within 450 s, 62%
+# within 600 s, 74% within 750 s, 82% within 900 s.
 SECONDS_PER_TURN = 15
 MIN_ATTEMPT_SECONDS = 300
+SEGUNDA_CORRIDA_MIN_SECONDS = 600
 REVIEW_BUDGET_SECONDS = 1320
 RETRY_DELAY = "30"
 PROXY_START_TIMEOUT = "60"
@@ -222,20 +228,29 @@ def reviewed_completion(body):
     return match[2]
 
 
+def _cierre(text):
+    """La declaración final del modelo: (prosa, estado, detalle, línea
+    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
+    la última línea no vacía (una de solo ``` o ** también cierra, así que
+    una cita dentro de un fence final no declara) y unreviewed, la última no
+    vacía antes de ella."""
+    lines = (text or "").rstrip().splitlines()
+    line = lines[-1].strip().strip("`*") if lines else ""
+    if line.upper().startswith("COVERAGE:"):
+        status, _, detail = line.split(":", 1)[1].strip().partition("|")
+        status = status.strip().lower()
+        if status in ("complete", "partial"):
+            previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
+            declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
+            if declaracion and rutas_declaradas(declaracion) != set():
+                status = "partial"  # declaró archivos sin leer: no es complete
+            prosa = "\n".join(lines[:-1]).rstrip()
+            return prosa, status, detail.strip(), declaracion
+    return (text or "").rstrip(), None, "", None
+
+
 def split_coverage(text):
-    lines = text.rstrip().splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip().strip("`*")
-        if not line:
-            continue
-        if line.upper().startswith("COVERAGE:"):
-            rest = line.split(":", 1)[1].strip()
-            status, _, detail = rest.partition("|")
-            status = status.strip().lower()
-            if status in ("complete", "partial"):
-                return "\n".join(lines[:i]).rstrip(), status, detail.strip()
-        break
-    return text.rstrip(), None, ""
+    return _cierre(text)[:3]
 
 
 def libro_a_linea(head_sha, libro):
@@ -294,19 +309,18 @@ def libro_de(body):
 def unreviewed_de(texto):
     """Lo que el modelo declaró no revisar; None si falta o no se lee.
 
-    Vale solo un bloque en línea propia (columna 0), único en todo el texto,
-    inmediatamente antes de la línea COVERAGE y con JSON de lista de rutas:
-    cualquier desvío (imitaciones incluidas) anula la declaración."""
+    Vale solo la línea de _cierre (columna 0), única con el prefijo en todo
+    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
+    incluidas) anula la declaración."""
+    declaracion = _cierre(texto)[3]
     lineas = (texto or "").splitlines()
-    con_prefijo = [i for i, ln in enumerate(lineas) if ln.startswith(UNREVIEWED_PREFIX)]
-    if len(con_prefijo) != 1:
-        return None
-    i = con_prefijo[0]
-    if i + 1 >= len(lineas):
-        return None
-    if not lineas[i + 1].strip().strip("`*").upper().startswith("COVERAGE:"):
-        return None
-    segmento = lineas[i][len(UNREVIEWED_PREFIX) :]
+    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
+    return rutas_declaradas(declaracion) if declaracion and unica else None
+
+
+def rutas_declaradas(linea):
+    """Las rutas de una línea unreviewed=; None si no se lee."""
+    segmento = linea[len(UNREVIEWED_PREFIX) :]
     if not segmento.endswith(" -->"):
         return None
     try:
@@ -1633,6 +1647,10 @@ def attempt_timeout_for(max_turns):
     return max(MIN_ATTEMPT_SECONDS, SECONDS_PER_TURN * max_turns)
 
 
+def minimo_para_segunda_corrida(attempt_timeout):
+    return min(attempt_timeout, SEGUNDA_CORRIDA_MIN_SECONDS)
+
+
 def litellm_venv():
     override = os.environ.get("LITELLM_VENV")
     if override:
@@ -1919,10 +1937,13 @@ def cmd_run(args):
         soft_fail(result_path, primaria.sin_respaldo)
         return
     fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
-    if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
+    quedan = max(0, int(deadline - time.monotonic()) - 30)
+    necesita = minimo_para_segunda_corrida(attempt_timeout)
+    if quedan < necesita:
         soft_fail(
             result_path,
-            f"{primaria.motivo}; no queda tiempo para probar {fallback_name}",
+            f"{primaria.motivo}; no queda tiempo para probar {fallback_name} "
+            f"(quedan {quedan} s, se necesitan al menos {necesita} s)",
         )
         return
     print(f"ai-review: {primaria.motivo}; se cambia a {fallback_name}", flush=True)
@@ -2009,8 +2030,20 @@ class FallaDelProveedor:
     def no_disponible(cls, nombre):
         return cls(
             "unavailable",
-            f"{nombre} falló en todos los intentos",
-            "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
+            f"{nombre} falló con un error transitorio",
+            "la revisión falló con un error transitorio (proveedor no disponible "
+            "por ahora)",
+        )
+
+    def sin_tiempo_para_reintentar(self, quedan, necesita):
+        nota = (
+            "no queda tiempo para reintentar "
+            f"(quedan {quedan} s, se necesitan al menos {necesita} s)"
+        )
+        return replace(
+            self,
+            motivo=f"{self.motivo}; {nota}",
+            sin_respaldo=f"{self.sin_respaldo}; {nota}",
         )
 
 
@@ -2052,7 +2085,7 @@ def prompt_de_reparacion(work, texto):
     )
 
 
-def partes_de_respuesta(texto, bloque_en_linea_propia=False):
+def partes_de_respuesta(texto):
     lineas = texto.splitlines()
     leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
     leidas = {i: c for i, c in leidas.items() if c[0] is not None}
@@ -2068,12 +2101,7 @@ def partes_de_respuesta(texto, bloque_en_linea_propia=False):
     conservar = politica_de_identidad() == "anchors"
     bloque = None
     if hallado and parse_model_findings(resto, conservar_anclas=conservar) is not None:
-        inicio, fin = hallado[:2]
-        antes = resto[:inicio].rpartition("\n")[2]
-        despues = resto[fin:].partition("\n")[0]
-        # Dentro de una frase es una cita del marcador en la prosa, no el bloque.
-        if not bloque_en_linea_propia or not (antes.strip() or despues.strip()):
-            bloque = resto[inicio:fin]
+        bloque = resto[hallado[0] : hallado[1]]
     return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
 
@@ -2100,7 +2128,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             file=sys.stderr,
         )
         return
-    prosa, bloque, cobertura = partes_de_respuesta(texto, bloque_en_linea_propia=True)
+    prosa, bloque, cobertura = partes_de_respuesta(texto)
     texto_rep = ""
     parcial = cobertura is not None and cobertura[0] == "partial"
     if bloque is not None and parcial:
@@ -2167,7 +2195,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         ]
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
-        elif any(unreviewed_de(f"{ln}\nCOVERAGE:") != set() for ln in declaraciones):
+        elif any(rutas_declaradas(ln) != set() for ln in declaraciones):
             # Una lista no vacía o ilegible solo puede restringir lo acreditado,
             # así que cuenta esté donde esté. La declaración no se mueve junto
             # a COVERAGE: ahí el publicador la tomaría por auténtica.
@@ -2315,14 +2343,17 @@ def run_agent(
     soft_fail aquí mismo."""
     attempts = attempts or int(os.environ.get("ATTEMPTS", "2"))
     falla = None
+    necesita = minimo_para_segunda_corrida(attempt_timeout)
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
-        if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
+        quedan = max(0, remaining - 30)
+        if attempt > 1 and quedan < necesita:
             print(
-                f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)",
+                f"ai-review: no queda tiempo para otro intento "
+                f"(quedan {quedan} s tras el margen, se necesitan {necesita} s)",
                 file=sys.stderr,
             )
-            break
+            return falla.sin_tiempo_para_reintentar(quedan, necesita)
         timeout = max(1, min(attempt_timeout, remaining - 30))
         print(
             f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)",

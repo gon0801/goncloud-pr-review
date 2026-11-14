@@ -19,6 +19,13 @@ repo central.
 > repo: la skill de usuario `instalar-revisor` (`~/.claude/skills/`, reemplaza a
 > `revisor-ia`, que instalaba el modo directo), que corre `install.sh --coordinado`.
 
+> **Consumidores vigentes (2026-11-14).** Además del central, tienen el modo
+> coordinado goncloud-Orbit, goncloud-motor, goncloud-openclaw, goncloud-hermes,
+> goncloud-motor-conf y motor-sandbox. `summonaikit-claude` es un proyecto
+> eliminado: conserva los workflows del revisor instalados, pero queda retirado
+> y no se re-fija ni se cuenta como consumidor. La skill `instalar-revisor` se
+> salta los repos privados (goncloud-motor-conf y motor-sandbox).
+
 ## Qué instala el modo coordinado
 
 ```bash

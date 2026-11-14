@@ -1154,5 +1154,126 @@ class ContinuacionTerminal(unittest.TestCase):
             self.assertEqual(paquete["cobertura"], domain.COMPLETE_CLAIM)
 
 
+BLOQUE_VACIO = review.FINDINGS_PREFIX + '{"findings":[]}' + review.FINDINGS_SUFFIX
+
+
+class LecturaDeLaRespuesta(unittest.TestCase):
+    """Lo que publica una respuesta que cita los marcadores del formato: la
+    cita no cambia hallazgos, cobertura ni libro."""
+
+    def publicar_texto(self, texto):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work = Path(tmp, "work")
+            manifest = preparar(repo, work, base, head1, {"sha": None, "state": None})
+            result = {"result": texto, "subtype": "success"}
+            cuerpo = publicar(work, head1, manifest, result, repo=repo)
+        libro = (libro_del(cuerpo) or (None, {}))[1]
+        return cuerpo, review.reviewed_completion(cuerpo), sorted(libro)
+
+    def test_una_cita_del_bloque_tras_el_real_no_vacia_los_hallazgos(self):
+        hallazgo = {
+            "id": "F-new",
+            "file": "a.py",
+            "line": 1,
+            "severity": "Critical",
+            "title": "división por cero",
+            "state": "open",
+        }
+        real = (
+            review.FINDINGS_PREFIX
+            + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        )
+        citas = {
+            "en una frase": f"El bloque tiene la forma `{BLOQUE_VACIO}`.",
+            "sola en un fence": f"Ejemplo del formato:\n```\n{BLOQUE_VACIO}\n```",
+            "en un bloque indentado": f"Ejemplo del formato:\n\n    {BLOQUE_VACIO}\n",
+        }
+        for nombre, cita in citas.items():
+            with self.subTest(cita=nombre):
+                cuerpo, marcador, _ = self.publicar_texto(
+                    f"**Veredicto:** un problema.\n{real}\n{cita}\nCOVERAGE: complete"
+                )
+                titulos = [f["title"] for f in bloque_del(cuerpo)["findings"]]
+                self.assertEqual(titulos, ["división por cero"])
+                self.assertEqual(marcador, "complete")
+
+    def test_un_bloque_con_cuatro_columnas_de_sangria_va_a_reparacion(self):
+        """Con esa sangría no se distingue el bloque real bajo una viñeta de una
+        cita en código indentado. Se trata como cita: la reparación recupera el
+        real con un aviso si falla, y una cita nunca vacía los hallazgos."""
+        hallazgo = {
+            "id": "F-new",
+            "file": "a.py",
+            "line": 1,
+            "severity": "Critical",
+            "title": "división por cero",
+            "state": "open",
+        }
+        real = (
+            review.FINDINGS_PREFIX
+            + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        )
+        bajo_viñeta = f"- Hallazgos:\n\n    {real}"
+        cierre = "\n\nCOVERAGE: complete"
+        self.assertIsNone(review.parse_model_findings(bajo_viñeta + cierre))
+        self.assertTrue(review.falta_bloque(bajo_viñeta + cierre))
+        con_cita = f"{bajo_viñeta}\n\n    {BLOQUE_VACIO}{cierre}"
+        self.assertTrue(review.falta_bloque(con_cita))
+
+    def test_un_fence_final_que_cita_el_formato_no_declara_complete(self):
+        cuerpo, marcador, libro = self.publicar_texto(
+            f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n"
+            f'{UNREVIEWED}["b.py"] -->\nCOVERAGE: partial | no leí b.py\n\n'
+            "El formato:\n```\nCOVERAGE: complete\n```"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertNotIn("b.py", libro)
+
+    def test_un_par_citado_en_la_prosa_no_es_la_declaracion(self):
+        cuerpo, marcador, libro = self.publicar_texto(
+            f"El formato pide:\n{UNREVIEWED}[] -->\nCOVERAGE: complete\n\n"
+            f"Solo leí a.py.\n{BLOQUE_VACIO}\n"
+            "COVERAGE: partial | no leí b.py, c.py ni d.py"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertEqual(libro, [], "parcial sin declaración: nada acreditado")
+
+    def test_complete_con_lista_unreviewed_no_vacia_es_partial(self):
+        lista = f'{UNREVIEWED}["b.py"] -->'
+        cierres = {
+            "justo encima": f"{lista}\nCOVERAGE: complete",
+            "tras una línea en blanco": f"{lista}\n\nCOVERAGE: complete",
+        }
+        for nombre, cierre in cierres.items():
+            with self.subTest(cierre=nombre):
+                texto = f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n{cierre}"
+                cuerpo, marcador, libro = self.publicar_texto(texto)
+                self.assertEqual(marcador, "partial")
+                self.assertIn("el revisor no alcanzó a revisar todo", cuerpo)
+                self.assertEqual(libro, ["a.py", "c.py", "d.py"])
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo, base, head1 = Escenario().escenario(tmp)
+                    paquete = AcreditacionDePasada().paquete_hermes(
+                        repo,
+                        Path(tmp, "work"),
+                        head1,
+                        base,
+                        {"result": texto, "subtype": "success"},
+                    )
+                self.assertEqual(paquete["cobertura"], domain.PARTIAL)
+                self.assertEqual(sorted(paquete["covered"]), ["a.py", "c.py", "d.py"])
+
+    def test_complete_con_lista_unreviewed_ilegible_es_partial(self):
+        _, marcador, libro = self.publicar_texto(
+            f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n"
+            f"{UNREVIEWED}[b.py] -->\nCOVERAGE: complete"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertEqual(libro, [])
+
+
 if __name__ == "__main__":
     unittest.main()
