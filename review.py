@@ -2056,12 +2056,13 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     """Paso de reparación tras una revisión entregada a la que le falta el
     bloque o COVERAGE como última línea.
 
-    Si el original trae ambos legibles, solo se reordenan. Si le falta alguno,
-    una sola vuelta con el mismo proveedor pide esas dos líneas y de ella se
-    toma solo lo que falta, así que nunca reemplaza la cobertura que el
-    original declaró. Su costo se suma al total aunque falle. Si falla o no
-    queda tiempo, el resultado original queda intacto (parcial con aviso). No
-    aplica a una solicitud de explicación, que no lleva bloque a propósito."""
+    Si el original trae su bloque y se declaró parcial, solo se reordenan. Si
+    no, una sola vuelta con el mismo proveedor pide esas dos líneas: el bloque
+    del original se conserva y la cobertura es la más conservadora de las dos,
+    porque una complete fuera de lugar puede ser una cita. Su costo se suma al
+    total aunque falle. Si falla o no queda tiempo, el resultado original queda
+    intacto (parcial con aviso). No aplica a una solicitud de explicación, que
+    no lleva bloque a propósito."""
     work = Path(work)
     result = json.loads(result_path.read_text())
     texto = result.get("result") or ""
@@ -2076,7 +2077,8 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         return
     prosa, bloque, cobertura = partes_de_respuesta(texto, bloque_en_linea_propia=True)
     texto_rep = ""
-    if bloque is not None and cobertura is not None:
+    parcial = cobertura is not None and cobertura[0] == "partial"
+    if bloque is not None and parcial:
         print(
             "ai-review: la revisión trae su bloque y su COVERAGE fuera de lugar; "
             "se reordenan sin otra vuelta",
@@ -2127,7 +2129,8 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         texto_rep = (rep.get("result") or "") if falla is None else ""
         _, bloque_rep, cobertura_rep = partes_de_respuesta(texto_rep)
         bloque = bloque or bloque_rep
-        cobertura = cobertura or cobertura_rep
+        if not parcial:
+            cobertura = cobertura_rep
     reparado = None
     if bloque is not None and cobertura is not None:
         estado, detalle = cobertura
