@@ -408,29 +408,69 @@ def find_findings_block(text, *, last=False):
 def find_model_findings_block(text):
     """The MODEL's block: (start, end, data, closed) or None.
 
-    Like find_findings_block(last=True), but tolerates a model that closes the
-    JSON and then drops ` -->` or puts it on another line (T16-f11: 7 of 24
-    incremental runs). The JSON must be complete; a truncated one is rejected.
-    The sticky never goes through here: the reviewer writes that block and it
-    keeps requiring the closer.
+    The last candidate that stands alone on its line(s) outside a fenced code
+    block: inside a sentence or a fence it is a quote of the format, and a
+    quote after the real block must not replace it. Unlike the sticky's
+    reader, it tolerates a model that closes the JSON and then drops ` -->`
+    or puts it on another line (T16-f11: 7 of 24 incremental runs). The JSON
+    must be complete; a truncated one is rejected.
     """
     text = text or ""
+    citas = _tramos_cercados(text)
     for start in reversed(_block_starts(text)):
-        found = _closed_block_at(text, start)
-        if found is not None:
-            end, data = found
-            return start, end, _sin_surrogates(data), True
-        # raw_decode no salta espacios iniciales; json.loads del camino cerrado sí.
-        body = re.compile(r"\s*").match(text, start + len(FINDINGS_PREFIX)).end()
-        try:
-            data, end = json.JSONDecoder().raw_decode(text, body)
-        except ValueError:
+        if any(inicio <= start < fin for inicio, fin in citas):
             continue
-        if isinstance(data, dict) and isinstance(data.get("findings"), list):
-            closer = re.match(r"\s*-->", text[end:])
-            end += closer.end() if closer else 0
-            return start, end, _sin_surrogates(data), False
+        found = _model_block_at(text, start)
+        if found is not None and _en_lineas_propias(text, start, found[0]):
+            return start, *found
     return None
+
+
+def _model_block_at(text, start):
+    found = _closed_block_at(text, start)
+    if found is not None:
+        end, data = found
+        return end, _sin_surrogates(data), True
+    # raw_decode no salta espacios iniciales; json.loads del camino cerrado sí.
+    body = re.compile(r"\s*").match(text, start + len(FINDINGS_PREFIX)).end()
+    try:
+        data, end = json.JSONDecoder().raw_decode(text, body)
+    except ValueError:
+        return None
+    if not (isinstance(data, dict) and isinstance(data.get("findings"), list)):
+        return None
+    closer = re.match(r"\s*-->", text[end:])
+    end += closer.end() if closer else 0
+    return end, _sin_surrogates(data), False
+
+
+def _en_lineas_propias(text, start, end):
+    antes = text[text.rfind("\n", 0, start) + 1 : start]
+    fin_de_linea = text.find("\n", end)
+    despues = text[end : None if fin_de_linea < 0 else fin_de_linea]
+    return not antes.strip() and not despues.strip()
+
+
+_FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def _tramos_cercados(text):
+    """(inicio, fin) de cada bloque de código cercado; uno sin cerrar llega al
+    final, como lo muestra GitHub."""
+    tramos, abierto, pos = [], None, 0
+    for linea in text.split("\n"):
+        valla = _FENCE_RE.match(linea)
+        resto = linea[valla.end() :] if valla else ""
+        if valla and abierto is None:
+            if not (valla[1][0] == "`" and "`" in resto):
+                abierto = (pos, valla[1])
+        elif valla and valla[1].startswith(abierto[1]) and not resto.strip():
+            tramos.append((abierto[0], pos + len(linea)))
+            abierto = None
+        pos += len(linea) + 1
+    if abierto is not None:
+        tramos.append((abierto[0], len(text)))
+    return tramos
 
 
 _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
