@@ -41,6 +41,7 @@ class GitHubFalso:
         self.creados = 0
         self.corridas = []
         self.artefactos = {}
+        self.despacho_falla = False
 
     def leer(self):
         return [dict(c) for c in self.comentarios]
@@ -107,6 +108,10 @@ class GitHubFalso:
                 f"-attempt-{artifact['attempt']}",
                 artifact,
             )
+
+    def despachado(self, rid):
+        """Un despacho crea un run del worker, que queda en curso."""
+        self.worker(rid, run_id=500 + len(self.corridas), estado="in_progress")
 
     def pr(self):
         return {
@@ -186,8 +191,11 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
 
     def sh_falso(*args, **kw):
         if args[:3] == ("gh", "workflow", "run"):
+            if github.despacho_falla:
+                raise subprocess.CalledProcessError(1, args)
             pares = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
             despachos.append(dict(p.split("=", 1) for p in pares))
+            github.despachado(int(despachos[-1]["request_id"]))
             return mock.Mock(stdout="")
         if args[:3] == ("gh", "run", "download"):
             nombre, artifact = github.artefactos[int(args[3])]
@@ -354,6 +362,39 @@ class AdmisionDelHeadVivo(unittest.TestCase):
         _, reabierto, _ = correr(ya_revisado, "pull_request_target")
         self.assertEqual(reabierto, [])
         self.assertEqual(ya_revisado.escrituras, 0)
+
+    def test_un_despacho_que_fallo_se_repite_en_el_siguiente_evento(self):
+        github = GitHubFalso()
+        github.despacho_falla = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            correr(github, "pull_request_target")
+        self.assertEqual(
+            [(r.id, r.state) for r in github.estado().pending_requests],
+            [(1, "pending")],
+        )
+        github.despacho_falla = False
+        _, repetido, _ = correr(github, "issue_comment")
+        self.assertEqual([d["request_id"] for d in repetido], ["1"])
+        _, otra_vez, _ = correr(github, "issue_comment")
+        self.assertEqual(otra_vez, [], "el run de la solicitud 1 ya está en curso")
+        self.assertEqual(github.estado().request_count, 1)
+
+    def test_repetir_el_push_reintenta_una_revision_que_fallo(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1)
+        correr(github, "workflow_dispatch", aviso=(900, 1))
+        _, comentario, _ = correr(github, "issue_comment")
+        self.assertEqual(
+            comentario, [], "solo un push reintenta: el aviso del worker haría un ciclo"
+        )
+        _, repetido, _ = correr(github, "pull_request_target")
+        self.assertEqual(revisiones(repetido), [("review", A)])
+        self.assertEqual(
+            [(r.id, r.state) for r in github.estado().pending_requests],
+            [(2, "pending")],
+        )
+        self.assertNotIn("No se pudo revisar", github.visible())
 
     def test_un_comentario_no_admite_borradores_cerrados_ni_forks(self):
         casos = {

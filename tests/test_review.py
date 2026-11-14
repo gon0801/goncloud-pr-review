@@ -3358,14 +3358,18 @@ class Workflows(unittest.TestCase):
             if token == "!":
                 pos += 1
                 return not primario()
-            if token == "startsWith":
+            if token in ("startsWith", "contains"):
                 # Actions compara sin distinguir mayúsculas.
                 pos += 2
-                texto = valor()
+                texto = str(valor() or "").lower()
                 pos += 1
-                prefijo = valor()
+                buscado = valor().lower()
                 pos += 1
-                return str(texto or "").lower().startswith(prefijo.lower())
+                return (
+                    texto.startswith(buscado)
+                    if token == "startsWith"
+                    else buscado in texto
+                )
             if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
                 izquierda = valor()
                 operador = tokens[pos]
@@ -3453,6 +3457,18 @@ class Workflows(unittest.TestCase):
                     {
                         "issue": {"number": 5, "pull_request": {"url": "u"}},
                         "comment": {"body": "AI-Review: descartar F1"},
+                    },
+                ),
+                True,
+            ),
+            (
+                # El script acepta el comando tras espacios o saltos de línea:
+                # si el filtro lo dejara fuera, se aplicaría tarde, en otro evento.
+                ctx(
+                    "issue_comment",
+                    {
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "\n  ai-review: descartar todo"},
                     },
                 ),
                 True,
