@@ -507,5 +507,44 @@ class CosechaDeResultados(unittest.TestCase):
         self.assertEqual(github.estado().pending_requests[0].state, "pending")
 
 
+class Idempotencia(unittest.TestCase):
+    def _escenario(self):
+        """Un push perdido a B, el resultado de su revisión sin aviso y un
+        descarte cuyo run también se perdió."""
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        correr(github, "pull_request_target", head=B)
+        github.head = B
+        github.comentar(20, "ai-review: descartar F1")
+        github.worker(1, resultado(1, B, ["Fuga 1", "Fuga nueva"]))
+        return github
+
+    def test_el_orden_de_los_eventos_no_cambia_el_estado_final(self):
+        comentario, aviso = ("issue_comment", None), ("workflow_dispatch", (900, 1))
+        ordenes = {
+            "comentario y aviso": [comentario, aviso],
+            "aviso y comentario": [aviso, comentario],
+            "aviso repetido": [aviso] * 3,
+            "push repetido": [("pull_request_target", None)] * 2,
+        }
+        finales = {}
+        for nombre, eventos in ordenes.items():
+            github = self._escenario()
+            despachos = []
+            for evento, avisado in eventos:
+                codigo, despachado, _ = correr(github, evento, aviso=avisado)
+                self.assertEqual(codigo, 0, nombre)
+                despachos += despachado
+            self.assertEqual(despachos, [], f"{nombre}: nada que re-despachar")
+            finales[nombre] = (github.estado(), github.visible())
+        estado, visible = finales.pop("comentario y aviso")
+        self.assertEqual(
+            {f.id: type(f.status).__name__ for f in estado.findings},
+            {"F1": "StatusDismissed", "F2": "StatusOpen"},
+        )
+        self.assertEqual(estado.revision.head_sha, B)
+        for nombre, final in finales.items():
+            self.assertEqual(final, (estado, visible), nombre)
+
+
 if __name__ == "__main__":
     unittest.main()
