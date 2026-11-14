@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_render
 import review_sticky
 import review_config
 import review_domain as domain  # noqa: E402
@@ -983,9 +984,9 @@ class CoordinadorComandos(unittest.TestCase):
 
     def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
         cuerpo = review.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
-            "bloque", "x" * review.GITHUB_COMMENT_MAX
+            "bloque", "x" * review_render.GITHUB_COMMENT_MAX
         )
-        self.assertEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+        self.assertEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
 
     def test_explicacion_no_puede_imitar_marcadores_ni_secciones(self):
         texto = review.texto_de_explicacion(
@@ -1013,7 +1014,7 @@ class CoordinadorComandos(unittest.TestCase):
     )
 
     def _sin_marcadores_vivos(self, cuerpo, estado):
-        detalle = cuerpo.split(review.DETALLE_DEL_REVISOR, 1)[1]
+        detalle = cuerpo.split(review_render.DETALLE_DEL_REVISOR, 1)[1]
         detalle = detalle.split("<details><summary>Alcance de la revisión", 1)[0]
         self.assertNotIn("<!--", detalle)
         self.assertIn("&lt;!-- ai-review:sha=" + "9" * 40 + " -->", detalle)
@@ -1044,9 +1045,9 @@ class CoordinadorComandos(unittest.TestCase):
         )
         bloque = domain.encode_snapshot(estado).block
         nuevo = review.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
-        cabeza, detalle = nuevo.split(review.DETALLE_DEL_REVISOR, 1)
+        cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
         # Un cuerpo publicado antes del arreglo: la prosa con los marcadores vivos.
-        viejo = cabeza + review.DETALLE_DEL_REVISOR + detalle.replace("&lt;!--", "<!--")
+        viejo = cabeza + review_render.DETALLE_DEL_REVISOR + detalle.replace("&lt;!--", "<!--")
         resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
         cuerpo = review.estado_visible(estado)(bloque, resto)
         self._sin_marcadores_vivos(cuerpo, estado)
@@ -1059,11 +1060,11 @@ class CoordinadorComandos(unittest.TestCase):
         nuevo = review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
             bloque, ""
         )
-        cabeza, detalle = nuevo.split(review.DETALLE_DEL_REVISOR, 1)
+        cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
         imitado = "<details><summary>Alcance de la revisión</summary>"
         viejo = (
             cabeza
-            + review.DETALLE_DEL_REVISOR
+            + review_render.DETALLE_DEL_REVISOR
             + "\n\n"
             + imitado
             + "\n"
@@ -1114,7 +1115,7 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertNotIn("a<!--b.py", cuerpo)
         self.assertNotIn("falta <!--", cuerpo)
         self.assertIn("gen/a&lt;!--b.py", cuerpo)
-        self.assertIn(review.ALCANCE_INICIO, cuerpo)
+        self.assertIn(review_render.ALCANCE_INICIO, cuerpo)
         self.assertTrue(cuerpo.rstrip().endswith("</details>"))
         self.assertEqual(
             review_sticky.reviewed_completion(cuerpo), review_sticky.reviewed_completion(nuevo)
@@ -1130,14 +1131,14 @@ class CoordinadorComandos(unittest.TestCase):
             bloque, ""
         )
         resto = review.strip_findings_block(nuevo.split("\n", 1)[1]).strip()
-        aviso = review.caution_banner("motivo <!-- y", "c" * 40, has_previous=True)
-        viejo = review.insert_caution_banner(resto, aviso)
+        aviso = review_render.caution_banner("motivo <!-- y", "c" * 40, has_previous=True)
+        viejo = review_render.insert_caution_banner(resto, aviso)
         cuerpo = review.estado_visible(estado)(bloque, viejo)
         self.assertNotIn("motivo <!--", cuerpo)
         self.assertIn("motivo &lt;!-- y", cuerpo)
 
     def test_la_ruta_del_ancla_no_imita_un_marcador(self):
-        linea = review.finding_line(
+        linea = review_render.finding_line(
             {
                 "file": "a<!-- ai-review:sha=" + "9" * 40 + " -->.py",
                 "line": 3,

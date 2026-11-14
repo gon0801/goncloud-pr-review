@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+
+import review_render
 import review_domain as domain  # noqa: E402
 from review_context import (  # noqa: E402
     GitRepository,
@@ -86,7 +88,7 @@ def coordinador_acepta(creada, facts, artifact, policy):
 
 
 def comentario_publico(artifact, decision, head):
-    return review.compose(
+    return review_render.compose(
         artifact,
         artifact["manifest"],
         sha=head,

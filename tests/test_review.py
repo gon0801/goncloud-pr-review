@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_render
 import review_sticky
 import review_run
 import review_domain
@@ -90,7 +91,7 @@ class Coverage(unittest.TestCase):
 
 class Compose(unittest.TestCase):
     def test_complete_review_has_marker_sha_and_no_warning(self):
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** sin problemas.\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -108,7 +109,7 @@ class Compose(unittest.TestCase):
 
     def test_max_turns_and_budget_cut_are_never_silent(self):
         manifest = dict(MANIFEST, excluded=[{"path": "big.py", "reason": "budget"}])
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** 1 High.", "subtype": "error_max_turns"},
             manifest,
             sha=SHA,
@@ -127,7 +128,7 @@ class Compose(unittest.TestCase):
             MANIFEST,
             excluded=[{"path": "x" * 300, "reason": "filtro " + "y" * 3000}] * 40,
         )
-        body = review.compose(
+        body = review_render.compose(
             {"result": "x" * 70000 + "\nCOVERAGE: complete"},
             manifest,
             sha=SHA,
@@ -136,7 +137,7 @@ class Compose(unittest.TestCase):
         self.assertEqual(len(body), 65000)
 
     def test_partial_coverage_detail_is_shown(self):
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: partial | tests/ sin leer"},
             MANIFEST,
             sha=SHA,
@@ -153,7 +154,7 @@ class Compose(unittest.TestCase):
             "cache_read_input_tokens": 1_000_000,
             "output_tokens": 10_000,
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
             MANIFEST,
             sha=SHA,
@@ -168,7 +169,7 @@ class Compose(unittest.TestCase):
         manifest = dict(
             MANIFEST, excluded=[{"path": "p/" + "x" * 240, "reason": "budget"}] * 60
         )
-        body = review.compose(
+        body = review_render.compose(
             {"result": "x" * 70000 + "\nCOVERAGE: complete"},
             manifest,
             sha=SHA,
@@ -188,7 +189,7 @@ class Redact(unittest.TestCase):
         key, token = "sk-" + "a1" * 16, "ghs_" + "Zz9" * 12
         self.assertEqual((len(key), len(token)), (35, 40))
         self.assertEqual(
-            review.redact(f"key {key} and {token}", [key, token, ""]),
+            review_render.redact(f"key {key} and {token}", [key, token, ""]),
             "key [REDACTED] and [REDACTED]",
         )
 
@@ -1923,7 +1924,7 @@ class MaxTurns(unittest.TestCase):
     def test_compose_shows_used_over_cap(self):
         manifest = dict(MANIFEST, max_turns=40)
         usage = {"input_tokens": 10, "output_tokens": 5}
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
             manifest,
             sha=SHA,
@@ -3335,6 +3336,7 @@ class Workflows(unittest.TestCase):
                 "review_config.py",
                 "review_run.py",
                 "review_sticky.py",
+                "review_render.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -5135,7 +5137,7 @@ class Fallback(unittest.TestCase):
             dismiss_ids=set(),
             dismiss_all=False,
         )
-        body = review.compose(
+        body = review_render.compose(
             result,
             manifest,
             sha=SHA,
@@ -5146,7 +5148,7 @@ class Fallback(unittest.TestCase):
                 "block": review.serialize_findings(merged),
             },
         )
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertEqual(
             review.parse_findings_block(body)["findings"], merged["findings"]
         )
@@ -5172,7 +5174,7 @@ class Fallback(unittest.TestCase):
 
     def test_empty_state_uses_legacy_body(self):
         result = {"result": "**Veredicto:** 1 High.\n\nDetalle.\nCOVERAGE: complete"}
-        body = review.compose(
+        body = review_render.compose(
             result,
             MANIFEST,
             sha=SHA,
@@ -5197,7 +5199,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F4", state="dismissed"),
         ]
         self.assertEqual(
-            review.verdict_for(merged),
+            review_render.verdict_for(merged),
             "**Veredicto:** 1 High, 1 Medium abiertos (1 resuelto, 1 descartado).",
         )
 
@@ -5207,7 +5209,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F2", state="resolved"),
         ]
         self.assertEqual(
-            review.verdict_for(merged),
+            review_render.verdict_for(merged),
             "**Veredicto:** sin problemas abiertos (2 resueltos).",
         )
 
@@ -5218,7 +5220,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F3", state="resolved"),
             make_finding("F4", state="dismissed"),
         ]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5239,7 +5241,7 @@ class VerdictSections(unittest.TestCase):
 
     def test_el_motivo_de_una_resolucion_no_aceptada_sale_bajo_el_hallazgo_abierto(self):
         merged = [make_finding("F1"), make_finding("F2")]
-        partes = review.sections_for(merged, [], no_acreditados=("F1",))
+        partes = review_render.sections_for(merged, [], no_acreditados=("F1",))
         siguen = partes.index("## Siguen abiertos")
         bloque = partes[siguen:]
         i = next(n for n, linea in enumerate(bloque) if linea.endswith(" · F1"))
@@ -5252,14 +5254,14 @@ class VerdictSections(unittest.TestCase):
             len([l for l in partes if "no cambió ningún archivo pertinente" in l]), 1
         )
         self.assertEqual(
-            review.sections_for(merged, [], no_acreditados=()),
-            review.sections_for(merged, []),
+            review_render.sections_for(merged, [], no_acreditados=()),
+            review_render.sections_for(merged, []),
             "sin resoluciones no aceptadas el render no cambia",
         )
 
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"
             },
@@ -5277,7 +5279,7 @@ class VerdictSections(unittest.TestCase):
 
     def test_metadata_precedes_review_and_stays_within_budgets(self):
         merged = [make_finding("F1")]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5293,12 +5295,12 @@ class VerdictSections(unittest.TestCase):
         self.assertTrue(lines[1].startswith(review_sticky.SHA_PREFIX))
         self.assertTrue(lines[2].startswith(review_sticky.COMPLETION_PREFIX))
         self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
 
     def test_oversized_block_never_eats_the_scope_section(self):
         merged = [make_finding("F1")]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5306,7 +5308,7 @@ class VerdictSections(unittest.TestCase):
             findings={
                 "merged": merged,
                 "new_ids": ["F1"],
-                "block": "B" * (review.COMMENT_LIMIT + 10000),
+                "block": "B" * (review_render.COMMENT_LIMIT + 10000),
             },
         )
         self.assertIn("recortada por el límite", body)
@@ -6280,7 +6282,7 @@ class ReviewContinuity(unittest.TestCase):
                         body = self.publish(
                             work, "b" * 40, MANIFEST, {review_config.ERROR_KEY: reason}, body
                         )
-                    self.assertEqual(body.count(review.CAUTION_MARK), 1)
+                    self.assertEqual(body.count(review_render.CAUTION_MARK), 1)
                     self.assertNotIn("first failure", body)
                     previous, _ = self.gate(work, "b" * 40, body)
                     self.assertEqual(previous["sha"], SHA)
@@ -6295,7 +6297,7 @@ class ReviewContinuity(unittest.TestCase):
                     "block": block_of(*merged),
                     "model_ok": True,
                 }
-                body = review.compose(
+                body = review_render.compose(
                     {"result": "x" * 100_000 + "\nCOVERAGE: complete"},
                     MANIFEST,
                     sha=SHA,
@@ -6918,7 +6920,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "texto\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -6937,7 +6939,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "", "subtype": "success"},
             manifest,
             sha=SHA,
@@ -6964,14 +6966,14 @@ class BlockingFixes(unittest.TestCase):
             "model_ok": True,
             "block": block,
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
             provider="opencode-go",
             findings=findings,
         )
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertIn(
             "Memoria conservada", body, "aviso visible de memoria íntegra no guardada"
         )
@@ -7032,7 +7034,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1", state="resolved")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": block_of(make_finding("F1", state="resolved"))
                 + "\nCOVERAGE: complete"
@@ -7154,7 +7156,7 @@ class BlockingFixes(unittest.TestCase):
             "model_ok": True,
             "block": review.serialize_findings({"findings": [], "next": 1}),
         }
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": "**Veredicto:** limpio.\n"
                 + block_of()
@@ -7264,13 +7266,13 @@ class BlockingFixes(unittest.TestCase):
     def test_unclosed_fence_does_not_protect_a_verdict(self):
         text = "Texto\n```\ncódigo sin cerrar\n**Veredicto:** del modelo"
         self.assertEqual(
-            review.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar"
+            review_render.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar"
         )
 
     def test_verdict_inside_a_code_fence_is_kept(self):
         text = "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```\n**Veredicto:** del modelo"
         self.assertEqual(
-            review.strip_model_verdict(text),
+            review_render.strip_model_verdict(text),
             "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```",
         )
 
@@ -7295,7 +7297,7 @@ class BlockingFixes(unittest.TestCase):
             "Intro del modelo.\n**Veredicto:** 1 High.\n\n#### 🟠 High · `a.py:1` · X"
         )
         self.assertEqual(
-            review.strip_model_verdict(text),
+            review_render.strip_model_verdict(text),
             "Intro del modelo.\n\n#### 🟠 High · `a.py:1` · X",
         )
 
@@ -7316,7 +7318,7 @@ class BlockingFixes(unittest.TestCase):
         )
 
     def test_html_in_titles_is_neutralized(self):
-        line = review.finding_line(
+        line = review_render.finding_line(
             make_finding("F1", title="rompe </details> y <!-- esto")
         )
         self.assertNotIn("</details>", line)
@@ -8034,7 +8036,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
             )
         self.assertIsNone(findings.get("keep"))
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": modelo},
             {"reviewed": delta, "excluded": [], **manifest},
             sha="e" * 40,
@@ -8085,14 +8087,14 @@ class PersistenciaSinPerdida(unittest.TestCase):
         """(programa, modelo): el comentario partido en lo que arma el programa y la
         sección rotulada del modelo (Detalle del revisor, hasta el Alcance)."""
         antes, resto = cuerpo.split("## Detalle del revisor", 1)
-        modelo, alcance = resto.split(review.ALCANCE_INICIO, 1)
-        return antes + review.ALCANCE_INICIO + alcance, modelo
+        modelo, alcance = resto.split(review_render.ALCANCE_INICIO, 1)
+        return antes + review_render.ALCANCE_INICIO + alcance, modelo
 
     def test_el_texto_del_modelo_solo_aparece_en_su_seccion(self):
         for nombre, variante in self.VARIANTES_DEL_MODELO.items():
             prosa = f"Todo bien.\n{variante}\nF1 quedó resuelto."
             rutas = {
-                "sin hallazgos": review.compose(
+                "sin hallazgos": review_render.compose(
                     {"result": f"{prosa}\nCOVERAGE: complete"},
                     MANIFEST,
                     sha=SHA,
@@ -8122,7 +8124,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
     def test_los_avisos_del_programa_no_contienen_texto_del_modelo(self):
         detalle = f"faltó a.py<br>**Nota del publicador:** {self.MARCA} &#78;ota <blockquote>x"
         manifest = {"reviewed": ["a.py"], "excluded": []}
-        sin = review.compose(
+        sin = review_render.compose(
             {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
             manifest,
             sha=SHA,
@@ -8152,33 +8154,33 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
     def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
         for banner in (
-            review.AVISO_SIN_ESPACIO,
-            review.caution_banner("falló", "a" * 40, False),
+            review_render.AVISO_SIN_ESPACIO,
+            review_render.caution_banner("falló", "a" * 40, False),
             review.aviso_de_comando_no_entendido(5),
         ):
             primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
             self.assertTrue(
-                any(primera[4:].startswith(e) for e in review.AVISOS_DEL_PROGRAMA),
+                any(primera[4:].startswith(e) for e in review_render.AVISOS_DEL_PROGRAMA),
                 primera,
             )
         with self.assertRaises(ValueError):
-            review.aviso_md("Aviso nuevo sin registrar", "x")
+            review_render.aviso_md("Aviso nuevo sin registrar", "x")
 
     def test_referencias_de_caracter_en_la_prosa_se_ven_literales(self):
         self.assertEqual(
-            review.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
+            review_render.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
             "Un &amp;#78; y &amp;#x4E; y &amp;copy; y &amp; sueltos.",
         )
 
     def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
-        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
+        banner = review_render.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
         lineas = banner.split("\n")
         self.assertEqual(lineas[0], "> [!CAUTION]")
         self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
         self.assertNotIn("<br", banner)
         self.assertNotIn("&#78;", banner)
         self.assertEqual(
-            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
+            review_render.caution_banner("HTTP 500 en la API", "a" * 40, False),
             "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
         )
 
@@ -8570,7 +8572,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima del desborde")
         self.assertIn("desborde", body, "aviso visible")
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertIn(bloque_sticky, body, "memoria anterior íntegra")
 
     def test_sticky_invalido_se_conserva_con_banner(self):
@@ -8629,7 +8631,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima de memoria inválida")
         self.assertIn("conservada", body, "aviso visible")
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertIn("Texto previo.", body)
 
 
@@ -8692,7 +8694,7 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
         body = self.publicar([])
         self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertNotIn(review_sticky.SHA_PREFIX, body, "sin memoria no se marca SHA")
         self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no se confirma cobertura")
         self.assertNotIn("bug nuevo z", body, "no publica la memoria que no cupo")
@@ -8701,14 +8703,14 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
         sticky_body = (
             review_sticky.MARKER
             + "\n"
-            + review.CAUTION_MARK
+            + review_render.CAUTION_MARK
             + "\n> **No se pudo revisar el commit abcdef0:** falla de infraestructura."
         )
         sticky = {"id": 8, "user": "github-actions[bot]", "body": sticky_body}
         body = self.publicar([sticky])
         self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertNotIn(review_sticky.SHA_PREFIX, body)
         self.assertNotIn(review_sticky.COMPLETION_PREFIX, body)
         self.assertNotIn("bug nuevo z", body)
@@ -8966,7 +8968,7 @@ class CableadoIdentidad(unittest.TestCase):
                 out["completion"],
                 domain.COMPLETE_CLAIM,
             )
-            cuerpo = review.compose(
+            cuerpo = review_render.compose(
                 resultado,
                 manifest,
                 sha=r["head2"],
@@ -9031,7 +9033,7 @@ class CableadoIdentidad(unittest.TestCase):
                         domain.PARTIAL,
                         "archivo excluido: omisión obligatoria, no complete",
                     )
-                    cuerpo = review.compose(
+                    cuerpo = review_render.compose(
                         resultado,
                         manifest,
                         sha=head,
@@ -9058,7 +9060,7 @@ class CableadoIdentidad(unittest.TestCase):
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
         self.assertFalse(out["model_ok"])
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
         )
         self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
@@ -9248,7 +9250,7 @@ class CableadoIdentidad(unittest.TestCase):
             finally:
                 os.chdir(cwd)
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado, manifest, sha=base, provider="opencode-go", findings=out
         )
         self.assertIn(":partial -->", cuerpo)
@@ -9346,7 +9348,7 @@ class CableadoIdentidad(unittest.TestCase):
             "model_ok": True,
             "completion": domain.PARTIAL,
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": ""},
             {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
             sha="e" * 40,
@@ -10073,7 +10075,7 @@ class GitPaths(unittest.TestCase):
             self.assertNotIn(b"\xef\xbf\xbd", diff_bytes)
             self.assertNotIn(b"no utf8", diff_bytes)
 
-            body = review.compose(
+            body = review_render.compose(
                 {"result": "COVERAGE: complete\n"},
                 manifest,
                 sha=SHA,

@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
 
@@ -360,7 +361,7 @@ class DeltaNuloEnElManifest(unittest.TestCase):
             "title": "eval",
             "state": "open",
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": "Sigue abierto.\nCOVERAGE: complete", "subtype": "success"},
             self.MANIFEST,
             sha="b" * 40,

@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
 
@@ -2641,7 +2642,7 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": ["src/modulo_0.py"],
             "excluded": [],
         }
-        comentario = review.compose(
+        comentario = review_render.compose(
             resultado,
             manifest,
             sha="e" * 40,
@@ -2658,7 +2659,7 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_chars=15000,
         )
         ascii_ = {"result": "COVERAGE: partial\n" + "d" * 40000}
-        con_ascii = review.compose(
+        con_ascii = review_render.compose(
             ascii_,
             manifest,
             sha="e" * 40,
@@ -2667,7 +2668,7 @@ class CheckpointCapacity(unittest.TestCase):
         )
         self.assertLessEqual(len(con_ascii), ajustado.comment_max_chars)
         multibyte = {"result": "COVERAGE: partial\n" + "ñ" * 30000}
-        con_multibyte = review.compose(
+        con_multibyte = review_render.compose(
             multibyte,
             manifest,
             sha="e" * 40,
@@ -2717,7 +2718,7 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": ["src/modulo_0.py"],
             "excluded": [],
         }
-        comentario = review.compose(
+        comentario = review_render.compose(
             resultado,
             manifest,
             sha="e" * 40,
@@ -2763,7 +2764,7 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_bytes=5000,
             comment_max_chars=5000,
         )
-        comentario = review.compose(
+        comentario = review_render.compose(
             resultado,
             manifest,
             sha="e" * 40,
@@ -2776,7 +2777,7 @@ class CheckpointCapacity(unittest.TestCase):
             comentario,
             "el checkpoint confirmado jamás se recorta: si no cabe, no viaja",
         )
-        self.assertIn(review.CAUTION_MARK, comentario, "aviso visible de capacidad")
+        self.assertIn(review_render.CAUTION_MARK, comentario, "aviso visible de capacidad")
         self.assertIsNone(
             review_sticky.reviewed_completion(comentario), "el presupuesto chico no confirma"
         )
@@ -2858,7 +2859,7 @@ class CheckpointCapacity(unittest.TestCase):
             ),
         ):
             with self.subTest(rama=nombre):
-                out = review.compose(
+                out = review_render.compose(
                     *args,
                     sha="e" * 40,
                     provider="opencode-go",
@@ -2900,7 +2901,7 @@ class CheckpointCapacity(unittest.TestCase):
         ]
         for resultado, manifest, dorada in doradas:
             with self.subTest(reviewed=len(manifest["reviewed"])):
-                out = review.compose(
+                out = review_render.compose(
                     resultado,
                     manifest,
                     sha="e" * 40,
@@ -2915,10 +2916,10 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": [],
             "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
         }
-        sin = review.compose(
+        sin = review_render.compose(
             {"result": ""}, manifest, sha="e" * 40, provider="opencode-go"
         )
-        con = review.compose(
+        con = review_render.compose(
             {"result": ""},
             manifest,
             sha="e" * 40,
@@ -2981,7 +2982,7 @@ class CheckpointCapacity(unittest.TestCase):
             ("genérico", None),
             ("hallazgos", self._hallazgos_chicos()),
         ):
-            vacio = review.compose(
+            vacio = review_render.compose(
                 {"result": "COVERAGE: complete\n"},
                 manifest,
                 sha="e" * 40,
@@ -2997,7 +2998,7 @@ class CheckpointCapacity(unittest.TestCase):
                     comment_max_chars=tope,
                 )
                 with self.subTest(camino=camino, margen=margen):
-                    out = review.compose(
+                    out = review_render.compose(
                         resultado,
                         manifest,
                         sha="e" * 40,
@@ -3005,7 +3006,7 @@ class CheckpointCapacity(unittest.TestCase):
                         findings=findings,
                         budget=presupuesto,
                     )
-                    if review.CAUTION_MARK in out:
+                    if review_render.CAUTION_MARK in out:
                         continue  # el fijo no cabe: aviso de capacidad, fail-closed
                     self.assertLessEqual(len(out), tope)
                     self.assertLessEqual(len(out.encode("utf-8")), tope)
@@ -3027,7 +3028,7 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_chars=20000,
         )
         self.assertLess(len(findings["block"]), 20000)
-        out = review.compose(
+        out = review_render.compose(
             resultado,
             manifest,
             sha="e" * 40,
@@ -3035,22 +3036,22 @@ class CheckpointCapacity(unittest.TestCase):
             findings=findings,
             budget=presupuesto,
         )
-        sin = review.compose(
+        sin = review_render.compose(
             resultado, manifest, sha="e" * 40, provider="opencode-go", findings=findings
         )
         self.assertGreater(len(sin), 20000)
         self.assertIn(
-            review.CAUTION_MARK,
+            review_render.CAUTION_MARK,
             out,
             "el fijo no cabe: aviso de capacidad, jamás un corte a ciegas",
         )
         self.assertNotIn(findings["block"], out)
         self.assertIsNone(review_sticky.reviewed_completion(out))
-        self.assertLessEqual(len(out), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(out), review_render.GITHUB_COMMENT_MAX)
 
     def test_mensaje_sin_revisables_con_findings_vacios(self):
         findings = {"merged": [], "new_ids": [], "block": "", "model_ok": True}
-        out = review.compose(
+        out = review_render.compose(
             {"result": ""},
             {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
             sha="e" * 40,

@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
 
+import review_render
+
 import review_sticky
 import review_run
 import review_domain as domain  # noqa: E402
@@ -241,7 +243,7 @@ class LibroPublicado(unittest.TestCase):
 
     def test_compose_sin_libro_no_renderiza_linea(self):
         result = {"result": texto_pasada("complete"), "subtype": "success"}
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             result,
             {"reviewed": ["a.py"], "excluded": [], "mode": "full"},
             sha="a" * 40,

@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
 
+import review_render
+
 import review_sticky
 import review_domain as domain  # noqa: E402
 
@@ -270,7 +272,7 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         self.assertEqual(falso.creaciones, [], "jamás crea un sticky sin bloque")
         self.assertEqual(len(falso.patches), 1, "el aviso va al sticky existente")
         cuerpo = falso.leer()[0]["body"]
-        self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
+        self.assertIn(review_render.CAUTION_MARK, cuerpo, "aviso visible")
         self.assertIn("desborde", cuerpo)
         self.assertIsNotNone(review_sticky.reviewed_completion(cuerpo))
         self.assertIsInstance(domain.read_snapshot(cuerpo), domain.Valid)
@@ -791,7 +793,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
     def test_libro_al_tope_y_estado_grande_publican_sin_libro(self):
         snapshot, block = self._snapshot_grande()
         libro = self._libro_grande()
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -829,7 +831,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             "review_provider": "opencode-go",
             "model_ok": True,
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado,
             self.MANIFEST,
             sha="c" * 40,
@@ -858,7 +860,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
     def test_libro_chico_sigue_viajando(self):
         snapshot, block = self._snapshot_grande()
         libro = {"src/chico.py": "a" * 40}
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -880,7 +882,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         snapshot = decision.snapshot
         block = domain.encode_snapshot(snapshot).block
         libro = {f["file"]: "e" * 40 for f in domain.hallazgos_legacy(snapshot)}
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
             {
                 "mode": "full",
@@ -905,7 +907,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
 
     def test_ni_sin_libro_cabe_entonces_aviso_y_nunca_corte_a_ciegas(self):
         snapshot, block = self._snapshot_grande()
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -916,11 +918,11 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             ),
             libro=None,
         )
-        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("no cabe", cuerpo)
         self.assertIsNone(review_sticky.reviewed_completion(cuerpo), "sin confirmación")
         self.assertNotIn(review.FINDINGS_PREFIX, cuerpo, "nunca un bloque partido")
-        self.assertLessEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
 
 
 class ElPasoTresNoBorraMemoria(unittest.TestCase):
@@ -931,7 +933,7 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
 
     def _visible_sin_espacio(self, snapshot):
         def visible(bloque, resto):
-            return review.compose(
+            return review_render.compose(
                 {
                     "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
                     "review_provider": "opencode-go",
@@ -978,7 +980,7 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
             carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
         )
         self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
-        self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
+        self.assertIn(review_render.CAUTION_MARK, cuerpo, "aviso visible")
 
     def test_sin_sticky_previo_no_crea_nada(self):
         snapshot = snapshot_grande()
@@ -1100,7 +1102,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
             carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
         )
         self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
-        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("reviewed=false", revisado)
 
     def test_sin_sticky_previo_no_crea_nada(self):
@@ -1116,7 +1118,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
         self.assertIsInstance(carga, domain.Legacy)
         self.assertEqual(len(carga.raw["findings"]), 3)
         self.assertEqual(carga.snapshot.findings[-1].id, "F3")
-        self.assertNotIn(review.CAUTION_MARK, cuerpo)
+        self.assertNotIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("reviewed=true", revisado)
 
 
