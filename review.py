@@ -17,6 +17,14 @@ import time
 import urllib.request
 from pathlib import Path
 
+from review_config import (
+    ERROR_KEY,
+    IDENTIDADES,
+    PROVIDERS,
+    env,
+    get_provider,
+    politica_de_identidad,
+)
 import review_domain
 from review_domain import (
     DISMISSED,
@@ -168,25 +176,6 @@ SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "
 DISMISS_RE = re.compile(r"ai-review:\s*descartar\s+(.+)", re.IGNORECASE)
 DISMISS_ALL_WORD = "todo"
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
-
-# Only DeepSeek V4.1 Flash is allowed. OpenCode Go serves it in OpenAI format only, so
-# Claude Code reaches it through a local LiteLLM proxy; DeepSeek's own API speaks Anthropic.
-PROVIDERS = {
-    "opencode-go": {
-        "label": "DeepSeek V4.1 Flash · OpenCode Go",
-        "model": "deepseek-v4.1-flash",
-        "upstream": "https://opencode.ai/zen/go/v1",
-        "via_proxy": True,
-        "prices": None,
-    },
-    "deepseek": {
-        "label": "DeepSeek V4.1 Flash · API DeepSeek",
-        "model": "deepseek-flash[1m]",
-        "upstream": "https://api.deepseek.com/anthropic",
-        "via_proxy": False,
-        "prices": (0.30, 0.006, 1.20),
-    },
-}
 CLAUDE_CODE_VERSION = "2.1.282"
 LITELLM_VERSION = "1.102.1"
 
@@ -1229,16 +1218,6 @@ def _repo_actual():
     return GitRepository(Path(sh("git", "rev-parse", "--show-toplevel").stdout.strip()))
 
 
-def env(name):
-    value = os.environ.get(name, "")
-    if not value:
-        sys.exit(f"ai-review: falta la variable {name}")
-    return value
-
-
-ERROR_KEY = "ai_review_error"
-
-
 def soft_fail(result_path, reason):
     """Fail-soft path: the PR author can't fix this, so the check must stay green.
 
@@ -1558,15 +1537,6 @@ def _pr_via_api():
     except Exception:
         return {}
     return datos if isinstance(datos, dict) else {}
-
-
-def get_provider():
-    name = os.environ.get("PROVIDER") or "opencode-go"
-    if name not in PROVIDERS:
-        sys.exit(
-            f"ai-review: proveedor '{name}' no permitido; usa uno de: {', '.join(PROVIDERS)}"
-        )
-    return name, PROVIDERS[name]
 
 
 def litellm_config(provider, session):
@@ -2561,18 +2531,6 @@ def clasificar_falla_proveedor(result):
 # validar_reporte; el adaptador construye los RepositoryFacts con Git. Ambas
 # identidades (current y anchors) pasan por la aceptación del dominio; la
 # emisión de anclas por el modelo llega con la activación del CIERRE.
-IDENTIDADES = ("current", "anchors")
-
-
-def politica_de_identidad():
-    """FINDING_IDENTITY del env: current (default) o anchors; lo demás se
-    rechaza antes de llamar al modelo (plan F0)."""
-    valor = (os.environ.get("FINDING_IDENTITY") or "current").strip().lower()
-    if valor not in IDENTIDADES:
-        sys.exit(
-            f"ai-review: FINDING_IDENTITY '{valor}' no admitido; usa current o anchors"
-        )
-    return valor
 
 
 def politica_de_revision(manifest=None, identidad=None):

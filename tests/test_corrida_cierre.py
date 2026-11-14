@@ -17,6 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 
 SESION = "0f8e5c1a-3b2d-4c6e-9a7f-1d2e3f4a5b6c"
 SIN_TURNOS = {
@@ -262,7 +263,7 @@ class VueltaDeCierre(unittest.TestCase):
         self.assertIsNone(salida)
         self.assertEqual(len(claude.corridas), 3)
         respaldo, cierre = claude.corridas[1:]
-        pago = review.PROVIDERS["deepseek"]
+        pago = review_config.PROVIDERS["deepseek"]
         for argv, env, _ in (respaldo, cierre):
             self.assertEqual(argv[argv.index("--model") + 1], pago["model"])
             self.assertEqual(env["ANTHROPIC_BASE_URL"], pago["upstream"])

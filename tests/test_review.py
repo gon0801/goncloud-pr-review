@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 import review_context  # noqa: E402
 
 MANIFEST = {
@@ -467,7 +468,7 @@ class GitHubGlue(unittest.TestCase):
 
     def test_publish_of_a_failed_review_tells_the_workflow_it_was_not_reviewed(self):
         _, output, posted = self.run_cmd(
-            "publish", [], result={review.ERROR_KEY: "deepseek agotó su cuota"}
+            "publish", [], result={review_config.ERROR_KEY: "deepseek agotó su cuota"}
         )
         self.assertEqual(output, "reviewed=false\n")
         self.assertIn("No se pudo revisar el commit", posted["body"])
@@ -500,7 +501,7 @@ class GitHubGlue(unittest.TestCase):
             work = tmp / "work"
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
-            (work / "result.json").write_text(json.dumps({review.ERROR_KEY: reason}))
+            (work / "result.json").write_text(json.dumps({review_config.ERROR_KEY: reason}))
             env = dict(
                 os.environ,
                 PATH=f"{bindir}:{os.environ['PATH']}",
@@ -594,7 +595,7 @@ class GitHubGlue(unittest.TestCase):
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
             (work / "result.json").write_text(
-                json.dumps({review.ERROR_KEY: f"falla con secreto {secret}"})
+                json.dumps({review_config.ERROR_KEY: f"falla con secreto {secret}"})
             )
             summary = tmp / "summary.md"
             summary.write_text("")
@@ -776,12 +777,12 @@ class ReasoningReplayRecovery(unittest.TestCase):
                     [{"result": message, "is_error": True, "api_error_status": status}]
                 )
                 self.assertEqual(len(calls), 1)
-                self.assertIn("error permanente", result[review.ERROR_KEY])
+                self.assertIn("error permanente", result[review_config.ERROR_KEY])
 
     def test_exception_does_not_apply_to_direct_deepseek_provider(self):
         result, calls, _, _ = self.run_replies([self.replay_error], provider="deepseek")
         self.assertEqual(len(calls), 1)
-        self.assertIn("error permanente", result[review.ERROR_KEY])
+        self.assertIn("error permanente", result[review_config.ERROR_KEY])
 
 
 class RunAgent(unittest.TestCase):
@@ -867,7 +868,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "la revisión excedió el tiempo límite de 1 s; "
+                review_config.ERROR_KEY: "la revisión excedió el tiempo límite de 1 s; "
                 "no se reintenta porque otro intento tardaría lo mismo"
             },
         )
@@ -883,7 +884,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("intento 1/2", proc.stdout)
         self.assertNotIn("intento 2/2", proc.stdout)
-        self.assertIn("excedió el tiempo límite de 1 s", result[review.ERROR_KEY])
+        self.assertIn("excedió el tiempo límite de 1 s", result[review_config.ERROR_KEY])
 
     def test_retry_runs_only_if_it_still_gets_600_seconds(self):
         overloaded = {"result": "overloaded", "is_error": True, "api_error_status": 529}
@@ -912,9 +913,9 @@ class RunAgent(unittest.TestCase):
             proc.stdout, r"intento 1/2 con deepseek \(límite (6[5-9]|70) s\)"
         )
         self.assertIn("no queda tiempo para otro intento", proc.stderr)
-        self.assertEqual(list(result), [review.ERROR_KEY])
+        self.assertEqual(list(result), [review_config.ERROR_KEY])
         self.assertRegex(
-            result[review.ERROR_KEY],
+            result[review_config.ERROR_KEY],
             r"^la revisión falló con un error transitorio \(proveedor no disponible "
             r"por ahora\); no queda tiempo para reintentar \(quedan \d+ s, se "
             r"necesitan al menos 600 s\)$",
@@ -985,7 +986,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
+        self.assertEqual(result, {review_config.ERROR_KEY: ReasoningReplayRecovery.warning})
 
     def test_opencode_replay_error_is_not_retried_without_budget(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -998,9 +999,9 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(list(result), [review.ERROR_KEY])
+        self.assertEqual(list(result), [review_config.ERROR_KEY])
         self.assertRegex(
-            result[review.ERROR_KEY],
+            result[review_config.ERROR_KEY],
             rf"^{re.escape(ReasoningReplayRecovery.warning)}; no queda tiempo para "
             r"reintentar \(quedan \d+ s, se necesitan al menos 600 s\)$",
         )
@@ -1023,7 +1024,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1044,7 +1045,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1064,7 +1065,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1108,7 +1109,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1172,7 +1173,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_transient_error_is_retried(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1180,7 +1181,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_opencode_quota_switches_to_deepseek_api(self):
         reply = {
@@ -1222,7 +1223,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1259,7 +1260,7 @@ class RunAgent(unittest.TestCase):
         proc, calls, result, _, _ = self.run_agent(reply, provider="opencode-go")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn("FALLBACK_API_KEY", result[review.ERROR_KEY])
+        self.assertIn("FALLBACK_API_KEY", result[review_config.ERROR_KEY])
 
     def test_auth_failure_does_not_switch_providers(self):
         reply = {
@@ -1272,7 +1273,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_primary_proxy_failure_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1287,7 +1288,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1306,8 +1307,8 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn("deepseek", result[review.ERROR_KEY])
-        self.assertIn("proxy", result[review.ERROR_KEY])
+        self.assertIn("deepseek", result[review_config.ERROR_KEY])
+        self.assertIn("proxy", result[review_config.ERROR_KEY])
 
     def test_una_respuesta_vacia_no_se_repara(self):
         # La CLI no trae "result" cuando se agota el tope de turnos.
@@ -1697,7 +1698,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn("AI_REVIEW_API_KEY", result[review.ERROR_KEY])
+        self.assertIn("AI_REVIEW_API_KEY", result[review_config.ERROR_KEY])
 
     def test_proxy_start_failure_fails_soft(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1706,7 +1707,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
 
 class PrepareContext(unittest.TestCase):
@@ -2263,7 +2264,7 @@ class Install(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse((tmp / "log").exists())
             result = json.loads((work / "result.json").read_text())
-            self.assertIn("no se pudo instalar", result[review.ERROR_KEY])
+            self.assertIn("no se pudo instalar", result[review_config.ERROR_KEY])
 
 
 class TimeBudget(unittest.TestCase):
@@ -3278,7 +3279,7 @@ class Workflows(unittest.TestCase):
                         review.cmd_run(argparse.Namespace(work=work))
                 resultado = json.loads((Path(work) / "result.json").read_text())
                 self.assertIn(
-                    review.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
+                    review_config.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
                 )
                 (Path(work) / "result.json").write_text(
                     json.dumps(
@@ -3328,6 +3329,7 @@ class Workflows(unittest.TestCase):
                 "review.py",
                 "review_domain.py",
                 "review_context.py",
+                "review_config.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3700,12 +3702,12 @@ class Workflows(unittest.TestCase):
                         argparse.Namespace(work=work, request_id="1")
                     )
             (Path(work) / "result.json").write_text(
-                json.dumps({review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
+                json.dumps({review_config.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
             )
             review.cmd_close_result(argparse.Namespace(work=work))
             paquete = json.loads((Path(work) / "result.json").read_text())
         self.assertEqual(
-            paquete[review.ERROR_KEY],
+            paquete[review_config.ERROR_KEY],
             "falta el secret AI_REVIEW_API_KEY",
             "la señal de error del paso modelo llega al coordinador",
         )
@@ -3733,7 +3735,7 @@ class Workflows(unittest.TestCase):
     def test_close_result_sin_revision_lo_dice_en_outputs_y_resumen(self):
         salida, resumen = self._cerrar(
             {
-                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo límite de 900 s"
+                review_config.ERROR_KEY: "la revisión con opencode-go excedió el tiempo límite de 900 s"
             }
         )
         self.assertEqual(salida, "reviewed=false\n")
@@ -3753,8 +3755,8 @@ class Workflows(unittest.TestCase):
         # El publicador corre en otro workflow: no lee outputs de pasos del
         # worker, solo el result.json que viaja como artifact.
         casos = {
-            "con motivo": ({review.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
-            "motivo vacío": ({review.ERROR_KEY: ""}, "reviewed=false\n"),
+            "con motivo": ({review_config.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
+            "motivo vacío": ({review_config.ERROR_KEY: ""}, "reviewed=false\n"),
             "revisado": (
                 {"result": "ok\nCOVERAGE: complete", "subtype": "success"},
                 "reviewed=true\n",
@@ -4064,7 +4066,7 @@ class Workflows(unittest.TestCase):
                         ).json(),
                         "observaciones": [],
                         "cobertura": "unknown",
-                        review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
+                        review_config.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
                     }
                 )
             )
@@ -4348,7 +4350,7 @@ class Workflows(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._resultado_de_corrida(tmp, 77)
             artefacto = json.loads((Path(tmp) / "result.json").read_text())
-            artefacto[review.ERROR_KEY] = "opencode-go agotó su cuota"
+            artefacto[review_config.ERROR_KEY] = "opencode-go agotó su cuota"
             (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
             patches, _ = self._reconciliar(
                 self._estado_pendiente(),
@@ -6271,7 +6273,7 @@ class ReviewContinuity(unittest.TestCase):
                     )
                     for reason in ["first failure", "second failure"]:
                         body = self.publish(
-                            work, "b" * 40, MANIFEST, {review.ERROR_KEY: reason}, body
+                            work, "b" * 40, MANIFEST, {review_config.ERROR_KEY: reason}, body
                         )
                     self.assertEqual(body.count(review.CAUTION_MARK), 1)
                     self.assertNotIn("first failure", body)
@@ -8713,15 +8715,15 @@ class CableadoIdentidad(unittest.TestCase):
     def test_env_invalida_se_rechaza(self):
         with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "bogus"}):
             with self.assertRaises(SystemExit) as ctx:
-                review.politica_de_identidad()
+                review_config.politica_de_identidad()
         self.assertIn("FINDING_IDENTITY", str(ctx.exception))
 
     def test_env_por_defecto_current_y_anchors_ok(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FINDING_IDENTITY", None)
-            self.assertEqual(review.politica_de_identidad(), "current")
+            self.assertEqual(review_config.politica_de_identidad(), "current")
         with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
-            self.assertEqual(review.politica_de_identidad(), "anchors")
+            self.assertEqual(review_config.politica_de_identidad(), "anchors")
 
     def test_action_declara_el_input(self):
         yml = (ROOT / "action.yml").read_text()

@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 import review_domain as domain  # noqa: E402
 
 PUSH = domain.Origin(kind="push")
@@ -944,14 +945,14 @@ class CoordinadorComandos(unittest.TestCase):
         publicar(
             estados[1],
             review.revision_visible(
-                {review.ERROR_KEY: "motivo uno"}, estados[1], set(), "c" * 40
+                {review_config.ERROR_KEY: "motivo uno"}, estados[1], set(), "c" * 40
             ),
         )
         publicar(estados[2], review.estado_visible(estados[2]))
         publicar(
             estados[3],
             review.revision_visible(
-                {review.ERROR_KEY: "motivo dos"}, estados[3], set(), "c" * 40
+                {review_config.ERROR_KEY: "motivo dos"}, estados[3], set(), "c" * 40
             ),
         )
         cuerpo = falso.leer()[0]["body"]

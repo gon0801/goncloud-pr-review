@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 
 MANIFEST = {
     "base": "b" * 40,
@@ -87,7 +88,7 @@ class ParadaDelProxy(unittest.TestCase):
             "falla suave": (
                 falla_suave,
                 0,
-                {review.ERROR_KEY: "error permanente del proveedor"},
+                {review_config.ERROR_KEY: "error permanente del proveedor"},
             ),
         }
         for caso, (agente, salida_esperada, resultado) in casos.items():
