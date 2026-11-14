@@ -3565,10 +3565,13 @@ def cmd_reconcile(args):
             None,
         )
         if solicitud is None:
+            rid = artifact.get("request_id")
+            if not (type(rid) is int and 0 < rid <= current.request_count):
+                sys.exit(f"ai-review: resultado de solicitud desconocida {rid!r}")
             # La podó una solicitud más nueva, cuyo despacho cancela este worker;
             # si el run alcanzó a avisar antes, no queda nada que publicar.
             print(
-                f"ai-review: resultado de la solicitud {artifact.get('request_id')!r}"
+                f"ai-review: resultado de la solicitud {rid!r}"
                 " ignorado: ya no está pendiente",
                 file=sys.stderr,
             )
