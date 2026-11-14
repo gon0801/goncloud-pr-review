@@ -77,7 +77,7 @@ El revisor usa `AI_REVIEW_API_KEY` para OpenCode Go. Si se agota su cuota, usa `
 
 ## Operación
 
-- **Modelo.** Solo DeepSeek V4.1 Flash. No hay input para cambiarlo; los proveedores permitidos viven en `PROVIDERS` de `review.py` y cualquier otro valor de `provider` se rechaza.
+- **Modelo.** Solo DeepSeek V4.1 Flash. No hay input para cambiarlo; los proveedores permitidos viven en `PROVIDERS` de `review_config.py` y cualquier otro valor de `provider` se rechaza.
 - **Apagarlo en un repo sin tocar código.** `gh variable set AI_REVIEW_DISABLED --body true -R gon0801/mi-repo`. Para prenderlo, `gh variable delete AI_REVIEW_DISABLED -R ...`. El job sigue apareciendo y queda en verde de inmediato (no se omite): el primer paso del workflow ve la variable, sin importar mayúsculas, y se salta el checkout y la action. Eso es de la plantilla nueva; en los repos que ya tienen el workflow viejo, la action igual termina en verde sin revisar, pero antes hace el checkout.
 - **Token propio.** Si pasas `github_token` de una GitHub App, pasa también `bot_login` con el login de esa App (por ejemplo `mi-app[bot]`). Solo los comentarios de ese login cuentan como la revisión fija.
 - **Saber si el run revisó.** Un run que no pudo revisar termina en verde a propósito (el autor del PR no puede arreglar al proveedor). Para distinguirlo, la action expone el output `reviewed`: `true` si revisó el head, `false` si terminó sin revisión y vacío si el gate lo saltó. En el modo coordinado, el paso `cerrar` del worker escribe el mismo output y deja el aviso en el resumen del job.

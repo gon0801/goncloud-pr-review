@@ -36,7 +36,7 @@ on:
         description: "Etiqueta del caso del corpus (p. ej. pr2)"
         required: true
       proveedor:
-        description: "Proveedor del revisor; claves de PROVIDERS en review.py"
+        description: "Proveedor del revisor; claves de PROVIDERS en review_config.py"
         type: choice
         default: opencode-go
         options:
