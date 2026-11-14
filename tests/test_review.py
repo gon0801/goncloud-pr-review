@@ -3358,7 +3358,9 @@ class Workflows(unittest.TestCase):
         return " ".join(tramos)
 
     def _evaluar_github(self, expresion, contexto):
-        tokens = re.findall(r"\|\||&&|!=|==|!|\(|\)|'[^']*'|[^\s()!&|=']+", expresion)
+        tokens = re.findall(
+            r"\|\||&&|!=|==|!|\(|\)|,|'[^']*'|[^\s()!&|=',]+", expresion
+        )
 
         def ruta(nombre):
             nodo = contexto
@@ -3391,6 +3393,14 @@ class Workflows(unittest.TestCase):
             if token == "!":
                 pos += 1
                 return not primario()
+            if token == "startsWith":
+                # Actions compara sin distinguir mayúsculas.
+                pos += 2
+                texto = valor()
+                pos += 1
+                prefijo = valor()
+                pos += 1
+                return str(texto or "").lower().startswith(prefijo.lower())
             if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
                 izquierda = valor()
                 operador = tokens[pos]
@@ -3448,7 +3458,40 @@ class Workflows(unittest.TestCase):
             (ctx("pull_request_target", pr(False, repo)), True),
             (ctx("pull_request_target", pr(True, repo)), False),
             (ctx("pull_request_target", pr(False, "fork/r")), False),
-            (ctx("issue_comment", {"issue": {"number": 5}}), True),
+            (
+                ctx(
+                    "issue_comment",
+                    {"issue": {"number": 5}, "comment": {"body": "ai-review: revisar"}},
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
+                    {"issue": {"number": 5, "pull_request": {}}, "comment": {}},
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
+                    {
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "LGTM"},
+                    },
+                ),
+                False,
+            ),
+            (
+                ctx(
+                    "issue_comment",
+                    {
+                        "issue": {"number": 5, "pull_request": {"url": "u"}},
+                        "comment": {"body": "AI-Review: descartar F1"},
+                    },
+                ),
+                True,
+            ),
             (
                 ctx(
                     "workflow_run",
