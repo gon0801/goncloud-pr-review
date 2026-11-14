@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_config
 import review_github
 import review_render
@@ -202,10 +203,10 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
     )
     manifest = preparar(repo, work, base, head, review_sticky.prev_de_memoria(cuerpo))
     artifact = {
-        "manifest": {k: manifest[k] for k in review.CAMPOS_DEL_ALCANCE if k in manifest}
+        "manifest": {k: manifest[k] for k in review_coordinator.CAMPOS_DEL_ALCANCE if k in manifest}
     }
     with contextlib.redirect_stderr(io.StringIO()):
-        facts = review.hechos_con_delta_del_worker(facts, artifact, pedido.snapshot)
+        facts = review_coordinator.hechos_con_delta_del_worker(facts, artifact, pedido.snapshot)
     modelo = review.parse_model_findings(texto)
     decision = domain.reconcile(
         pedido.snapshot,

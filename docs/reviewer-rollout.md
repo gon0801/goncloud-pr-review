@@ -167,7 +167,7 @@ el diseño y la medición históricos del piloto.
 - `e1-measure.yml` corregido en el candidato: el paso "Revisor fijo fuera del
   árbol medido" copia `review.py review_domain.py review_context.py
   review_config.py review_run.py review_sticky.py review_render.py
-  review_github.py review_commands.py prompt.md` (antes sólo copiaba
+  review_github.py review_commands.py review_coordinator.py prompt.md` (antes sólo copiaba
   `review.py prompt.md` y el job rompía en prepare desde que existe
   `review_domain.py`; pineado por
   `tests/test_e1a_workflow.py`).

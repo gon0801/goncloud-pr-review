@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+import review_coordinator
 
 import review_sticky
 import review_domain as domain  # noqa: E402
@@ -68,7 +69,7 @@ def armar(body, ronda):
     lineas = body.split("\n")
     resto = "\n".join(lineas[1:]) if lineas and lineas[0] == review_sticky.MARKER else body
     resto = review.strip_findings_block(resto, last=False).strip()
-    visible = review.revision_visible(
+    visible = review_coordinator.revision_visible(
         dict(ronda, review_provider="opencode-go", model_ok=True),
         snapshot,
         previos,
