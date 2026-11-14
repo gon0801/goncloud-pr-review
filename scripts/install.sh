@@ -2,10 +2,11 @@
 # Abre un PR que instala el conjunto de revisión en cada repo dado.
 # Uso: scripts/install.sh [--coordinado] owner/repo [owner/repo ...]
 #   --coordinado  instala el coordinador y el worker fijados al SHA confiable
-#                 (ACTION_SHA, requerido) y retira el escritor anterior en un
-#                 único commit atómico por la API Git de árboles y commits.
-#   ACTION_SHA    SHA confiable del repo central. En el modo actual fija
-#                 `uses:` (si no, queda @main); en el coordinado es obligatorio.
+#                 y retira el escritor anterior en un único commit atómico por
+#                 la API Git de árboles y commits.
+#   ACTION_SHA    obligatorio: SHA completo del commit confiable del repo
+#                 central, presente en este clon. Fija el CLI (`uses:` en el
+#                 modo actual) y es de donde salen las plantillas.
 #   EXCLUDE       exclusiones extra por repo (solo modo actual):
 #                 EXCLUDE=$'data/**\nout/**' scripts/install.sh owner/repo
 set -euo pipefail
@@ -17,8 +18,14 @@ if [ "${1:-}" = "--coordinado" ]; then
   modo="coordinado"
   shift
 fi
-if [ "$modo" = "coordinado" ] && [ -z "${ACTION_SHA:-}" ]; then
-  echo "instalador: el modo coordinado requiere ACTION_SHA (SHA confiable del repo central)" >&2
+if ! [[ "${ACTION_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "instalador: requiere ACTION_SHA con el SHA completo (40 hex en minúsculas) del commit confiable del repo central; recibí '${ACTION_SHA:-}'" >&2
+  exit 2
+fi
+# Las plantillas salen del mismo commit que el CLI fijado: del árbol de trabajo,
+# un clon atrasado instalaría un worker que rechaza las entradas del coordinador.
+if ! git -C "$here" cat-file -e "$ACTION_SHA^{commit}" 2>/dev/null; then
+  echo "instalador: el commit $ACTION_SHA no está en el clon $here; tráelo con: git -C \"$here\" fetch origin $ACTION_SHA" >&2
   exit 2
 fi
 
@@ -43,7 +50,6 @@ for repo in "$@"; do
 import base64
 import json
 import os
-import pathlib
 import re
 import subprocess
 import sys
@@ -71,7 +77,14 @@ def consulta(*args, expr):
 
 
 def plantilla(nombre):
-    texto = (pathlib.Path(here) / "templates" / nombre).read_text()
+    leida = subprocess.run(
+        ["git", "-C", here, "cat-file", "blob", f"{action_sha}:templates/{nombre}"],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    if leida.returncode != 0:
+        sys.exit(f"instalador: el commit {action_sha} no tiene templates/{nombre}")
+    texto = leida.stdout
     # Última clave del primer checkout (el confiable): el paso central va justo
     # después, aunque ese checkout tenga otras claves antes (fetch-depth).
     ancla = "          persist-credentials: false"
@@ -143,6 +156,9 @@ def pin_vigente():
     return hallado.group(1) if hallado else None
 
 
+contenido_publicador = plantilla("ai-review-publish.yml")
+contenido_worker = plantilla("ai-review-worker.yml")
+
 punta = consulta(f"repos/{repo}/git/ref/heads/{rama}", expr=".object.sha")
 if not punta:
     raiz = consulta(f"repos/{repo}/git/ref/heads/{default}", expr=".object.sha")
@@ -152,9 +168,6 @@ if not punta:
     punta = raiz
 else:
     punta = al_dia_con_main()
-
-contenido_publicador = plantilla("ai-review-publish.yml")
-contenido_worker = plantilla("ai-review-worker.yml")
 
 # Un repo que ya tiene el conjunto solo cambia de pin: el commit y el PR lo dicen,
 # con la procedencia del pin nuevo (el compare del repo central).
@@ -337,13 +350,14 @@ else:
     print(f"{repo}: PR del conjunto coordinado abierto")
 PY
   else
-    content="$(cat "$here/templates/ai-review.yml")"
-    if [ -n "${ACTION_SHA:-}" ]; then
-      # El `\/` en el reemplazo queda literal en bash 3.2 (macOS) y rompe
-      # el `uses:`; la barra llega por variable para que valga en 3.2 y 5.x.
-      ref="gon0801/goncloud-pr-review@$ACTION_SHA"
-      content="${content//gon0801\/goncloud-pr-review@main/$ref}"
-    fi
+    content="$(git -C "$here" cat-file blob "$ACTION_SHA:templates/ai-review.yml")" || {
+      echo "instalador: el commit $ACTION_SHA no tiene templates/ai-review.yml" >&2
+      exit 1
+    }
+    # El `\/` en el reemplazo queda literal en bash 3.2 (macOS) y rompe
+    # el `uses:`; la barra llega por variable para que valga en 3.2 y 5.x.
+    ref="gon0801/goncloud-pr-review@$ACTION_SHA"
+    content="${content//gon0801\/goncloud-pr-review@main/$ref}"
     if [ -n "${EXCLUDE:-}" ]; then
       content+=$'\n          exclude: |'
       while IFS= read -r line; do
@@ -403,10 +417,9 @@ PY
 
     numero_pr="$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[].number' | head -n1)"
     if [ -n "$numero_pr" ]; then
-      referencia="${ACTION_SHA:+@$ACTION_SHA}"
       gh pr edit "$numero_pr" -R "$repo" \
         --title "ci: revisión automática de PRs con IA" \
-        --body "Instala el workflow de revisión automática (gon0801/goncloud-pr-review$referencia). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo." >/dev/null
+        --body "Instala el workflow de revisión automática (gon0801/goncloud-pr-review@$ACTION_SHA). Requiere el secret \`AI_REVIEW_API_KEY\` en este repo." >/dev/null
       echo "$repo: el PR ya existía, rama y descripción actualizadas"
     else
       gh pr create -R "$repo" --head "$branch" --base "$default" \

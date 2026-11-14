@@ -25,11 +25,17 @@ Se dispara con `pull_request` en `opened`, `synchronize`, `reopened` y `ready_fo
 ## Instalación en un repo
 
 ```bash
-scripts/set-secret.sh gon0801/mi-repo          # pide la key una vez, sin eco
-scripts/install.sh gon0801/mi-repo             # abre el PR con el workflow
-EXCLUDE=$'data/**\nout/**' scripts/install.sh gon0801/mi-repo   # con exclusiones extra
-ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # fija `uses:` al SHA dado (en vez de @main)
+scripts/set-secret.sh gon0801/mi-repo                 # pide la key una vez, sin eco
+ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # abre el PR con el workflow fijado a ese commit
+EXCLUDE=$'data/**\nout/**' ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo   # con exclusiones extra
 ```
+
+`ACTION_SHA` es obligatorio en los dos modos: el SHA completo (40 caracteres)
+de un commit del repo central que esté en el clon desde el que corres el
+instalador. Fija el CLI y es de donde salen las plantillas, no del árbol de
+trabajo, así que los workflows instalados siempre corresponden al CLI fijado.
+Si el commit no está en el clon, el instalador sale sin publicar y dice cómo
+traerlo (`git fetch origin <sha>`).
 
 Modo coordinado (coordinador + worker con el escritor anterior retirado, en
 un único commit atómico; ver `docs/reviewer-rollout.md` para el corte y el
