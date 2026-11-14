@@ -3460,24 +3460,29 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
     )
 
 
+def _pr_admisible(pr_data, repo):
+    """Lo que el `if:` del workflow exige a un push: PR abierto, no borrador y
+    del propio repo. Sin datos del PR es un push, que el workflow ya filtró."""
+    if pr_data is None:
+        return True
+    cabeza = pr_data.get("head") or {}
+    return (
+        pr_data.get("state") == "open"
+        and pr_data.get("draft") is False
+        and (cabeza.get("repo") or {}).get("full_name") == repo
+    )
+
+
 def _admision(target, pr_data, repo):
-    """La revisión que pide cualquier evento. El push trae su head (el `if:`
-    del workflow ya filtró borradores y forks) y reintenta una revisión
-    fallida; la recuperación manual siempre pide una nueva; el resto admite el
-    head vivo solo en un PR abierto, no borrador y del propio repo, lo mismo
-    que el `if:` exige a un push."""
+    """La revisión que pide cualquier evento. El push trae su head y reintenta
+    una revisión fallida; la recuperación manual siempre pide una nueva; el
+    resto admite el head vivo solo si el PR es admisible."""
     nombre = os.environ.get("GITHUB_EVENT_NAME", "")
     recuperacion = nombre == "workflow_dispatch" and not os.environ.get(
         "WORKER_RUN_ID"
     )
-    if pr_data is not None and not recuperacion:
-        cabeza = pr_data.get("head") or {}
-        if not (
-            pr_data.get("state") == "open"
-            and pr_data.get("draft") is False
-            and (cabeza.get("repo") or {}).get("full_name") == repo
-        ):
-            return None
+    if not recuperacion and not _pr_admisible(pr_data, repo):
+        return None
     return review_domain.RequestReview(
         origin=review_domain.Origin(
             kind="re-run" if recuperacion else "push", run_id=_run_id()
@@ -3571,6 +3576,19 @@ def fallo_de_resultado(artifact, run_id, attempt):
 
 
 TITULO_DEL_WORKER = re.compile(r"PR ([0-9]{1,9}) solicitud ([0-9]{1,9})")
+CONCLUSIONES_DE_GITHUB = frozenset(
+    {
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "startup_failure",
+        "success",
+        "timed_out",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -3736,6 +3754,9 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
                 )
                 rechazo = True
                 continue
+            conclusion = run.get("conclusion")
+            if conclusion not in CONCLUSIONES_DE_GITHUB:
+                conclusion = None
             terminado = run.get("status") == "completed" or avisado == (
                 run["id"],
                 run["run_attempt"],
@@ -3754,11 +3775,11 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
                     break
                 entregas.append(
                     Entrega(
-                        solicitud, meta, run.get("conclusion"), artifact, autenticado
+                        solicitud, meta, conclusion, artifact, autenticado
                     )
                 )
             elif terminado:
-                entregas.append(Entrega(solicitud, meta, run.get("conclusion")))
+                entregas.append(Entrega(solicitud, meta, conclusion))
             break
     return entregas, sin_corrida, rechazo
 
@@ -3974,9 +3995,11 @@ def cmd_reconcile(args):
         )
         entregas, sin_corrida, rechazo = [], [], True
     # Se despacha otra vez; si el run solo tardó en aparecer en la lista, el
-    # grupo del worker cancela al anterior y cuenta el más nuevo.
-    por_despachar = {w.id for w in trabajo}
-    trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
+    # grupo del worker cancela al anterior y cuenta el más nuevo. Un PR
+    # cerrado o en borrador no gasta otra corrida del modelo.
+    if _pr_admisible(pr_data, repo):
+        por_despachar = {w.id for w in trabajo}
+        trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
     previo = estado
     revision_entregada, explicaciones = None, []
     for entrega in entregas:
