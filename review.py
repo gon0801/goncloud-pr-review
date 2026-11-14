@@ -2036,13 +2036,14 @@ def partes_de_respuesta(texto):
             cobertura = (estado, detalle)
             del lineas[i]
             break
-    resto = "\n".join(lineas)
+    sin_revisar = [ln for ln in lineas if ln.startswith(UNREVIEWED_PREFIX)]
+    resto = "\n".join(ln for ln in lineas if not ln.startswith(UNREVIEWED_PREFIX))
     hallado = find_model_findings_block(resto)
     conservar = politica_de_identidad() == "anchors"
     bloque = None
     if hallado and parse_model_findings(resto, conservar_anclas=conservar) is not None:
         bloque = resto[hallado[0] : hallado[1]]
-    return strip_model_findings_block(resto).rstrip(), bloque, cobertura
+    return strip_model_findings_block(resto).rstrip(), bloque, sin_revisar, cobertura
 
 
 def reparar_bloque(work, result_path, name, key, cmd, deadline):
@@ -2067,7 +2068,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             file=sys.stderr,
         )
         return
-    prosa, bloque, cobertura = partes_de_respuesta(texto)
+    prosa, bloque, sin_revisar, cobertura = partes_de_respuesta(texto)
     if bloque is not None and cobertura is not None:
         print(
             "ai-review: la revisión trae su bloque y su COVERAGE fuera de lugar; "
@@ -2117,16 +2118,20 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
                     usage[campo] = (usage.get(campo) or 0) + valor
             result["usage"] = usage
         texto_rep = (rep.get("result") or "") if falla is None else ""
-        _, bloque_rep, cobertura_rep = partes_de_respuesta(texto_rep)
+        _, bloque_rep, _, cobertura_rep = partes_de_respuesta(texto_rep)
         bloque = bloque or bloque_rep
         cobertura = cobertura or cobertura_rep
     reparado = None
     if bloque is not None and cobertura is not None:
         estado, detalle = cobertura
+        # Van todas juntas: si hay más de una, unreviewed_de no lee ninguna.
+        cola = "".join(f"{ln}\n" for ln in sin_revisar)
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
+        elif sin_revisar and unreviewed_de(f"{cola}COVERAGE:") != set():
+            estado = "partial"  # solo una lista vacía legible cabe en complete
         linea = f"COVERAGE: {estado}" + (f" | {detalle}" if detalle else "")
-        reparado = f"{prosa}\n\n{bloque}\n{linea}"
+        reparado = f"{prosa}\n\n{bloque}\n{cola}{linea}"
     # Mismo criterio que el disparo: el bloque reparado tiene que leerse como bloque.
     if reparado is None or falta_bloque(reparado):
         print(
