@@ -2341,12 +2341,14 @@ def run_agent(
     necesita = minimo_para_segunda_corrida(attempt_timeout)
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
-        if attempt > 1 and remaining - 30 < necesita:
+        quedan = max(0, remaining - 30)
+        if attempt > 1 and quedan < necesita:
             print(
-                f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)",
+                f"ai-review: no queda tiempo para otro intento "
+                f"(quedan {quedan} s tras el margen, se necesitan {necesita} s)",
                 file=sys.stderr,
             )
-            return falla.sin_tiempo_para_reintentar(max(0, remaining - 30), necesita)
+            return falla.sin_tiempo_para_reintentar(quedan, necesita)
         timeout = max(1, min(attempt_timeout, remaining - 30))
         print(
             f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)",
