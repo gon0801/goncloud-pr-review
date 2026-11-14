@@ -35,7 +35,9 @@ CIERRE = {
     "is_error": False,
     "num_turns": 2,
     "session_id": SESION,
-    "total_cost_usd": 0.02,
+    # Una sesión retomada reporta su costo acumulado: 0.40 de la revisión más
+    # 0.02 de esta vuelta. Turnos y usage sí son solo los de la vuelta.
+    "total_cost_usd": 0.42,
     "usage": {"input_tokens": 5000, "output_tokens": 300},
     "result": (
         "**Veredicto:** 1 High.\n\n"
@@ -227,6 +229,7 @@ class VueltaDeCierre(unittest.TestCase):
         self.assertEqual(limite, 240, "límite propio de la vuelta")
         self.assertEqual(len(proxies), 2)
         self.assertTrue(all(p.terminate.called for p in proxies))
+        self.assertAlmostEqual(result["total_cost_usd"], 0.42)
 
         cuerpo = self.publicar(result)
         self.assertIn(TITULO, cuerpo)
@@ -296,7 +299,7 @@ class VueltaDeCierre(unittest.TestCase):
                 self.assertIn("- Turnos: 61/60", cuerpo)
 
     def test_una_vuelta_que_tambien_agota_turnos_suma_su_consumo(self):
-        otra_vez = dict(SIN_TURNOS, num_turns=3, total_cost_usd=0.03)
+        otra_vez = dict(SIN_TURNOS, num_turns=3, total_cost_usd=0.43)
         salida, result, claude, _ = self.correr(
             [(900, SIN_TURNOS), (60, otra_vez)]
         )
