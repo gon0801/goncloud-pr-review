@@ -64,7 +64,7 @@ despertó (un push, un comentario `ai-review:` o el aviso del worker): aplica
 los comandos pendientes, publica el resultado de cualquier worker que ya
 terminó, marca como fallida la revisión cuyo worker terminó sin resultado y
 admite el commit vivo si nadie lo revisó. Así un evento que GitHub descartó
-en la cola lo recupera el siguiente. Un comentario que no empieza con
+en la cola lo recupera el siguiente. Un comentario que no contiene
 `ai-review:`, o que es de un issue, no corre el coordinador.
 
 En los dos modos, si `chore/ai-review` ya existe (por ejemplo tras un squash

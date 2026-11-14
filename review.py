@@ -911,6 +911,7 @@ AVISOS_DEL_PROGRAMA = (
     "Comando no entendido",
     "Comando no aplicado",
     "Revisión en curso",
+    "Sin revisión publicada",
 )
 
 
@@ -3102,13 +3103,13 @@ def texto_visible(cuerpo):
 
 def _resto_de(cuerpo):
     """Lo que `visible(bloque, resto)` recibe de un cuerpo: sin el marcador, sin
-    el bloque y sin la línea de revisión en curso, que no se arrastra."""
+    el bloque y sin las líneas de estado, que se recalculan en cada escritura."""
     lineas = cuerpo.split("\n")
     resto = "\n".join(lineas[1:]) if lineas and lineas[0] == MARKER else cuerpo
     return "\n".join(
         linea
         for linea in strip_findings_block(resto, last=False).split("\n")
-        if not linea.startswith(AVISO_EN_CURSO_PREFIX)
+        if not linea.startswith((AVISO_EN_CURSO_PREFIX, AVISO_SIN_REVISION_PREFIX))
     ).strip()
 
 
@@ -3195,6 +3196,9 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
             trabajo=decision.work_after_commit,
         )
     cuerpo = visible(bloque, _resto_de(observado.get("body") or ""))
+    if not texto_visible(cuerpo):
+        # Un sticky que ya existe no puede quedar como un comentario en blanco.
+        cuerpo = f"{cuerpo}\n\n{LINEA_SIN_REVISION}"
     if not cuerpo_publicable(cuerpo, bloque):
         motivo = (
             "el comentario no trae el bloque de estado: se conserva el "
@@ -4439,6 +4443,11 @@ EXPLICACIONES_VISIBLES = 3
 AVISO_COMANDO_PREFIX = aviso_md("Comando no entendido", "")
 AVISOS_VISIBLES = 3
 AVISO_EN_CURSO_PREFIX = aviso_md("Revisión en curso", "")
+AVISO_SIN_REVISION_PREFIX = aviso_md("Sin revisión publicada", "")
+LINEA_SIN_REVISION = (
+    f"{AVISO_SIN_REVISION_PREFIX}este PR no tiene una revisión pendiente ni "
+    "publicada; el próximo push o `ai-review: revisar` pide una."
+)
 
 
 def linea_en_curso(snapshot):

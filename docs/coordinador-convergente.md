@@ -48,10 +48,11 @@ Datos:
   repetido (reabrir, marcar listo, "Re-run jobs" del coordinador),
   `ai-review: revisar` y la recuperación manual. Un comentario o el aviso del
   worker no la reintentan: el aviso de un worker que falla haría un ciclo.
-- `CorridaDelWorker(request_id, run_id, attempt, terminada, conclusion, meta)`:
+- `Entrega(solicitud, meta, conclusion, artifact, autenticado)`: lo que dejó
   el run más nuevo y confiable de cada solicitud, leído de la lista de runs del
-  worker. El `run-name` del worker pasa a `PR <n> solicitud <id>` para que un
-  run sin artifact también se atribuya a su solicitud.
+  worker. `artifact` y `autenticado` quedan vacíos si el run terminó sin subir
+  su resultado. El `run-name` del worker pasa a `PR <n> solicitud <id>` para
+  que un run sin artifact también se atribuya a su solicitud.
 
 Orden de un run del coordinador (`cmd_reconcile`):
 
@@ -79,7 +80,10 @@ Orden de un run del coordinador (`cmd_reconcile`):
    `findings_born_after`.
 6. Publica una vez: nada si el estado no cambió, y nunca crea un sticky sin
    texto visible. Una revisión pendiente sin revisión publicada muestra la
-   línea "Revisión en curso". Después despacha.
+   línea "Revisión en curso". Un sticky que ya existe y se quedaría sin texto
+   (su revisión pendiente salió sin que llegara otra) muestra la línea "Sin
+   revisión publicada". Las dos se recalculan en cada escritura. Después
+   despacha.
 
 Plantillas: el job del coordinador filtra comentarios (`issue.pull_request` y
 `contains(comment.body, 'ai-review:')`) y la concurrencia pasa al job, para
