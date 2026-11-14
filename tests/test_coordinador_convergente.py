@@ -78,22 +78,27 @@ class GitHubFalso:
     def visible(self):
         return re.sub(r"<!--.*?-->", "", self.sticky() or "", flags=re.S).strip()
 
-    def worker(self, rid, artifact=None, run_id=900, estado="completed"):
+    def worker(
+        self, rid, artifact=None, run_id=900, estado="completed", pr=12, rama="main"
+    ):
         self.corridas.append(
             {
                 "id": run_id,
-                "display_title": f"PR 12 solicitud {rid}",
+                "display_title": f"PR {pr} solicitud {rid}",
                 "path": WORKER_PATH,
-                "head_branch": "main",
+                "head_branch": rama,
                 "head_sha": MAIN,
                 "run_attempt": 1,
                 "status": estado,
-                "conclusion": "success" if estado == "completed" else None,
+                "conclusion": "failure" if estado == "completed" else None,
                 "event": "workflow_dispatch",
             }
         )
         if artifact is not None:
-            self.artefactos[run_id] = artifact
+            self.artefactos[run_id] = (
+                f"ai-review-result-request-{rid}-run-{run_id}-attempt-1",
+                artifact,
+            )
 
     def pr(self):
         return {
@@ -176,7 +181,23 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
             pares = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
             despachos.append(dict(p.split("=", 1) for p in pares))
             return mock.Mock(stdout="")
+        if args[:3] == ("gh", "run", "download"):
+            nombre, artifact = github.artefactos[int(args[3])]
+            opciones = dict(zip(args[4::2], args[5::2]))
+            assert opciones["--name"] == nombre, opciones
+            Path(opciones["--dir"]).mkdir(parents=True, exist_ok=True)
+            Path(opciones["--dir"], "result.json").write_text(json.dumps(artifact))
+            return mock.Mock(stdout="")
         ruta = args[2]
+        if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+            corridas = sorted(github.corridas, key=lambda c: -c["id"])
+            return mock.Mock(stdout=json.dumps({"workflow_runs": corridas}))
+        if re.search(r"/actions/runs/\d+/artifacts", ruta):
+            run_id = int(re.search(r"/actions/runs/(\d+)/", ruta).group(1))
+            listado = [
+                {"id": 1, "name": github.artefactos[run_id][0], "expired": False}
+            ] if run_id in github.artefactos else []
+            return mock.Mock(stdout=json.dumps({"artifacts": listado}))
         if ruta.endswith("/pulls/12"):
             return mock.Mock(stdout=json.dumps(github.pr()))
         if "/commits/" in ruta:
@@ -190,7 +211,8 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
         evento_json = Path(tmp, "event.json")
         evento_json.write_text(json.dumps({"action": "created"}))
         if aviso and aviso[0] in github.artefactos:
-            Path(tmp, "result.json").write_text(json.dumps(github.artefactos[aviso[0]]))
+            resultado_avisado = github.artefactos[aviso[0]][1]
+            Path(tmp, "result.json").write_text(json.dumps(resultado_avisado))
         entorno = {
             "REPO": "o/r",
             "PR_NUMBER": "12",
@@ -377,6 +399,98 @@ class AdmisionDelHeadVivo(unittest.TestCase):
             [(r.kind, r.state) for r in github.estado().pending_requests],
             [("review", "pending")],
         )
+
+
+class CosechaDeResultados(unittest.TestCase):
+    def test_un_aviso_perdido_lo_cosecha_el_siguiente_evento(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1, resultado(1, A, ["Fuga 1"]))
+        codigo, despachos, _ = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos), (0, []))
+        estado = github.estado()
+        self.assertEqual(estado.revision.head_sha, A)
+        self.assertEqual(estado.pending_requests, [])
+        self.assertEqual(estados(github), {"F1": "StatusOpen"})
+        self.assertIn("Fuga 1", github.visible())
+        self.assertNotIn("Revisión en curso", github.visible())
+
+        escrituras = github.escrituras
+        codigo, despachos, _ = correr(github, "pull_request_target")
+        self.assertEqual((codigo, despachos, github.escrituras), (0, [], escrituras))
+
+    def test_un_worker_que_murio_sin_artifact_deja_el_fallo_visible(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1)
+        codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(900, 1))
+        self.assertEqual((codigo, despachos), (0, []))
+        (solicitud,) = github.estado().pending_requests
+        self.assertEqual(solicitud.state, "failed_retryable")
+        self.assertIn("900", solicitud.motivo)
+        self.assertIn(f"No se pudo revisar el commit {A[:7]}", github.visible())
+        self.assertNotIn("Revisión en curso", github.visible())
+
+        escrituras = github.escrituras
+        codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(900, 1))
+        self.assertEqual((codigo, despachos, github.escrituras), (0, [], escrituras))
+
+    def test_el_run_avisado_ya_termino_aunque_su_job_de_aviso_siga_en_curso(self):
+        sin_aviso = GitHubFalso()
+        correr(sin_aviso, "pull_request_target")
+        sin_aviso.worker(1, estado="in_progress")
+        escrituras = sin_aviso.escrituras
+        self.assertEqual(correr(sin_aviso, "issue_comment")[0], 0)
+        self.assertEqual(sin_aviso.escrituras, escrituras, "sigue en curso: espera")
+        self.assertEqual(sin_aviso.estado().pending_requests[0].state, "pending")
+
+        avisado = GitHubFalso()
+        correr(avisado, "pull_request_target")
+        avisado.worker(1, estado="in_progress")
+        self.assertEqual(correr(avisado, "workflow_dispatch", aviso=(900, 1))[0], 0)
+        self.assertEqual(
+            avisado.estado().pending_requests[0].state, "failed_retryable"
+        )
+
+    def test_una_explicacion_con_aviso_perdido_se_publica(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        github.comentar(20, "ai-review: explicar F1")
+        correr(github, "issue_comment")
+        explicacion = dict(
+            resultado(1, A),
+            kind="explain",
+            finding_id="F1",
+            result="La fuga sale de no cerrar el archivo.\nCOVERAGE: complete",
+        )
+        github.worker(1, explicacion)
+        codigo, despachos, _ = correr(github, "pull_request_target")
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(github.estado().pending_requests, [])
+        self.assertIn("La fuga sale de no cerrar el archivo.", github.visible())
+
+    def test_corridas_ajenas_no_se_cosechan(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1, resultado(1, A, ["De otro PR"]), run_id=901, pr=13)
+        github.worker(
+            1, resultado(1, A, ["De otra rama"], run_id=902), run_id=902, rama="ataque"
+        )
+        escrituras = github.escrituras
+        codigo, despachos, _ = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(github.escrituras, escrituras)
+        self.assertEqual(github.estado().pending_requests[0].state, "pending")
+
+    def test_un_artifact_que_no_autentica_no_se_publica_y_el_run_queda_rojo(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1, resultado(1, B, ["Head equivocado"]))
+        escrituras = github.escrituras
+        codigo, despachos, err = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos), (1, []))
+        self.assertIn("rechazado", err)
+        self.assertEqual(github.escrituras, escrituras)
+        self.assertEqual(github.estado().pending_requests[0].state, "pending")
 
 
 if __name__ == "__main__":
