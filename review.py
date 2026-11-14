@@ -237,6 +237,8 @@ def _cierre(text):
         if status in ("complete", "partial"):
             previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
             declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
+            if declaracion and rutas_declaradas(declaracion) != set():
+                status = "partial"  # declaró archivos sin leer: no es complete
             prosa = "\n".join(lines[:-1]).rstrip()
             return prosa, status, detail.strip(), declaracion
     return (text or "").rstrip(), None, "", None
