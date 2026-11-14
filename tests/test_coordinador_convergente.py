@@ -409,6 +409,20 @@ class AdmisionDelHeadVivo(unittest.TestCase):
                 codigo, despachos, _ = correr(github, "issue_comment")
                 self.assertEqual((codigo, despachos, github.creados), (0, [], 0))
 
+    def test_un_pr_cerrado_o_en_borrador_no_repite_un_despacho_perdido(self):
+        for nombre, cambio in (("cerrado", {"abierto": False}), ("borrador", {"draft": True})):
+            with self.subTest(pr=nombre):
+                github = GitHubFalso()
+                github.despacho_falla = True
+                with self.assertRaises(subprocess.CalledProcessError):
+                    correr(github, "pull_request_target")
+                github.despacho_falla = False
+                for campo, valor in cambio.items():
+                    setattr(github, campo, valor)
+                github.comentar(20, "ai-review: descartar todo")
+                codigo, despachos, _ = correr(github, "issue_comment")
+                self.assertEqual((codigo, despachos), (0, []))
+
     def test_revisar_reemplaza_la_revision_pendiente(self):
         github = GitHubFalso()
         correr(github, "pull_request_target")
@@ -477,6 +491,17 @@ class CosechaDeResultados(unittest.TestCase):
         escrituras = github.escrituras
         codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(900, 1))
         self.assertEqual((codigo, despachos, github.escrituras), (0, [], escrituras))
+
+    def test_una_conclusion_desconocida_del_run_no_llega_al_estado(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1)
+        github.corridas[-1]["conclusion"] = "failure\n> **Revisión en curso:** falsa"
+        correr(github, "workflow_dispatch", aviso=(900, 1))
+        (solicitud,) = github.estado().pending_requests
+        self.assertEqual(
+            solicitud.motivo, "el worker terminó sin resultado (run 900, sin conclusión)"
+        )
 
     def test_el_run_avisado_ya_termino_aunque_su_job_de_aviso_siga_en_curso(self):
         sin_aviso = GitHubFalso()
