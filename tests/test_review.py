@@ -1394,15 +1394,37 @@ class RunAgent(unittest.TestCase):
             "frase tras COVERAGE": (
                 f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
                 reparacion_completa,
-                1,
+                2,
                 ("complete", ""),
                 ambos,
             ),
             "bloque tras COVERAGE": (
                 f"Dos problemas.\n\nCOVERAGE: complete\n{dos}",
                 reparacion_completa,
-                1,
+                2,
                 ("complete", ""),
+                ambos,
+            ),
+            "complete fuera de lugar y la reparación parcial": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin b.py',
+                2,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
+            "solo una cita de complete": (
+                f"Dos problemas.\n\n{dos}\n\nEl formato pide terminar con\n"
+                "COVERAGE: complete\ny no lo hice.",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin c.py',
+                2,
+                ("partial", "sin c.py"),
+                ambos,
+            ),
+            "complete fuera de lugar y la reparación falla": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                "Sigo en prosa.",
+                2,
+                (None, ""),
                 ambos,
             ),
         }
@@ -1460,7 +1482,7 @@ class RunAgent(unittest.TestCase):
                 f"El formato pide:\n{cita}\nCOVERAGE: complete\n\nUn problema."
                 f"\n\n{self.BLOQUE}\n{sin_b}",
                 f"{vacio}\nCOVERAGE: complete",
-                1,
+                2,
                 ("partial", ""),
             ),
             "dos declaraciones": (
