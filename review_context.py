@@ -873,8 +873,8 @@ def prepare_review(
     target = request.target or {}
     head = target.get("head_sha", "")
     base = target.get("base_sha", "")
-    # El PR no decide qué es binario: un `-diff` suyo sacaba cualquier archivo
-    # del alcance. Los atributos salen de la base, como las reglas del repo.
+    # Un `-diff` del propio PR sacaría cualquier archivo del alcance: los
+    # atributos salen de la base, como las reglas del repo.
     repo = dataclasses.replace(repo, attr_source=base)
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
@@ -944,8 +944,8 @@ def prepare_review(
         # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
         # Del delta solo cuenta lo que el PR cambia contra su base: una ruta
         # que head deja igual que el merge-base no es cambio del PR.
-        del_pr = set(historicas)
-        candidatas = [ruta for ruta in delta_rutas if ruta in del_pr]
+        alcance_pr = set(historicas)
+        candidatas = [ruta for ruta in delta_rutas if ruta in alcance_pr]
         if previa:
             vistas = set(candidatas)
             for ruta in historicas:
