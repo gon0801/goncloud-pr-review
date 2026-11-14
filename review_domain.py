@@ -448,7 +448,10 @@ def _en_lineas_propias(text, start, end):
     antes = text[text.rfind("\n", 0, start) + 1 : start]
     fin_de_linea = text.find("\n", end)
     despues = text[end : None if fin_de_linea < 0 else fin_de_linea]
-    return not antes.strip() and not despues.strip()
+    # Cuatro columnas de sangría hacen un bloque de código en Markdown: ahí el
+    # marcador es una cita. Un bloque real bajo una viñeta lleva menos.
+    en_codigo = len(antes.expandtabs(4)) >= 4
+    return not antes.strip() and not despues.strip() and not en_codigo
 
 
 _FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
