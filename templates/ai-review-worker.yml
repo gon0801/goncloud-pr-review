@@ -6,6 +6,11 @@ on:
         description: ID de la solicitud persistida
         required: true
         type: string
+      kind:
+        description: Clase de la solicitud (review o explain); decide el grupo
+        required: false
+        default: ""
+        type: string
       pr_number:
         description: PR de la solicitud
         required: true
@@ -32,10 +37,13 @@ permissions:
   contents: read
   pull-requests: read
 
-# La recuperación la decide el coordinador re-autorizando, no este grupo.
+# Las revisiones de un PR comparten grupo: la nueva cancela a la que sigue
+# corriendo, cuya solicitud el coordinador ya podó. Cada explicación tiene el
+# suyo, porque una cancelada quedaría pendiente sin que nada la re-despache.
+# Sin kind (coordinador fijado antes de esta entrada) queda el grupo por solicitud.
 concurrency:
-  group: ai-review-worker-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.request_id }}
-  cancel-in-progress: false
+  group: ai-review-worker-${{ github.repository }}-${{ inputs.pr_number }}-${{ case(inputs.kind == 'review', 'review', inputs.request_id) }}
+  cancel-in-progress: true
 
 # El display_title de este run es la entrada del resultado en el grupo del PR.
 run-name: ${{ inputs.pr_number }}
@@ -140,10 +148,11 @@ jobs:
 
   # Un run despachado con GITHUB_TOKEN no dispara workflow_run al terminar, así
   # que el worker avisa al publicador con workflow_dispatch. Job aparte para que
-  # el paso que corre el modelo no tenga actions: write.
+  # el paso que corre el modelo no tenga actions: write. Un run cancelado no
+  # avisa: no subió resultado y su solicitud ya no está pendiente.
   avisar:
     needs: execute
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       actions: write

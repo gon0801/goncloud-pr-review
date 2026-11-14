@@ -3310,6 +3310,8 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
         "-f",
         f"request_id={solicitud.id}",
         "-f",
+        f"kind={solicitud.kind}",
+        "-f",
         f"pr_number={pr_number}",
         "-f",
         f"head_sha={solicitud.target.get('head_sha', '')}",
@@ -3563,9 +3565,14 @@ def cmd_reconcile(args):
             None,
         )
         if solicitud is None:
-            sys.exit(
-                f"ai-review: resultado de solicitud desconocida {artifact.get('request_id')!r}"
+            # La podó una solicitud más nueva, cuyo despacho cancela este worker;
+            # si el run alcanzó a avisar antes, no queda nada que publicar.
+            print(
+                f"ai-review: resultado de la solicitud {artifact.get('request_id')!r}"
+                " ignorado: ya no está pendiente",
+                file=sys.stderr,
             )
+            return
         confiable = json.loads(
             sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
         ).get("sha")

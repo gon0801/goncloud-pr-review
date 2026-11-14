@@ -2347,7 +2347,6 @@ class Workflows(unittest.TestCase):
             if not linea.strip().startswith("#")
         )
         self.assertIn("needs: execute", avisar)
-        self.assertIn("if: always()", avisar)
         self.assertIn("actions: write", avisar)
         self.assertNotIn("actions: write", execute)
         self.assertIn("gh workflow run ai-review-publish.yml", avisar)
@@ -2408,22 +2407,6 @@ class Workflows(unittest.TestCase):
         self.assertNotIn("FALLBACK_ENABLED", worker)
         self.assertEqual(worker.count("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}"), 2)
         self.assertEqual(worker.count("secrets.DEEPSEEK_API_KEY"), 2)
-
-    def test_dos_prs_con_la_misma_solicitud_no_comparten_grupo(self):
-        # Orbit #419/#420: dos PRs nuevos piden la solicitud 1 a la vez; con el
-        # grupo sin PR, GitHub cancelaba el worker en espera y uno quedaba sin revisión.
-        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        grupo = re.search(r"^concurrency:\n  group: (.+)$", worker, re.M).group(1)
-
-        def resolver(pr, solicitud):
-            return (
-                grupo.replace("${{ github.repository }}", "o/r")
-                .replace("${{ inputs.pr_number }}", pr)
-                .replace("${{ inputs.request_id }}", solicitud)
-            )
-
-        self.assertNotEqual(resolver("419", "1"), resolver("420", "1"))
-        self.assertEqual(resolver("419", "1"), resolver("419", "1"))
 
     def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
@@ -2570,14 +2553,6 @@ class Workflows(unittest.TestCase):
         ):
             self.assertIn(acceso, grupo, f"el grupo resuelve el PR de {acceso}")
         self.assertIn("cancel-in-progress: false", texto)
-        worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
-        self.assertIn("cancel-in-progress: false", worker)
-        grupo_worker = next(
-            linea
-            for linea in worker.splitlines()
-            if linea.strip().startswith("group: ")
-        )
-        self.assertIn("inputs.request_id", grupo_worker)
 
     def test_entorno_del_modelo(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()

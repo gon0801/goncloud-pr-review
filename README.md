@@ -44,6 +44,13 @@ El modo coordinado fija ambos workflows al SHA confiable del repo central
 (obligatorio) y abre el PR del conjunto en `chore/ai-review`; si la rama
 cambió durante la instalación reintenta sobre la punta nueva sin forzar.
 
+En el modo coordinado, un push nuevo cancela la revisión que el worker seguía
+corriendo para el head anterior del mismo PR; las explicaciones
+(`ai-review: explicar F1`) no se cancelan. No relances a mano un worker
+cancelado: su solicitud ya no existe y el relanzado puede cancelar la revisión
+vigente del PR. Para repetir la revisión del mismo commit, comenta
+`ai-review: revisar`.
+
 En los dos modos, si `chore/ai-review` ya existe (por ejemplo tras un squash
 merge), el instalador primero fusiona la rama por defecto en ella sin forzar.
 Si esa fusión tiene conflicto (HTTP 409) o falla por otra causa, sale con
