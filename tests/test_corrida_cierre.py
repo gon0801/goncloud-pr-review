@@ -17,6 +17,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_run
+import review_config
 
 SESION = "0f8e5c1a-3b2d-4c6e-9a7f-1d2e3f4a5b6c"
 SIN_TURNOS = {
@@ -150,16 +152,16 @@ class VueltaDeCierre(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, env),
             mock.patch.object(
-                review.time, "monotonic", side_effect=lambda: reloj[0]
+                review_run.time, "monotonic", side_effect=lambda: reloj[0]
             ),
-            mock.patch.object(review.time, "sleep"),
-            mock.patch.object(review, "start_proxy", side_effect=arrancar_proxy),
-            mock.patch.object(review, "run_in_group", side_effect=claude),
+            mock.patch.object(review_run.time, "sleep"),
+            mock.patch.object(review_run, "start_proxy", side_effect=arrancar_proxy),
+            mock.patch.object(review_run, "run_in_group", side_effect=claude),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             try:
-                review.cmd_run(argparse.Namespace(work=str(self.work)))
+                review_run.cmd_run(argparse.Namespace(work=str(self.work)))
             except SystemExit as exc:
                 salida = exc.code
         result = json.loads((self.work / "result.json").read_text())
@@ -262,7 +264,7 @@ class VueltaDeCierre(unittest.TestCase):
         self.assertIsNone(salida)
         self.assertEqual(len(claude.corridas), 3)
         respaldo, cierre = claude.corridas[1:]
-        pago = review.PROVIDERS["deepseek"]
+        pago = review_config.PROVIDERS["deepseek"]
         for argv, env, _ in (respaldo, cierre):
             self.assertEqual(argv[argv.index("--model") + 1], pago["model"])
             self.assertEqual(env["ANTHROPIC_BASE_URL"], pago["upstream"])
@@ -314,7 +316,7 @@ class VueltaDeCierre(unittest.TestCase):
             "total_cost_usd": 0.004,
             "usage": {"input_tokens": 100, "output_tokens": 20},
         }
-        review.sumar_consumo(revision, cierre, sesion_retomada=True)
+        review_run.sumar_consumo(revision, cierre, sesion_retomada=True)
         self.assertEqual(revision["num_turns"], 5)
         self.assertAlmostEqual(revision["total_cost_usd"], 0.004)
         self.assertEqual(revision["usage"], {"input_tokens": 400, "output_tokens": 80})

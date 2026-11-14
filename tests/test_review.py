@@ -23,6 +23,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_run
+import review_domain
+import review_config
 import review_context  # noqa: E402
 
 MANIFEST = {
@@ -68,19 +71,19 @@ class Filters(unittest.TestCase):
 class Coverage(unittest.TestCase):
     def test_complete(self):
         self.assertEqual(
-            review.split_coverage("**Veredicto:** ok\n\nCOVERAGE: complete\n"),
+            review_domain.split_coverage("**Veredicto:** ok\n\nCOVERAGE: complete\n"),
             ("**Veredicto:** ok", "complete", ""),
         )
 
     def test_partial_with_detail_and_markdown_wrapping(self):
         self.assertEqual(
-            review.split_coverage("x\n`COVERAGE: partial | migrations/ too large`"),
+            review_domain.split_coverage("x\n`COVERAGE: partial | migrations/ too large`"),
             ("x", "partial", "migrations/ too large"),
         )
 
     def test_missing_line_is_reported_as_unknown(self):
         self.assertEqual(
-            review.split_coverage("**Veredicto:** ok"), ("**Veredicto:** ok", None, "")
+            review_domain.split_coverage("**Veredicto:** ok"), ("**Veredicto:** ok", None, "")
         )
 
 
@@ -467,7 +470,7 @@ class GitHubGlue(unittest.TestCase):
 
     def test_publish_of_a_failed_review_tells_the_workflow_it_was_not_reviewed(self):
         _, output, posted = self.run_cmd(
-            "publish", [], result={review.ERROR_KEY: "deepseek agotó su cuota"}
+            "publish", [], result={review_config.ERROR_KEY: "deepseek agotó su cuota"}
         )
         self.assertEqual(output, "reviewed=false\n")
         self.assertIn("No se pudo revisar el commit", posted["body"])
@@ -500,7 +503,7 @@ class GitHubGlue(unittest.TestCase):
             work = tmp / "work"
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
-            (work / "result.json").write_text(json.dumps({review.ERROR_KEY: reason}))
+            (work / "result.json").write_text(json.dumps({review_config.ERROR_KEY: reason}))
             env = dict(
                 os.environ,
                 PATH=f"{bindir}:{os.environ['PATH']}",
@@ -594,7 +597,7 @@ class GitHubGlue(unittest.TestCase):
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
             (work / "result.json").write_text(
-                json.dumps({review.ERROR_KEY: f"falla con secreto {secret}"})
+                json.dumps({review_config.ERROR_KEY: f"falla con secreto {secret}"})
             )
             summary = tmp / "summary.md"
             summary.write_text("")
@@ -713,16 +716,16 @@ class ReasoningReplayRecovery(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"ATTEMPTS": "2", "RETRY_DELAY": "0"}),
-            mock.patch.object(review, "run_in_group", side_effect=completed) as runner,
-            mock.patch.object(review.time, "monotonic", return_value=0),
-            mock.patch.object(review.time, "sleep"),
+            mock.patch.object(review_run, "run_in_group", side_effect=completed) as runner,
+            mock.patch.object(review_run.time, "monotonic", return_value=0),
+            mock.patch.object(review_run.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result_path = Path(tmp) / "result.json"
             falla = None
             try:
-                falla = review.run_agent(
+                falla = review_run.run_agent(
                     cmd, child_env, result_path, provider, 600, remaining
                 )
             except SystemExit as exc:
@@ -747,7 +750,7 @@ class ReasoningReplayRecovery(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(
             falla,
-            review.FallaDelProveedor(
+            review_run.FallaDelProveedor(
                 "reasoning",
                 "opencode-go rechazó el historial de razonamiento de la "
                 "conversación (reasoning_content)",
@@ -776,12 +779,12 @@ class ReasoningReplayRecovery(unittest.TestCase):
                     [{"result": message, "is_error": True, "api_error_status": status}]
                 )
                 self.assertEqual(len(calls), 1)
-                self.assertIn("error permanente", result[review.ERROR_KEY])
+                self.assertIn("error permanente", result[review_config.ERROR_KEY])
 
     def test_exception_does_not_apply_to_direct_deepseek_provider(self):
         result, calls, _, _ = self.run_replies([self.replay_error], provider="deepseek")
         self.assertEqual(len(calls), 1)
-        self.assertIn("error permanente", result[review.ERROR_KEY])
+        self.assertIn("error permanente", result[review_config.ERROR_KEY])
 
 
 class RunAgent(unittest.TestCase):
@@ -867,7 +870,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "la revisión excedió el tiempo límite de 1 s; "
+                review_config.ERROR_KEY: "la revisión excedió el tiempo límite de 1 s; "
                 "no se reintenta porque otro intento tardaría lo mismo"
             },
         )
@@ -883,7 +886,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("intento 1/2", proc.stdout)
         self.assertNotIn("intento 2/2", proc.stdout)
-        self.assertIn("excedió el tiempo límite de 1 s", result[review.ERROR_KEY])
+        self.assertIn("excedió el tiempo límite de 1 s", result[review_config.ERROR_KEY])
 
     def test_retry_runs_only_if_it_still_gets_600_seconds(self):
         overloaded = {"result": "overloaded", "is_error": True, "api_error_status": 529}
@@ -912,9 +915,9 @@ class RunAgent(unittest.TestCase):
             proc.stdout, r"intento 1/2 con deepseek \(límite (6[5-9]|70) s\)"
         )
         self.assertIn("no queda tiempo para otro intento", proc.stderr)
-        self.assertEqual(list(result), [review.ERROR_KEY])
+        self.assertEqual(list(result), [review_config.ERROR_KEY])
         self.assertRegex(
-            result[review.ERROR_KEY],
+            result[review_config.ERROR_KEY],
             r"^la revisión falló con un error transitorio \(proveedor no disponible "
             r"por ahora\); no queda tiempo para reintentar \(quedan \d+ s, se "
             r"necesitan al menos 600 s\)$",
@@ -985,7 +988,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        self.assertEqual(result, {review.ERROR_KEY: ReasoningReplayRecovery.warning})
+        self.assertEqual(result, {review_config.ERROR_KEY: ReasoningReplayRecovery.warning})
 
     def test_opencode_replay_error_is_not_retried_without_budget(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -998,9 +1001,9 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(list(result), [review.ERROR_KEY])
+        self.assertEqual(list(result), [review_config.ERROR_KEY])
         self.assertRegex(
-            result[review.ERROR_KEY],
+            result[review_config.ERROR_KEY],
             rf"^{re.escape(ReasoningReplayRecovery.warning)}; no queda tiempo para "
             r"reintentar \(quedan \d+ s, se necesitan al menos 600 s\)$",
         )
@@ -1019,11 +1022,11 @@ class RunAgent(unittest.TestCase):
             ["deepseek-v4.1-flash", "deepseek-v4.1-flash"],
         )
         self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
-        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1040,11 +1043,11 @@ class RunAgent(unittest.TestCase):
         # El intento que expira muere antes de loguear su llamada; ningún
         # otro proveedor se despacha.
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        motivo = review_run.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1060,11 +1063,11 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        motivo = review_run.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1104,11 +1107,11 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1172,7 +1175,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_transient_error_is_retried(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1180,7 +1183,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_opencode_quota_switches_to_deepseek_api(self):
         reply = {
@@ -1218,11 +1221,11 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
         )
-        motivo = review.FallaDelProveedor.saturacion("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.saturacion("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1259,7 +1262,7 @@ class RunAgent(unittest.TestCase):
         proc, calls, result, _, _ = self.run_agent(reply, provider="opencode-go")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn("FALLBACK_API_KEY", result[review.ERROR_KEY])
+        self.assertIn("FALLBACK_API_KEY", result[review_config.ERROR_KEY])
 
     def test_auth_failure_does_not_switch_providers(self):
         reply = {
@@ -1272,7 +1275,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
     def test_primary_proxy_failure_stays_on_the_subscription(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1283,11 +1286,11 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.proxy("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.proxy("opencode-go").motivo
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
+                review_config.ERROR_KEY: f"{motivo}; la suscripción es la única vía "
                 "y no se cambia a la API de pago"
             },
         )
@@ -1306,8 +1309,8 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
-        self.assertIn("deepseek", result[review.ERROR_KEY])
-        self.assertIn("proxy", result[review.ERROR_KEY])
+        self.assertIn("deepseek", result[review_config.ERROR_KEY])
+        self.assertIn("proxy", result[review_config.ERROR_KEY])
 
     def test_una_respuesta_vacia_no_se_repara(self):
         # La CLI no trae "result" cuando se agota el tope de turnos.
@@ -1469,7 +1472,7 @@ class RunAgent(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
-                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertEqual(result["result"].count("COVERAGE:"), 1)
                 modelo = review.parse_model_findings(result["result"])
                 self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
@@ -1539,7 +1542,7 @@ class RunAgent(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
-                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertIsNone(
                     review.unreviewed_de(result["result"]),
                     "una respuesta rearmada no acredita cobertura parcial",
@@ -1563,7 +1566,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
         self.assertEqual(
-            review.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
+            review_domain.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
         )
         self.assertIsNone(
             review.unreviewed_de(result["result"]),
@@ -1600,7 +1603,7 @@ class RunAgent(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
                 self.assertEqual(
-                    review.split_coverage(result["result"])[1:],
+                    review_domain.split_coverage(result["result"])[1:],
                     ("partial", "no leí b.py"),
                 )
                 self.assertIsNone(review.unreviewed_de(result["result"]))
@@ -1646,7 +1649,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["usage"], {"input_tokens": 1050, "output_tokens": 210})
         self.assertIn(self.BLOQUE, result["result"])
-        self.assertEqual(review.split_coverage(result["result"])[1], "partial")
+        self.assertEqual(review_domain.split_coverage(result["result"])[1], "partial")
 
     def test_un_bloque_reparado_ilegible_no_cuenta(self):
         """#113 ai-review F2: aceptar con el mismo criterio que dispara."""
@@ -1697,7 +1700,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn("AI_REVIEW_API_KEY", result[review.ERROR_KEY])
+        self.assertIn("AI_REVIEW_API_KEY", result[review_config.ERROR_KEY])
 
     def test_proxy_start_failure_fails_soft(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -1706,7 +1709,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
         self.assertIn("::warning::", proc.stdout)
-        self.assertIn(review.ERROR_KEY, result)
+        self.assertIn(review_config.ERROR_KEY, result)
 
 
 class PrepareContext(unittest.TestCase):
@@ -2263,7 +2266,7 @@ class Install(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse((tmp / "log").exists())
             result = json.loads((work / "result.json").read_text())
-            self.assertIn("no se pudo instalar", result[review.ERROR_KEY])
+            self.assertIn("no se pudo instalar", result[review_config.ERROR_KEY])
 
 
 class TimeBudget(unittest.TestCase):
@@ -2272,7 +2275,7 @@ class TimeBudget(unittest.TestCase):
         captured = {}
 
         def fake_start_proxy(work, provider, key, session):
-            review.time.monotonic()  # the proxy start takes time on the same clock
+            review_run.time.monotonic()  # the proxy start takes time on the same clock
             proxy = mock.Mock()
             proxy.wait.return_value = 0
             return proxy, "http://127.0.0.1:4000", "sk-token"
@@ -2299,12 +2302,12 @@ class TimeBudget(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, env),
                 mock.patch.object(
-                    review.time, "monotonic", side_effect=lambda: next(clock)
+                    review_run.time, "monotonic", side_effect=lambda: next(clock)
                 ),
-                mock.patch.object(review, "start_proxy", side_effect=fake_start_proxy),
-                mock.patch.object(review, "run_agent", side_effect=fake_run_agent),
+                mock.patch.object(review_run, "start_proxy", side_effect=fake_start_proxy),
+                mock.patch.object(review_run, "run_agent", side_effect=fake_run_agent),
             ):
-                review.cmd_run(argparse.Namespace(work=str(work)))
+                review_run.cmd_run(argparse.Namespace(work=str(work)))
         self.assertEqual(captured["deadline"], 1000 + 1320)
 
     def test_timeout_kills_grandchildren_that_hold_the_output(self):
@@ -2315,7 +2318,7 @@ class TimeBudget(unittest.TestCase):
         """)
         start = time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired):
-            review.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
+            review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
         self.assertLess(
             time.monotonic() - start,
             15,
@@ -2329,7 +2332,7 @@ class TimeBudget(unittest.TestCase):
             print('{"result": "ok", "subtype": "success"}', flush=True)
         """)
         start = time.monotonic()
-        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        done = review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
         self.assertLess(time.monotonic() - start, 15)
         self.assertEqual(
             (done.returncode, json.loads(done.stdout)["result"]), (0, "ok")
@@ -2343,7 +2346,7 @@ class TimeBudget(unittest.TestCase):
             print('{"result": "ok", "subtype": "success"}', flush=True)
         """)
         start = time.monotonic()
-        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        done = review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
         self.assertLess(time.monotonic() - start, 20)
         self.assertIsInstance(done.stdout, str)
         self.assertIsInstance(done.stderr, str)
@@ -2384,22 +2387,22 @@ class TimeBudget(unittest.TestCase):
 
     def test_attempt_time_scales_with_turn_cap(self):
         self.assertEqual(
-            [review.attempt_timeout_for(t) for t in (10, 25, 40, 60)],
+            [review_run.attempt_timeout_for(t) for t in (10, 25, 40, 60)],
             [300, 375, 600, 900],
         )
 
     def test_measured_long_review_fits_its_attempt(self):
         # Orbit run 36208215400: 48 turns took 492 s; the default cap is 60 turns.
         self.assertGreaterEqual(
-            review.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492
+            review_run.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492
         )
 
     def test_worst_case_fits_the_job_timeout(self):
         install_prepare_publish = 180
-        self.assertLess(review.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
+        self.assertLess(review_run.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
         self.assertLessEqual(
-            review.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
-            review.REVIEW_BUDGET_SECONDS - 30,
+            review_run.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
+            review_run.REVIEW_BUDGET_SECONDS - 30,
         )
 
 
@@ -2821,16 +2824,16 @@ class Workflows(unittest.TestCase):
             return eval(expresion, {"__builtins__": {}}, contexto)
 
         self.assertEqual(resuelto("2700"), "2700")
-        self.assertEqual(resuelto(""), str(review.REVIEW_BUDGET_SECONDS))
+        self.assertEqual(resuelto(""), str(review_run.REVIEW_BUDGET_SECONDS))
 
     def test_un_presupuesto_mal_escrito_en_la_variable_se_dice_con_claridad(self):
         # La variable la escribe una persona en la configuración del repo.
         def presupuesto(valor):
             with mock.patch.dict(os.environ, {"REVIEW_BUDGET_SECONDS": valor}):
-                return review.presupuesto_de_revision()
+                return review_run.presupuesto_de_revision()
 
         self.assertEqual(presupuesto("2700"), 2700)
-        self.assertEqual(presupuesto(""), review.REVIEW_BUDGET_SECONDS)
+        self.assertEqual(presupuesto(""), review_run.REVIEW_BUDGET_SECONDS)
         for valor in ("2700s", "45 min", "0", "-5", "1.5"):
             with self.subTest(valor=valor):
                 with self.assertRaises(SystemExit) as salida:
@@ -3013,7 +3016,7 @@ class Workflows(unittest.TestCase):
         self.assertTrue(checkouts, "el worker fija su código a revisión confiable")
         self.assertNotIn("pull_request.head.sha", worker)
         # las herramientas del modelo las fija el runtime compartido del repo
-        runtime = (ROOT / "review.py").read_text()
+        runtime = (ROOT / "review_run.py").read_text()
         self.assertIn('"Read,Grep,Glob"', runtime)
 
     def test_coordinator_exporta_y_worker_recibe_lo_mismo(self):
@@ -3275,10 +3278,10 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(manifest["reviewed"], ["app.py"])
                 with mock.patch.dict(os.environ, env_de("modelo", {}), clear=False):
                     with self.assertRaises(SystemExit):
-                        review.cmd_run(argparse.Namespace(work=work))
+                        review_run.cmd_run(argparse.Namespace(work=work))
                 resultado = json.loads((Path(work) / "result.json").read_text())
                 self.assertIn(
-                    review.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
+                    review_config.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
                 )
                 (Path(work) / "result.json").write_text(
                     json.dumps(
@@ -3328,6 +3331,8 @@ class Workflows(unittest.TestCase):
                 "review.py",
                 "review_domain.py",
                 "review_context.py",
+                "review_config.py",
+                "review_run.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3700,12 +3705,12 @@ class Workflows(unittest.TestCase):
                         argparse.Namespace(work=work, request_id="1")
                     )
             (Path(work) / "result.json").write_text(
-                json.dumps({review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
+                json.dumps({review_config.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
             )
             review.cmd_close_result(argparse.Namespace(work=work))
             paquete = json.loads((Path(work) / "result.json").read_text())
         self.assertEqual(
-            paquete[review.ERROR_KEY],
+            paquete[review_config.ERROR_KEY],
             "falta el secret AI_REVIEW_API_KEY",
             "la señal de error del paso modelo llega al coordinador",
         )
@@ -3733,7 +3738,7 @@ class Workflows(unittest.TestCase):
     def test_close_result_sin_revision_lo_dice_en_outputs_y_resumen(self):
         salida, resumen = self._cerrar(
             {
-                review.ERROR_KEY: "la revisión con opencode-go excedió el tiempo límite de 900 s"
+                review_config.ERROR_KEY: "la revisión con opencode-go excedió el tiempo límite de 900 s"
             }
         )
         self.assertEqual(salida, "reviewed=false\n")
@@ -3753,8 +3758,8 @@ class Workflows(unittest.TestCase):
         # El publicador corre en otro workflow: no lee outputs de pasos del
         # worker, solo el result.json que viaja como artifact.
         casos = {
-            "con motivo": ({review.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
-            "motivo vacío": ({review.ERROR_KEY: ""}, "reviewed=false\n"),
+            "con motivo": ({review_config.ERROR_KEY: "proveedor caído"}, "reviewed=false\n"),
+            "motivo vacío": ({review_config.ERROR_KEY: ""}, "reviewed=false\n"),
             "revisado": (
                 {"result": "ok\nCOVERAGE: complete", "subtype": "success"},
                 "reviewed=true\n",
@@ -4064,7 +4069,7 @@ class Workflows(unittest.TestCase):
                         ).json(),
                         "observaciones": [],
                         "cobertura": "unknown",
-                        review.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
+                        review_config.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY",
                     }
                 )
             )
@@ -4348,7 +4353,7 @@ class Workflows(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._resultado_de_corrida(tmp, 77)
             artefacto = json.loads((Path(tmp) / "result.json").read_text())
-            artefacto[review.ERROR_KEY] = "opencode-go agotó su cuota"
+            artefacto[review_config.ERROR_KEY] = "opencode-go agotó su cuota"
             (Path(tmp) / "result.json").write_text(json.dumps(artefacto))
             patches, _ = self._reconciliar(
                 self._estado_pendiente(),
@@ -4779,11 +4784,11 @@ class FindingsBlock(unittest.TestCase):
     def test_block_position_before_or_after_coverage(self):
         block = block_of(make_finding())
         text = f"**Veredicto:** x\n\n{block}\nCOVERAGE: complete"
-        self.assertEqual(review.split_coverage(text)[1], "complete")
+        self.assertEqual(review_domain.split_coverage(text)[1], "complete")
         self.assertIsNotNone(review.parse_findings_block(text))
         misplaced = f"**Veredicto:** x\nCOVERAGE: complete\n{block}"
         self.assertIsNone(
-            review.split_coverage(misplaced)[1], "la cobertura queda desconocida"
+            review_domain.split_coverage(misplaced)[1], "la cobertura queda desconocida"
         )
         self.assertIsNotNone(
             review.parse_findings_block(misplaced),
@@ -5119,7 +5124,7 @@ class Fallback(unittest.TestCase):
             "num_turns": 7,
         }
         manifest = dict(MANIFEST, max_turns=60)
-        model = review.parse_model_findings(review.split_coverage(text)[0])
+        model = review.parse_model_findings(review_domain.split_coverage(text)[0])
         merged, new_ids = review.merge_findings(
             None,
             model,
@@ -5598,7 +5603,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
             manifest = self._prepare(repo, work, base, head)
             previos_md = (work / "prev_findings.md").read_text()
             with mock.patch.dict(os.environ, {"PR_NUMBER": "85", "REPO": "o/r"}):
-                prompt = review.build_prompt(manifest, work, 60)
+                prompt = review_run.build_prompt(manifest, work, 60)
         self.assertEqual(previo["sha"], prev)
         self.assertEqual(previo["completion"], "complete")
         self.assertEqual(
@@ -6271,7 +6276,7 @@ class ReviewContinuity(unittest.TestCase):
                     )
                     for reason in ["first failure", "second failure"]:
                         body = self.publish(
-                            work, "b" * 40, MANIFEST, {review.ERROR_KEY: reason}, body
+                            work, "b" * 40, MANIFEST, {review_config.ERROR_KEY: reason}, body
                         )
                     self.assertEqual(body.count(review.CAUTION_MARK), 1)
                     self.assertNotIn("first failure", body)
@@ -6475,7 +6480,7 @@ class IncrementalRun(unittest.TestCase):
             changed_files=["b.py", "uv.lock"],
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 20)
         self.assertIn("INCREMENTAL review since ppppppp", prompt)
         self.assertIn("/tmp/w/prev_findings.md", prompt)
         self.assertIn("`b.py`", prompt)
@@ -6483,13 +6488,13 @@ class IncrementalRun(unittest.TestCase):
 
     def test_incremental_prompt_caps_file_list(self):
         files = [
-            f"src/f{i:03d}.py" for i in range(review.INCREMENTAL_PROMPT_MAX_FILES + 10)
+            f"src/f{i:03d}.py" for i in range(review_run.INCREMENTAL_PROMPT_MAX_FILES + 10)
         ]
         manifest = self.manifest(
             mode="incremental", prev_sha="p" * 40, reviewed=files, changed_files=files
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 20)
         self.assertIn("`src/f000.py`", prompt)
         self.assertNotIn("src/f059.py", prompt)
         self.assertIn("… y 10 más", prompt)
@@ -6523,7 +6528,7 @@ class IncrementalRun(unittest.TestCase):
             )
             manifest = dict(self.manifest(mode="full"), has_prev_findings=True)
             with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "91"}):
-                return review.build_prompt(manifest, work, 60)
+                return review_run.build_prompt(manifest, work, 60)
 
     def test_una_solicitud_de_explicacion_pide_explicar_ese_hallazgo(self):
         """Ronda 3 del piloto (#91): el worker corría una revisión completa para
@@ -6565,7 +6570,7 @@ class IncrementalRun(unittest.TestCase):
         revisiones; el mensaje solo recordaba el formato en incremental."""
         manifest = dict(self.manifest(mode="full"), has_prev_findings=True)
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "97"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 60)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 60)
         self.assertIn(
             "Emit the findings block right before COVERAGE with every previous finding "
             '(state "open", or "resolved" if this diff fixed it) and the new ones, as one '
@@ -6576,7 +6581,7 @@ class IncrementalRun(unittest.TestCase):
 
     def test_full_prompt_has_no_incremental_line(self):
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
+            prompt = review_run.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
         self.assertNotIn("INCREMENTAL", prompt)
 
 
@@ -6898,7 +6903,7 @@ class BlockingFixes(unittest.TestCase):
     def test_full_review_with_previous_findings_hands_them_to_the_model(self):
         manifest = dict(MANIFEST, mode="full", has_prev_findings=True)
         with mock.patch.dict(os.environ, {"PR_NUMBER": "7", "REPO": "o/r"}):
-            prompt = review.build_prompt(manifest, Path("/w"), 60)
+            prompt = review_run.build_prompt(manifest, Path("/w"), 60)
         self.assertIn("/w/prev_findings.md", prompt)
         self.assertIn("same ids", prompt)
 
@@ -7343,7 +7348,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
     """T16-f11: 7 de 24 corridas incrementales perdían el bloque del modelo."""
 
     def test_bloque_sin_cierre_conserva_los_hallazgos(self):
-        state = review.parse_model_findings(review.split_coverage(BLOQUE_SIN_CIERRE)[0])
+        state = review.parse_model_findings(review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0])
         self.assertEqual(
             [(f["id"], f["severity"], f["state"]) for f in state["findings"]],
             [("F1", "Medium", "open"), (None, "Low", "open")],
@@ -7352,12 +7357,12 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
 
     def test_cierre_tras_salto_de_linea_conserva_los_hallazgos(self):
         state = review.parse_model_findings(
-            review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+            review_domain.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
         )
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
     def test_espacio_tras_el_prefijo_y_sin_cierre_conserva_los_hallazgos(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         for espacio in (" ", "\n"):
             with self.subTest(espacio=repr(espacio)):
                 texto = prosa.replace(
@@ -7374,11 +7379,11 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         self.assertIsNone(review.parse_model_findings(truncado))
 
     def test_el_texto_visible_no_arrastra_el_bloque_sin_cerrar(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         self.assertEqual(
             review.strip_model_findings_block(prosa), "Detalle del cambio."
         )
-        otra = review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+        otra = review_domain.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
         self.assertEqual(review.strip_model_findings_block(otra), "Detalle del cambio.")
 
     def test_un_bloque_ilegible_no_deja_un_comentario_html_abierto(self):
@@ -7397,12 +7402,12 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
 
     def test_el_ultimo_bloque_sin_cierre_gana_a_uno_citado_antes(self):
         citado = block_of(make_finding("F9", title="Citado del PR"))
-        texto = f"{citado}\ntexto\n" + review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        texto = f"{citado}\ntexto\n" + review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         state = review.parse_model_findings(texto)
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
     def test_el_parser_del_sticky_sigue_exigiendo_el_cierre(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         self.assertIsNone(review.parse_findings_block(prosa))
         import review_domain as domain
 
@@ -7489,7 +7494,7 @@ class PromptFindings(unittest.TestCase):
             MANIFEST, mode="incremental", prev_sha="a" * 40, reviewed=["x.py"]
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/w"), 10)
+            prompt = review_run.build_prompt(manifest, Path("/w"), 10)
         self.assertIn(
             "as one line that starts with `<!-- ai-review:findings=` and ends with ` -->`",
             prompt,
@@ -8713,15 +8718,15 @@ class CableadoIdentidad(unittest.TestCase):
     def test_env_invalida_se_rechaza(self):
         with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "bogus"}):
             with self.assertRaises(SystemExit) as ctx:
-                review.politica_de_identidad()
+                review_config.politica_de_identidad()
         self.assertIn("FINDING_IDENTITY", str(ctx.exception))
 
     def test_env_por_defecto_current_y_anchors_ok(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FINDING_IDENTITY", None)
-            self.assertEqual(review.politica_de_identidad(), "current")
+            self.assertEqual(review_config.politica_de_identidad(), "current")
         with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
-            self.assertEqual(review.politica_de_identidad(), "anchors")
+            self.assertEqual(review_config.politica_de_identidad(), "anchors")
 
     def test_action_declara_el_input(self):
         yml = (ROOT / "action.yml").read_text()

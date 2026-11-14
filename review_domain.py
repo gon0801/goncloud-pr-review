@@ -430,6 +430,53 @@ def find_model_findings_block(text):
     return None
 
 
+UNREVIEWED_PREFIX = "<!-- ai-review:unreviewed="
+
+
+LIBRO_MAX_ENTRADAS = 400
+
+
+def cierre_de_respuesta(text):
+    """La declaración final del modelo: (prosa, estado, detalle, línea
+    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
+    la última línea no vacía (una de solo ``` o ** también cierra, así que
+    una cita dentro de un fence final no declara) y unreviewed, la última no
+    vacía antes de ella."""
+    lines = (text or "").rstrip().splitlines()
+    line = lines[-1].strip().strip("`*") if lines else ""
+    if line.upper().startswith("COVERAGE:"):
+        status, _, detail = line.split(":", 1)[1].strip().partition("|")
+        status = status.strip().lower()
+        if status in ("complete", "partial"):
+            previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
+            declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
+            if declaracion and rutas_declaradas(declaracion) != set():
+                status = "partial"  # declaró archivos sin leer: no es complete
+            prosa = "\n".join(lines[:-1]).rstrip()
+            return prosa, status, detail.strip(), declaracion
+    return (text or "").rstrip(), None, "", None
+
+
+def split_coverage(text):
+    return cierre_de_respuesta(text)[:3]
+
+
+def rutas_declaradas(linea):
+    """Las rutas de una línea unreviewed=; None si no se lee."""
+    segmento = linea[len(UNREVIEWED_PREFIX) :]
+    if not segmento.endswith(" -->"):
+        return None
+    try:
+        lista = json.loads(segmento[: -len(" -->")])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(lista, list) or len(lista) > LIBRO_MAX_ENTRADAS:
+        return None
+    if any(not isinstance(ruta, str) or not ruta for ruta in lista):
+        return None
+    return set(lista)
+
+
 def _model_block_at(text, start):
     found = _closed_block_at(text, start)
     if found is not None:

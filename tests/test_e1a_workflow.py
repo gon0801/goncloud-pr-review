@@ -13,7 +13,14 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "e1-measure.yml"
 REVIEW_PY = ROOT / "review.py"
 
-MODULOS_REVISOR = ("review.py", "review_domain.py", "review_context.py", "prompt.md")
+MODULOS_REVISOR = (
+    "review.py",
+    "review_domain.py",
+    "review_context.py",
+    "review_config.py",
+    "review_run.py",
+    "prompt.md",
+)
 
 
 def git(cwd, *args):
@@ -90,14 +97,14 @@ def correr_prepare(repo, base, cabeza, event, work, prev=None):
 
 
 def claves_providers():
-    arbol = ast.parse(REVIEW_PY.read_text())
+    arbol = ast.parse((ROOT / "review_config.py").read_text())
     for nodo in ast.walk(arbol):
         if isinstance(nodo, ast.Assign) and any(
             isinstance(destino, ast.Name) and destino.id == "PROVIDERS"
             for destino in nodo.targets
         ):
             return sorted(ast.literal_eval(nodo.value))
-    raise AssertionError("PROVIDERS no encontrado en review.py")
+    raise AssertionError("PROVIDERS no encontrado en review_config.py")
 
 
 class WorkflowE1Measure(unittest.TestCase):
@@ -214,12 +221,12 @@ class WorkflowE1Measure(unittest.TestCase):
     def test_mide_el_arbol_del_head_con_revisor_fuera(self):
         self.assertIn('git checkout --detach "${{ inputs.head }}"', self.texto)
         self.assertIn(
-            "cp review.py review_domain.py review_context.py prompt.md", self.texto
+            "cp review.py review_domain.py review_context.py review_config.py review_run.py prompt.md", self.texto
         )
         self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
         self.assertLess(
             self.texto.index(
-                "cp review.py review_domain.py review_context.py prompt.md"
+                "cp review.py review_domain.py review_context.py review_config.py review_run.py prompt.md"
             ),
             self.texto.index("git checkout --detach"),
             "el revisor se copia del arbol de main antes de mover el arbol al head",

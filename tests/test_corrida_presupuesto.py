@@ -12,7 +12,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import review  # noqa: E402
+import review_run
+import review_config
 
 MANIFEST = {
     "base": "b" * 40,
@@ -31,8 +32,8 @@ CUOTA = {
     "api_error_status": 402,
 }
 TRANSITORIO = {"result": "overloaded", "is_error": True, "api_error_status": 529}
-SUSCRIPCION = review.PROVIDERS["opencode-go"]["model"]
-PAGO = review.PROVIDERS["deepseek"]["model"]
+SUSCRIPCION = review_config.PROVIDERS["opencode-go"]["model"]
+PAGO = review_config.PROVIDERS["deepseek"]["model"]
 
 
 class SegundaCorrida(unittest.TestCase):
@@ -86,16 +87,16 @@ class SegundaCorrida(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, env),
                 mock.patch.object(
-                    review.time, "monotonic", side_effect=lambda: reloj[0]
+                    review_run.time, "monotonic", side_effect=lambda: reloj[0]
                 ),
-                mock.patch.object(review.time, "sleep", side_effect=avanzar),
-                mock.patch.object(review, "start_proxy", side_effect=arrancar_proxy),
-                mock.patch.object(review, "run_in_group", side_effect=lanzar),
+                mock.patch.object(review_run.time, "sleep", side_effect=avanzar),
+                mock.patch.object(review_run, "start_proxy", side_effect=arrancar_proxy),
+                mock.patch.object(review_run, "run_in_group", side_effect=lanzar),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 try:
-                    review.cmd_run(argparse.Namespace(work=str(work)))
+                    review_run.cmd_run(argparse.Namespace(work=str(work)))
                 except SystemExit as exc:
                     salida = exc.code
             result = json.loads((work / "result.json").read_text())
@@ -119,7 +120,7 @@ class SegundaCorrida(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "opencode-go agotó su cuota; no queda tiempo para "
+                review_config.ERROR_KEY: "opencode-go agotó su cuota; no queda tiempo para "
                 "probar deepseek (quedan 343 s, se necesitan al menos 600 s)"
             },
         )
@@ -151,7 +152,7 @@ class SegundaCorrida(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                review.ERROR_KEY: "opencode-go agotó su cuota; deepseek falló con un "
+                review_config.ERROR_KEY: "opencode-go agotó su cuota; deepseek falló con un "
                 "error transitorio; no queda tiempo para reintentar (quedan 449 s, "
                 "se necesitan al menos 450 s)"
             },
@@ -187,7 +188,7 @@ class SegundaCorrida(unittest.TestCase):
                 )
                 self.assertEqual(corridas, [(SUSCRIPCION, 1290)])
                 self.assertEqual(salida, 0)
-                self.assertEqual(result, {review.ERROR_KEY: motivo})
+                self.assertEqual(result, {review_config.ERROR_KEY: motivo})
 
 
 if __name__ == "__main__":

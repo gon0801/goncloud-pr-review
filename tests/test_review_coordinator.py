@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 import review_domain as domain  # noqa: E402
 
 
@@ -670,7 +671,7 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
         resto = self._con_revision(estado).split("\n", 1)[1]
         resto = review.strip_findings_block(resto, last=False).strip()
         cuerpo = review.revision_visible(
-            {review.ERROR_KEY: "el proveedor no respondió"}, estado, set(), "f" * 40
+            {review_config.ERROR_KEY: "el proveedor no respondió"}, estado, set(), "f" * 40
         )(bloque, resto)
         self.assertEqual(
             cuerpo.split("\n")[:4],
