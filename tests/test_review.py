@@ -3059,8 +3059,11 @@ class Workflows(unittest.TestCase):
     def _render(self, plantilla, contexto):
         def resuelve(expr):
             for alternativa in expr.split("||"):
+                alternativa = alternativa.strip()
+                if alternativa[:1] == alternativa[-1:] == "'":
+                    return alternativa[1:-1]
                 valor = contexto
-                for campo in alternativa.strip().split("."):
+                for campo in alternativa.split("."):
                     valor = valor.get(campo) if isinstance(valor, dict) else None
                 if valor not in (None, "", False, 0):
                     return str(valor)

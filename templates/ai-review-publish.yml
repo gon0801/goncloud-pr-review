@@ -93,7 +93,7 @@ jobs:
             [[ "$valor" =~ ^[0-9]+$ ]] || { echo "ai-review: run o attempt del worker inválido" >&2; exit 1; }
           done
           gh run download "$WORKER_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "${RUNNER_TEMP}/ai-review/descarga"
-          encontrados=$(find "${RUNNER_TEMP}/ai-review/descarga" -path "*attempt-${WORKER_ATTEMPT}*" -name result.json)
+          encontrados=$(find "${RUNNER_TEMP}/ai-review/descarga" -path "*/ai-review-result-request-*-run-${WORKER_RUN_ID}-attempt-${WORKER_ATTEMPT}/result.json")
           total=$(printf '%s' "$encontrados" | grep -c .)
           if [ "$total" -ne 1 ]; then
             echo "ai-review: se esperaba un result.json del attempt ${WORKER_ATTEMPT}, hubo ${total}" >&2
