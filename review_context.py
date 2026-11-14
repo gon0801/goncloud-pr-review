@@ -633,6 +633,25 @@ def files_matching_base(repo, paths, base, head):
     return same
 
 
+def files_reverted(repo, paths, base, previous, head):
+    """Files the PR changed at `previous` and no longer changes at `head`.
+
+    A file the PR never touched also matches the base at head once a merge
+    brings in the base branch's version of it; that is not a revert.
+    """
+    if not previous:
+        return set()
+    changed_before = [
+        path
+        for path in paths
+        if repo.run(
+            "diff", "--quiet", f"{base}...{previous}", "--", path, check=False
+        ).returncode
+        == 1
+    ]
+    return files_matching_base(repo, changed_before, base, head)
+
+
 def delta_real(repo, desde, head):
     """Delta real desde..head: (rutas decodificables, omisiones, calculado)."""
     if desde == head:

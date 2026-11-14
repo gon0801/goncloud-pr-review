@@ -69,6 +69,7 @@ from review_context import (
     digest_de_politica,
     excluded_by,
     files_matching_base,
+    files_reverted,
     grep_files,
     is_ancestor,
     looks_like_test,
@@ -2566,8 +2567,12 @@ def actualizar_memoria_valida(
         candidatos = sorted(abiertas & cambiadas)
         if candidatos:
             try:
-                revertidas = files_matching_base(
-                    _repo_actual(), candidatos, manifest["base"], head
+                revertidas = files_reverted(
+                    _repo_actual(),
+                    candidatos,
+                    manifest["base"],
+                    manifest.get("prev_sha"),
+                    head,
                 )
             except Exception:
                 revertidas = set()
@@ -2698,7 +2703,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     base, head = manifest.get("base"), manifest.get("head")
     try:
         reverted = (
-            files_matching_base(_repo_actual(), candidates, base, head)
+            files_reverted(
+                _repo_actual(), candidates, base, manifest.get("prev_sha"), head
+            )
             if candidates and base and head
             else set()
         )

@@ -6615,13 +6615,14 @@ class BlockingFixes(unittest.TestCase):
             reviewed=["a.py"],
             base="b" * 40,
             head="a" * 40,
+            prev_sha="f" * 40,
         )
         llamadas = []
         with mock.patch.object(
             review,
-            "files_matching_base",
-            side_effect=lambda repo, paths, base, head: (
-                llamadas.append((tuple(paths), base, head)) or set(paths)
+            "files_reverted",
+            side_effect=lambda repo, paths, base, previous, head: (
+                llamadas.append((tuple(paths), base, previous, head)) or set(paths)
             ),
         ):
             findings = review.build_findings(
@@ -6629,7 +6630,7 @@ class BlockingFixes(unittest.TestCase):
             )
         self.assertEqual(
             llamadas,
-            [(("a.py",), "b" * 40, "a" * 40)],
+            [(("a.py",), "b" * 40, "f" * 40, "a" * 40)],
             "el chequeo de reversión sólo mira los archivos cambiados en este push",
         )
         self.assertEqual(
