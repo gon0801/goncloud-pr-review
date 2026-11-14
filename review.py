@@ -1855,11 +1855,24 @@ def build_prompt(manifest, work, max_turns):
     return prompt
 
 
+def presupuesto_de_revision():
+    """Segundos para todos los intentos del modelo. La variable llega de la
+    configuración del repo: vacía es el valor por omisión, y una mal escrita
+    se dice aquí en vez de tumbar el paso con una traza."""
+    raw = os.environ.get("REVIEW_BUDGET_SECONDS", "").strip()
+    if not raw:
+        return REVIEW_BUDGET_SECONDS
+    if not raw.isdecimal() or int(raw) < 1:
+        sys.exit(
+            f"ai-review: REVIEW_BUDGET_SECONDS inválido: {raw!r} "
+            "(usa un número entero de segundos)"
+        )
+    return int(raw)
+
+
 def cmd_run(args):
     politica_de_identidad()  # F0: rechazo temprano del modo de identidad
-    deadline = time.monotonic() + int(
-        os.environ.get("REVIEW_BUDGET_SECONDS", REVIEW_BUDGET_SECONDS)
-    )
+    deadline = time.monotonic() + presupuesto_de_revision()
     work = Path(args.work)
     name, provider = get_provider()
     manifest = json.loads((work / "manifest.json").read_text())

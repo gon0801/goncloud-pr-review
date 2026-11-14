@@ -51,8 +51,14 @@ ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
   `MAX_TURNS` del paso del modelo (reinstalar o re-fijar el pin con
   `scripts/install.sh`); sin definir, el tope sigue siendo `auto`.
 - El intento del modelo tiene un presupuesto de tiempo
-  `REVIEW_BUDGET_SECONDS` (1320 s): un tope de turnos que no quepa a
-  ~10 s por turno se corta por tiempo y no devuelve texto.
+  `REVIEW_BUDGET_SECONDS` (1320 s, o la variable de repositorio
+  `AI_REVIEW_BUDGET_SECONDS`, un entero positivo de segundos): un tope de
+  turnos que no quepa a ~10 s por turno se corta por tiempo y no devuelve
+  texto. Igual que `AI_REVIEW_MAX_TURNS`, la variable solo surte efecto donde
+  el worker instalado ya trae la línea `REVIEW_BUDGET_SECONDS` del paso del
+  modelo (reinstalar o re-fijar el pin con `scripts/install.sh`). Un valor
+  que no sea un entero positivo detiene el paso del modelo con un mensaje que
+  lo nombra.
 
 El modo actual (`ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo`) instala
 `ai-review.yml` con `uses:` fijado a ese SHA. En los dos modos las plantillas

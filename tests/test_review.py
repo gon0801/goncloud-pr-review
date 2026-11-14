@@ -1,4 +1,5 @@
 import argparse
+import base64
 import contextlib
 import io
 import json
@@ -10,10 +11,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -2470,6 +2474,63 @@ class TestFileDetection(unittest.TestCase):
                 self.assertEqual(review.looks_like_test(path), expected)
 
 
+@contextlib.contextmanager
+def git_http_que_exige(raiz, autorizacion):
+    """`git http-backend` sobre HTTP que responde 401 a todo pedido sin esa
+    cabecera Authorization, como github.com con un repo privado."""
+
+    class Manejador(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            if self.headers.get("Authorization") != autorizacion:
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="git"')
+                self.end_headers()
+                return
+            ruta, _, consulta = self.path.partition("?")
+            salida = subprocess.run(
+                ["git", "http-backend"],
+                input=self.rfile.read(int(self.headers.get("Content-Length") or 0)),
+                capture_output=True,
+                env={
+                    "PATH": os.environ["PATH"],
+                    "GIT_PROJECT_ROOT": str(raiz),
+                    "GIT_HTTP_EXPORT_ALL": "1",
+                    "PATH_INFO": ruta,
+                    "QUERY_STRING": consulta,
+                    "REQUEST_METHOD": self.command,
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "HTTP_CONTENT_ENCODING": self.headers.get("Content-Encoding", ""),
+                    "GIT_PROTOCOL": self.headers.get("Git-Protocol", ""),
+                },
+            ).stdout
+            cabeceras, _, cuerpo = salida.partition(b"\r\n\r\n")
+            estado, pares = 200, []
+            for linea in cabeceras.decode().splitlines():
+                clave, _, valor = linea.partition(": ")
+                if clave.lower() == "status":
+                    estado = int(valor.split()[0])
+                else:
+                    pares.append((clave, valor))
+            self.send_response(estado)
+            for clave, valor in pares:
+                self.send_header(clave, valor)
+            self.end_headers()
+            self.wfile.write(cuerpo)
+
+        do_POST = do_GET
+
+    servidor = ThreadingHTTPServer(("127.0.0.1", 0), Manejador)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{servidor.server_address[1]}/"
+    finally:
+        servidor.shutdown()
+        servidor.server_close()
+
+
 class Workflows(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2752,6 +2813,157 @@ class Workflows(unittest.TestCase):
             )
             self.assertEqual(comun.returncode, 0, comun.stderr)
 
+    def test_el_modelo_recibe_el_presupuesto_de_la_variable_del_repo(self):
+        # Sin esta entrada la variable del repo no llega al paso y las revisiones
+        # largas se cortan en los 1320 s del código.
+        modelo = self.worker_texto.split("\n      - name: modelo\n", 1)[1]
+        modelo = modelo.split("\n      - name: ", 1)[0]
+        entorno = dict(re.findall(r"^          (\w+): (.+)$", modelo, re.M))
+        self.assertIn("REVIEW_BUDGET_SECONDS", entorno)
+        expresion = entorno["REVIEW_BUDGET_SECONDS"].strip()[3:-2].replace("||", " or ")
+
+        def resuelto(variable):
+            contexto = {"vars": SimpleNamespace(AI_REVIEW_BUDGET_SECONDS=variable)}
+            return eval(expresion, {"__builtins__": {}}, contexto)
+
+        self.assertEqual(resuelto("2700"), "2700")
+        self.assertEqual(resuelto(""), str(review.REVIEW_BUDGET_SECONDS))
+
+    def test_un_presupuesto_mal_escrito_en_la_variable_se_dice_con_claridad(self):
+        # La variable la escribe una persona en la configuración del repo.
+        def presupuesto(valor):
+            with mock.patch.dict(os.environ, {"REVIEW_BUDGET_SECONDS": valor}):
+                return review.presupuesto_de_revision()
+
+        self.assertEqual(presupuesto("2700"), 2700)
+        self.assertEqual(presupuesto(""), review.REVIEW_BUDGET_SECONDS)
+        for valor in ("2700s", "45 min", "0", "-5", "1.5"):
+            with self.subTest(valor=valor):
+                with self.assertRaises(SystemExit) as salida:
+                    presupuesto(valor)
+                self.assertIn("REVIEW_BUDGET_SECONDS", str(salida.exception.code))
+                self.assertIn(repr(valor), str(salida.exception.code))
+
+    def test_el_coordinador_baja_solo_el_resultado_del_attempt_avisado(self):
+        # El patrón *attempt-1* también tomaba el artifact del attempt 10.
+        nombre = re.search(
+            r"^\s+name: (ai-review-result-.+)$", self.worker_texto, re.M
+        ).group(1)
+        corrida = "4242"
+        artefactos = {
+            attempt: nombre.replace("${{ inputs.request_id }}", "7")
+            .replace("${{ github.run_id }}", corrida)
+            .replace("${{ github.run_attempt }}", attempt)
+            for attempt in ("1", "10")
+        }
+        script = self._bloques_run(
+            self._paso_publicador("bajar el resultado del worker")
+        )[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp, "bin")
+            bin_dir.mkdir()
+            gh = bin_dir / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                'while [ "$1" != --dir ]; do shift; done\n'
+                + "".join(
+                    f'mkdir -p "$2/{a}" && printf {a} > "$2/{a}/result.json"\n'
+                    for a in artefactos.values()
+                )
+            )
+            gh.chmod(0o755)
+            for attempt, artefacto in artefactos.items():
+                with self.subTest(attempt=attempt):
+                    temp = Path(tmp, f"runner-{attempt}")
+                    (temp / "ai-review").mkdir(parents=True)
+                    r = subprocess.run(
+                        ["bash", "-eo", "pipefail", "-c", script],
+                        env={
+                            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                            "RUNNER_TEMP": str(temp),
+                            "GITHUB_REPOSITORY": "o/r",
+                            "WORKER_RUN_ID": corrida,
+                            "WORKER_ATTEMPT": attempt,
+                        },
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual(
+                        (temp / "ai-review" / "result.json").read_text(), artefacto
+                    )
+
+    def test_el_worker_trae_el_pr_de_un_repo_privado_sin_dejar_credenciales(self):
+        # Con el fetch anónimo el worker no traía el PR en un repo privado; con
+        # persist-credentials: true el token quedaba en .git/config, al alcance
+        # del paso del modelo, que corre en un worktree de ese mismo repo.
+        paso = self.worker_texto.split("- name: traer el PR como datos\n", 1)[1]
+        script = self._bloques_run(paso.split("\n      - name: ", 1)[0])[0]
+        token = "ghs_" + "k" * 36
+        credencial = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+        def git(*args, cwd):
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fuente = Path(tmp, "fuente")
+            fuente.mkdir()
+            git("init", "-q", "-b", "main", cwd=fuente)
+            (fuente / "a.txt").write_text("a\n")
+            git("add", ".", cwd=fuente)
+            git("commit", "-q", "-m", "base", cwd=fuente)
+            base = git("rev-parse", "HEAD", cwd=fuente)
+            git("checkout", "-q", "-b", "pr", cwd=fuente)
+            (fuente / "a.txt").write_text("pr\n")
+            git("commit", "-q", "-am", "pr", cwd=fuente)
+            head = git("rev-parse", "HEAD", cwd=fuente)
+            remoto = Path(tmp, "remoto")
+            remoto.mkdir()
+            git("clone", "-q", "--bare", str(fuente), str(remoto / "o.git"), cwd=tmp)
+            # El checkout confiable trae solo la rama por defecto (por file://, que
+            # no enlaza todos los objetos): el head del PR tiene que venir del
+            # servidor, que exige la cabecera.
+            worker = Path(tmp, "worker")
+            git(
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                "main",
+                f"file://{remoto / 'o.git'}",
+                str(worker),
+                cwd=tmp,
+            )
+            with git_http_que_exige(remoto, f"basic {credencial}") as url:
+                git("remote", "set-url", "origin", f"{url}o.git", cwd=worker)
+                local = script.replace("https://github.com/", url)
+                r = subprocess.run(
+                    ["bash", "-eo", "pipefail", "-c", local],
+                    cwd=worker,
+                    env={
+                        "PATH": os.environ["PATH"],
+                        "HOME": tmp,
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                        "GIT_TERMINAL_PROMPT": "0",
+                        "HEAD_SHA": head,
+                        "BASE_SHA": base,
+                        "GITHUB_TOKEN": token,
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=worker / "pr"), head)
+            configuracion = (worker / ".git" / "config").read_text()
+            for rastro in (token, credencial, "extraheader"):
+                self.assertNotIn(rastro, configuracion)
+
     def test_el_cierre_del_worker_conoce_proveedor_y_secretos_a_redactar(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         cierre = worker.split("name: cerrar el resultado para el coordinador")[1]
@@ -2861,8 +3073,11 @@ class Workflows(unittest.TestCase):
     def _render(self, plantilla, contexto):
         def resuelve(expr):
             for alternativa in expr.split("||"):
+                alternativa = alternativa.strip()
+                if alternativa[:1] == alternativa[-1:] == "'":
+                    return alternativa[1:-1]
                 valor = contexto
-                for campo in alternativa.strip().split("."):
+                for campo in alternativa.split("."):
                     valor = valor.get(campo) if isinstance(valor, dict) else None
                 if valor not in (None, "", False, 0):
                     return str(valor)
