@@ -916,18 +916,11 @@ def prepare_review(
         repo, previous_head, head
     )
 
-    blobs, revertidas = {}, ()
-    if delta_calculado:
-        revertidas = tuple(
-            ruta
-            for ruta in delta_rutas
-            if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
-        )
-        for nueva, vieja in renombres:
-            for revision, ruta in ((previous_head, vieja), (head, nueva)):
-                sha = repo.blob_at(revision, ruta)
-                if sha:
-                    blobs[(ruta, sha)] = tuple(repo.cat_file_text(sha).splitlines())
+    revertidas = tuple(
+        ruta
+        for ruta in delta_rutas
+        if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
+    )
 
     historicas, ilegibles_alcance = [], 0
     for path in repo.changed_files(merge_base, head):
@@ -1115,7 +1108,6 @@ def prepare_review(
         delta_calculado=delta_calculado,
         reverted_paths=revertidas,
         renames=tuple(renombres),
-        blobs=blobs,
         omissions=tuple(hechos_omisiones),
         historical_paths=tuple(historicas),
     )

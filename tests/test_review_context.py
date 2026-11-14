@@ -180,39 +180,6 @@ class IncrementalContext(unittest.TestCase):
                 self.assertEqual(result.modo, "incremental")
                 self.assertIn("x.py", result.hechos.reverted_paths)
 
-    def test_rename_keeps_old_and_new_blobs_verified(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
-            base = commit(repo, "base")
-            (repo / "k.py").write_text("".join(lineas(20, "k_")))
-            prev = commit(repo, "prev")
-            git(repo, "mv", "k.py", "m.py")
-            reescrito = lineas(20, "k_")
-            reescrito[5] = "k_cambiada = 99\n"
-            reescrito.extend(["k_extra_a = 1\n", "k_extra_b = 2\n"])
-            (repo / "m.py").write_text("".join(reescrito))
-            head = commit(repo, "head")
-            estado = git(repo, "diff", "--name-status", "-M", prev, head)
-            self.assertEqual(len(estado.splitlines()), 1)
-            self.assertTrue(estado.startswith("R"), estado)
-            blob_prev = git(repo, "rev-parse", f"{prev}:k.py")
-            blob_head = git(repo, "rev-parse", f"{head}:m.py")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-            )
-            self.assertEqual(result.modo, "incremental")
-            self.assertEqual(result.hechos.renames, (("m.py", "k.py"),))
-            self.assertIn(("k.py", blob_prev), result.hechos.blobs)
-            self.assertIn(("m.py", blob_head), result.hechos.blobs)
-            self.assertEqual(set(result.plan.changed_paths), {"m.py"})
-            self.assertEqual(set(result.hechos.changed_paths), {"m.py"})
-
     def test_moving_a_binary_in_a_later_push_still_prepares(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
