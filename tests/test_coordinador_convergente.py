@@ -394,7 +394,7 @@ class AdmisionDelHeadVivo(unittest.TestCase):
             [(r.id, r.state) for r in github.estado().pending_requests],
             [(2, "pending")],
         )
-        self.assertNotIn("No se pudo revisar", github.visible())
+        self.assertIn("Revisión en curso", github.visible())
 
     def test_un_comentario_no_admite_borradores_cerrados_ni_forks(self):
         casos = {

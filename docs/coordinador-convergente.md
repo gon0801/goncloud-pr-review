@@ -40,7 +40,14 @@ Datos:
   (push, admisión, `revisar`, recuperación) poda las demás; el grupo
   compartido del worker ya cancela sus runs, así que ninguna corrida cancelada
   pertenece a una solicitud viva.
-- Cada solicitud se despacha una sola vez. Reintentar es crear otra.
+- Una solicitud pendiente sin ningún run del worker perdió su despacho y se
+  despacha otra vez con el mismo id. Si el run solo tardó en aparecer en la
+  lista, el grupo del worker cancela al anterior y la cosecha cuenta el más
+  nuevo.
+- Reintentar una revisión fallida es crear otra solicitud. Lo hacen un push
+  repetido (reabrir, marcar listo, "Re-run jobs" del coordinador),
+  `ai-review: revisar` y la recuperación manual. Un comentario o el aviso del
+  worker no la reintentan: el aviso de un worker que falla haría un ciclo.
 - `CorridaDelWorker(request_id, run_id, attempt, terminada, conclusion, meta)`:
   el run más nuevo y confiable de cada solicitud, leído de la lista de runs del
   worker. El `run-name` del worker pasa a `PR <n> solicitud <id>` para que un
@@ -57,14 +64,16 @@ Orden de un run del coordinador (`cmd_reconcile`):
    corrida. Con artifact del attempt vigente lo baja, lo autentica igual que
    hoy y lo acepta. Terminada sin artifact (o el run avisado, cuyo `avisar`
    corre después de `execute`): `ReportFailed` reintentable con motivo, que se
-   ve como el aviso de fallo de siempre. En curso o sin corrida: espera. Un
+   ve como el aviso de fallo de siempre. En curso: espera. Sin corrida: se
+   despacha otra vez. Un
    run no confiable (otro workflow, otra rama, SHA fuera de main) o un
    artifact que no autentica no cambia el estado y deja el run del
    coordinador en rojo, como hoy.
 4. Admisión: el head (el del evento en un push; el vivo en el resto, solo si
    el PR está abierto, no es borrador y viene del mismo repo) que no está
    revisado ni tiene una solicitud de revisión viva recibe una solicitud
-   nueva. La recuperación manual siempre crea una. Un resultado vencido ya no
+   nueva. Un push también reemplaza una revisión fallida de su head. La
+   recuperación manual siempre crea una. Un resultado vencido ya no
    crea trabajo: solo se descarta, y la admisión decide.
 5. Si aparecieron IDs de hallazgo nuevos, relee comentarios y fija
    `findings_born_after`.
@@ -73,8 +82,11 @@ Orden de un run del coordinador (`cmd_reconcile`):
    línea "Revisión en curso". Después despacha.
 
 Plantillas: el job del coordinador filtra comentarios (`issue.pull_request` y
-`startsWith(comment.body, 'ai-review:')`) y la concurrencia pasa al job, para
-que un run filtrado no ocupe ni reemplace el lugar pendiente del grupo. Sale
+`contains(comment.body, 'ai-review:')`) y la concurrencia pasa al job, para
+que un run filtrado no ocupe ni reemplace el lugar pendiente del grupo. El
+filtro es `contains` y no `startsWith` porque el script acepta el comando tras
+espacios o saltos de línea: uno filtrado quedaría sin procesar y se aplicaría
+tarde, en otro evento. Sale
 el disparador `workflow_run` (un run despachado con `GITHUB_TOKEN` no lo
 dispara) y el paso de descarga: el script baja lo que cosecha.
 
@@ -121,11 +133,14 @@ De B se toma solo que la recuperación manual sigue existiendo como martillo.
 
 - Concurrencia por job: un job con `if:` falso no entra al grupo. Inferido de
   la documentación de `jobs.<id>.concurrency`; se confirma en vivo.
-- Un run recién despachado aparece en la lista en segundos. Si no, la
-  solicitud espera al siguiente evento (no se re-despacha ni se marca fallida).
+- Un run recién despachado aparece en la lista en segundos. Si otro evento
+  llega antes, la solicitud se despacha dos veces y el grupo del worker
+  cancela el primer run: se pierde lo que llevaba, no el resultado.
+- La lista de runs trae los 100 más nuevos del repo. Una pendiente cuyo run
+  quedó más atrás se despacha otra vez.
 - Un worker en curso al actualizar las plantillas conserva el `run-name` viejo:
-  su resultado no se cosecha y la solicitud espera a `revisar` o al siguiente
-  push.
+  su resultado no se cosecha y el siguiente evento despacha la solicitud otra
+  vez, ya con el título nuevo.
 - Residuo de la carrera del `descartar todo`: un comentario escrito entre la
   relectura del paso 5 y el PATCH (menos de un segundo) se aplica a los
   hallazgos nuevos.

@@ -2221,10 +2221,15 @@ class Origin:
 
 @dataclass(frozen=True)
 class RequestReview:
-    """Push (o recuperación) que pide revisión del target vigente."""
+    """Push (o recuperación) que pide revisión del target vigente.
+
+    reintenta: una automática reemplaza la revisión fallida del mismo target.
+    Solo lo pide un push: el aviso del worker que falló haría un ciclo.
+    """
 
     origin: Origin
     target: ReviewTarget
+    reintenta: bool = False
 
 
 @dataclass(frozen=True)
@@ -2317,18 +2322,26 @@ def _revisado(current, target_json):
 
 def _reconcile_revision(current, evento):
     """Admisión: una automática solo crea trabajo si el target no está revisado
-    ni tiene una revisión viva (repetir el evento no despacha otra vez); una
-    explícita (comando, recuperación) siempre crea una revisión nueva. Cada
-    solicitud se despacha una sola vez: reintentar es crear otra."""
+    ni tiene una revisión viva (repetir el evento no crea otra), salvo que
+    reintente una fallida; una explícita (comando, recuperación) siempre crea
+    una revisión nueva. Reintentar es crear otra solicitud."""
     target_json = evento.target.json()
-    viva = any(
-        r.kind == "review" and r.state != "finished" and _mismo_target(r, target_json)
-        for r in current.pending_requests
-    )
-    if evento.origin.kind not in ("comando", "re-run") and (
-        viva or _revisado(current, target_json)
-    ):
-        return Commit(snapshot=current)
+    if evento.origin.kind not in ("comando", "re-run"):
+        viva = next(
+            (
+                r
+                for r in current.pending_requests
+                if r.kind == "review"
+                and r.state != "finished"
+                and _mismo_target(r, target_json)
+            ),
+            None,
+        )
+        fallida = viva is not None and viva.state == "failed_retryable"
+        if not (evento.reintenta and fallida) and (
+            viva is not None or _revisado(current, target_json)
+        ):
+            return Commit(snapshot=current)
     nueva = _solicitud_nueva(evento, current)
     snapshot = replace(
         current,

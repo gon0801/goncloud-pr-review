@@ -3358,18 +3358,14 @@ class Workflows(unittest.TestCase):
             if token == "!":
                 pos += 1
                 return not primario()
-            if token in ("startsWith", "contains"):
+            if token == "contains":
                 # Actions compara sin distinguir mayúsculas.
                 pos += 2
                 texto = str(valor() or "").lower()
                 pos += 1
                 buscado = valor().lower()
                 pos += 1
-                return (
-                    texto.startswith(buscado)
-                    if token == "startsWith"
-                    else buscado in texto
-                )
+                return buscado in texto
             if pos + 1 < len(tokens) and tokens[pos + 1] in ("==", "!="):
                 izquierda = valor()
                 operador = tokens[pos]

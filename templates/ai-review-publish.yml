@@ -38,10 +38,11 @@ jobs:
       group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
       cancel-in-progress: false
     # El coordinador corre código confiable: nunca un push de fork ni de un
-    # borrador. Un comentario solo cuenta en un PR y si empieza con el comando.
+    # borrador. Un comentario solo cuenta en un PR y si nombra el comando: el
+    # script lo acepta tras espacios, y uno filtrado aquí se aplicaría tarde.
     if: >-
       (github.event_name != 'pull_request_target' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository))
-      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'ai-review:')))
+      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, 'ai-review:')))
     steps:
       - name: checkout del código confiable
         uses: actions/checkout@v4

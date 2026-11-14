@@ -3459,9 +3459,10 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
 
 def _admision(target, pr_data, repo):
     """La revisión que pide cualquier evento. El push trae su head (el `if:`
-    del workflow ya filtró borradores y forks); la recuperación manual siempre
-    pide una nueva; el resto admite el head vivo solo en un PR abierto, no
-    borrador y del propio repo, lo mismo que el `if:` exige a un push."""
+    del workflow ya filtró borradores y forks) y reintenta una revisión
+    fallida; la recuperación manual siempre pide una nueva; el resto admite el
+    head vivo solo en un PR abierto, no borrador y del propio repo, lo mismo
+    que el `if:` exige a un push."""
     nombre = os.environ.get("GITHUB_EVENT_NAME", "")
     recuperacion = nombre == "workflow_dispatch" and not os.environ.get(
         "WORKER_RUN_ID"
@@ -3479,6 +3480,7 @@ def _admision(target, pr_data, repo):
             kind="re-run" if recuperacion else "push", run_id=_run_id()
         ),
         target=target,
+        reintenta=nombre in ("pull_request", "pull_request_target"),
     )
 
 
@@ -3674,11 +3676,12 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
     """Lo que el worker ya dejó para las solicitudes pendientes y la del run
     avisado. De cada una cuenta su run más nuevo y confiable: con artifact del
     attempt vigente, o terminado sin él (el avisado ya terminó su execute
-    aunque su job de aviso siga en curso); si sigue en curso, espera.
-    Devuelve (entregas, hubo_rechazo)."""
+    aunque su job de aviso siga en curso); si sigue en curso, espera. Una
+    pendiente sin ningún run perdió su despacho.
+    Devuelve (entregas, sin_corrida, hubo_rechazo)."""
     vivas = {r.id: r for r in estado.pending_requests if r.state != "finished"}
     if avisado is None and not any(r.state == "pending" for r in vivas.values()):
-        return [], False
+        return [], [], False
     corridas, rechazo, rid_avisado = corridas_por_solicitud(repo, pr), False, None
     for rid, runs in corridas.items():
         if avisado and any(run["id"] == avisado[0] for run in runs):
@@ -3699,11 +3702,14 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
             " ignorado: ya no está pendiente",
             file=sys.stderr,
         )
-    confianza, entregas = {}, []
+    confianza, entregas, sin_corrida = {}, [], []
     for solicitud in vivas.values():
         if solicitud.state != "pending" and solicitud.id != rid_avisado:
             continue
-        for run in corridas.get(solicitud.id, []):
+        if solicitud.id not in corridas:
+            sin_corrida.append(solicitud)
+            continue
+        for run in corridas[solicitud.id]:
             forma = forma_del_run(run)
             meta = {
                 "repository": repo,
@@ -3751,7 +3757,7 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
             elif terminado:
                 entregas.append(Entrega(solicitud, meta, run.get("conclusion")))
             break
-    return entregas, rechazo
+    return entregas, sin_corrida, rechazo
 
 
 def evento_de_entrega(entrega, facts, estado):
@@ -3954,7 +3960,7 @@ def cmd_reconcile(args):
         )
 
     try:
-        entregas, rechazo = cosechar(
+        entregas, sin_corrida, rechazo = cosechar(
             estado, repo, pr, worker_ref, args.work, _run_avisado()
         )
     except Exception as exc:
@@ -3963,7 +3969,11 @@ def cmd_reconcile(args):
             "se reintenta en el próximo evento",
             file=sys.stderr,
         )
-        entregas, rechazo = [], True
+        entregas, sin_corrida, rechazo = [], [], True
+    # Se despacha otra vez; si el run solo tardó en aparecer en la lista, el
+    # grupo del worker cancela al anterior y cuenta el más nuevo.
+    por_despachar = {w.id for w in trabajo}
+    trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
     previo = estado
     revision_entregada = explicacion = None
     for entrega in entregas:
