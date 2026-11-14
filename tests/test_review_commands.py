@@ -579,6 +579,47 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertEqual(carga.snapshot.command_cursor, 5)
         self.assertIsInstance(carga.snapshot.findings[0].status, domain.StatusDismissed)
 
+    def test_id_de_miles_de_digitos_no_tumba_los_comandos_siguientes(self):
+        falso = self._falso(
+            f"{review.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
+            [
+                (5, "ai-review: descartar F" + "9" * 4301),
+                (6, "ai-review: descartar F1"),
+            ],
+        )
+        falso.comentarios[1]["user"] = "visitante"
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            pr_api = mock.Mock(
+                stdout=json.dumps(
+                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                )
+            )
+            with (
+                self._entorno(
+                    GITHUB_EVENT_NAME="issue_comment",
+                    GITHUB_EVENT_PATH=str(payload_path),
+                ),
+                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                mock.patch.object(review, "sh", return_value=pr_api),
+                mock.patch.object(
+                    review,
+                    "collaborator_permission",
+                    side_effect=lambda repo, login: (
+                        "write" if login == "jefe" else "read"
+                    ),
+                ),
+            ):
+                review.cmd_reconcile(argparse.Namespace(work=tmp))
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertEqual(carga.snapshot.command_cursor, 6)
+        self.assertEqual(
+            [type(f.status).__name__ for f in carga.snapshot.findings],
+            ["StatusDismissed", "StatusOpen"],
+            "el descarte del escritor aplica pese al comentario anterior",
+        )
+
     REVISION_PREVIA = {
         "result": "Texto original del revisor.\nCOVERAGE: complete",
         "manifest": {"reviewed": ["a.py", "b.py"], "excluded": []},

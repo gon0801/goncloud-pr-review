@@ -2121,6 +2121,73 @@ class ObservacionDeEntrada(unittest.TestCase):
             (obs.primary_anchor.path, obs.primary_anchor.line), ("a.py", 3)
         )
 
+    def test_numeros_desbordados_y_surrogates_del_modelo_no_impiden_publicar(self):
+        bloque = (
+            '{"findings":['
+            '{"file":"a.py","line":1e999,"severity":"High","title":"linea"},'
+            '{"id":"F' + "9" * 4301 + '","file":"a.py","line":1,'
+            '"severity":"High","title":"id largo"},'
+            '{"file":"a.py","line":2,"severity":"High","title":"mal \\ud800"},'
+            '{"file":"a\\udc00.py","line":3,"severity":"High","title":"ruta"}]}'
+        )
+        texto = f"Detalle.\n\n{PRE}{bloque}{SUF}\nCOVERAGE: complete\n"
+        esperados = [
+            ("F1", "id largo", "a.py"),
+            ("F2", "mal �", "a.py"),
+            ("F3", "ruta", "a�.py"),
+        ]
+
+        directo = review.build_findings(
+            {"result": texto},
+            {"base": "b" * 40, "head": "c" * 40, "reviewed": ["a.py"], "mode": "full"},
+            None,
+            "o/r",
+            "1",
+            "bot",
+            [],
+        )
+        self.assertIsInstance(directo["block"], str)
+        self.assertEqual(
+            [(f["id"], f["title"], f["file"]) for f in directo["merged"]], esperados
+        )
+
+        revision = domain.Revision(
+            base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+        )
+        estado = domain.Snapshot(
+            schema=3,
+            generation=1,
+            revision=None,
+            next_id=1,
+            completion=domain.UNKNOWN,
+            findings=[],
+            command_cursor=0,
+        )
+        hechos = domain.RepositoryFacts(revision=revision, delta_calculado=True)
+        reporte = domain.validar_reporte(
+            tuple(
+                domain.observation_de_entrada(e)
+                for e in review.parse_model_findings(texto)["findings"]
+            ),
+            domain.COMPLETE_CLAIM,
+            hechos,
+        )
+        coordinado = domain.accept_report(
+            estado,
+            domain.ReviewPlan(revision=revision, policy=domain.ReviewPolicy()),
+            reporte,
+        )
+        self.assertIsInstance(
+            domain.encode_snapshot(coordinado.snapshot), domain.EncodedCheckpoint
+        )
+        self.assertEqual(
+            [
+                (f.id, f.title, f.primary_anchor.path)
+                for f in coordinado.snapshot.findings
+            ],
+            esperados,
+        )
+
 
 # ---- F0 r8: título único con otro P_leg en el rango observado ----
 
