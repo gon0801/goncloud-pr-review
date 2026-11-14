@@ -212,6 +212,15 @@ class Receipt:
     effect: str
 
 
+# Nadie relee los recibos para decidir: la idempotencia de comandos la da
+# command_cursor. Sin tope, cualquiera que comente llenaba el presupuesto.
+RECIBOS_MAX = 20
+
+
+def _con_recibo(recibos, recibo):
+    return (*recibos, recibo)[-RECIBOS_MAX:]
+
+
 @dataclass
 class StorageBudget:
     max_bytes: int = STATE_BYTES_PROPOSED
@@ -1056,14 +1065,14 @@ def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
         descartados.append(f.id)
     if not descartados:
         return snapshot
-    recibos = list(snapshot.receipts)
+    recibos = snapshot.receipts
     if snapshot.schema == 3:
         efecto = (
             f"descartar todo: {', '.join(sorted(descartados))}"
             if todos
             else f"descartados por comando: {', '.join(sorted(descartados))}"
         )
-        recibos.append(Receipt(command_id=comment_id, effect=efecto))
+        recibos = _con_recibo(recibos, Receipt(command_id=comment_id, effect=efecto))
     return replace(snapshot, findings=hallazgos, receipts=tuple(recibos))
 
 
@@ -2465,9 +2474,9 @@ def digest_de_hallazgo(finding):
 
 
 def _consumido(current, cid, efecto=None, recibo=True):
-    recibos = list(current.receipts)
+    recibos = current.receipts
     if recibo and efecto:
-        recibos.append(Receipt(command_id=cid, effect=efecto))
+        recibos = _con_recibo(recibos, Receipt(command_id=cid, effect=efecto))
     return replace(
         current,
         command_cursor=max(current.command_cursor, cid),
