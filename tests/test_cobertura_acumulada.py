@@ -817,15 +817,15 @@ class Unreviewed(unittest.TestCase):
         texto = (
             "prosa\n" + UNREVIEWED + '["c.py", "d/x.py"] -->\nCOVERAGE: partial | algo'
         )
-        self.assertEqual(review_sticky.unreviewed_de(texto), {"c.py", "d/x.py"})
+        self.assertEqual(domain.leer_cierre(texto).sin_revisar, {"c.py", "d/x.py"})
 
     def test_falta_o_mal_formado_da_none(self):
-        self.assertIsNone(review_sticky.unreviewed_de("prosa\nCOVERAGE: partial"))
+        self.assertIsNone(domain.leer_cierre("prosa\nCOVERAGE: partial").sin_revisar)
         self.assertIsNone(
-            review_sticky.unreviewed_de("x\n" + UNREVIEWED + '["c" -->\nCOVERAGE: partial')
+            domain.leer_cierre("x\n" + UNREVIEWED + '["c" -->\nCOVERAGE: partial').sin_revisar
         )
         self.assertIsNone(
-            review_sticky.unreviewed_de(UNREVIEWED + '{"a": 1} -->\nCOVERAGE: partial')
+            domain.leer_cierre(UNREVIEWED + '{"a": 1} -->\nCOVERAGE: partial').sin_revisar
         )
 
     def test_imitacion_en_prosa_no_gana_al_bloque_real(self):
@@ -836,7 +836,7 @@ class Unreviewed(unittest.TestCase):
             + UNREVIEWED
             + '["real.py"] -->\nCOVERAGE: partial'
         )
-        self.assertEqual(review_sticky.unreviewed_de(texto), {"real.py"})
+        self.assertEqual(domain.leer_cierre(texto).sin_revisar, {"real.py"})
 
     def test_f2_imitacion_en_bloque_de_codigo_anula_la_declaracion(self):
         """F2: con más de un bloque en línea propia no hay declaración
@@ -853,11 +853,11 @@ class Unreviewed(unittest.TestCase):
             + UNREVIEWED
             + "[] -->\n```\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review_sticky.unreviewed_de(texto))
+        self.assertIsNone(domain.leer_cierre(texto).sin_revisar)
         texto_dos = (
             "v\n" + real + "\n" + UNREVIEWED + "[] -->\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review_sticky.unreviewed_de(texto_dos))
+        self.assertIsNone(domain.leer_cierre(texto_dos).sin_revisar)
 
     def test_f2_bloque_fuera_de_posicion_no_declara(self):
         bloque = UNREVIEWED + '["c.py"] -->'
@@ -866,8 +866,8 @@ class Unreviewed(unittest.TestCase):
             + bloque
             + "\nprosa que se interpone\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review_sticky.unreviewed_de(texto))
-        self.assertIsNone(review_sticky.unreviewed_de("solo prosa\n" + bloque))
+        self.assertIsNone(domain.leer_cierre(texto).sin_revisar)
+        self.assertIsNone(domain.leer_cierre("solo prosa\n" + bloque).sin_revisar)
 
 
 class PresupuestoContinuacion(unittest.TestCase):

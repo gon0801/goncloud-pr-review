@@ -319,7 +319,7 @@ class EscrituraCompatible(unittest.TestCase):
         )
         self.assertEqual(estado["next"], 4)
         self.assertEqual(estado["seen"], 42)
-        self.assertEqual(domain.split_coverage(comentario)[1], "complete")
+        self.assertEqual(domain.leer_cierre(comentario).cobertura, "complete")
         bloque = review.serialize_findings(estado)
         de_vuelta = review.parse_findings_block(bloque)
         self.assertEqual([f["id"] for f in de_vuelta["findings"]], ["F1", "F2", "F3"])

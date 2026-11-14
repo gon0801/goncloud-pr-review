@@ -18,9 +18,9 @@ from review_domain import (
     UNREVIEWED_PREFIX,
     find_model_findings_block,
     finding_number,
+    leer_cierre,
     parse_model_findings,
     rutas_declaradas,
-    split_coverage,
     strip_model_findings_block,
 )
 
@@ -469,7 +469,7 @@ def falta_bloque(texto):
     conservar = politica_de_identidad() == "anchors"
     return (
         parse_model_findings(texto, conservar_anclas=conservar) is None
-        or split_coverage(texto)[1] is None
+        or leer_cierre(texto).cobertura is None
     )
 
 
@@ -590,8 +590,11 @@ def cerrar_sin_turnos(work, result_path, name, key, cmd, deadline):
 
 def partes_de_respuesta(texto):
     lineas = texto.splitlines()
-    leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
-    leidas = {i: c for i, c in leidas.items() if c[0] is not None}
+    leidas = {}
+    for i, ln in enumerate(lineas):
+        cierre = leer_cierre(ln)
+        if cierre.cobertura is not None:
+            leidas[i] = (cierre.cobertura, cierre.detalle)
     cobertura = None
     if leidas:
         # Gana la más conservadora: citar el formato no sube a complete una

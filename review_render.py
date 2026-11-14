@@ -11,7 +11,7 @@ from review_domain import (
     OPEN,
     RESOLVED,
     SEVERITIES,
-    split_coverage,
+    leer_cierre,
     strip_model_findings_block,
 )
 from review_sticky import (
@@ -274,7 +274,8 @@ AVISO_SIN_ESPACIO = aviso_md(
 def compose(result, manifest, *, sha, provider, findings=None, budget=None, libro=None):
     provider = PROVIDERS[provider]
     text = (result or {}).get("result") or ""
-    review, coverage, detail = split_coverage(text)
+    cierre = leer_cierre(text)
+    review, coverage, detail = cierre.prosa, cierre.cobertura, cierre.detalle
     budget_cut = [e for e in manifest["excluded"] if e["reason"] == "budget"]
 
     warnings = []

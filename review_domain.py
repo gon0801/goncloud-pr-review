@@ -436,13 +436,25 @@ UNREVIEWED_PREFIX = "<!-- ai-review:unreviewed="
 LIBRO_MAX_ENTRADAS = 400
 
 
-def cierre_de_respuesta(text):
-    """La declaración final del modelo: (prosa, estado, detalle, línea
-    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
-    la última línea no vacía (una de solo ``` o ** también cierra, así que
-    una cita dentro de un fence final no declara) y unreviewed, la última no
-    vacía antes de ella."""
-    lines = (text or "").rstrip().splitlines()
+@dataclass(frozen=True)
+class Cierre:
+    prosa: str
+    cobertura: str | None
+    detalle: str
+    sin_revisar: frozenset | None
+
+
+def leer_cierre(texto) -> Cierre:
+    """La declaración final del modelo: prosa, cobertura, detalle y archivos
+    sin revisar. La autentica la posición, no el texto: COVERAGE es la última
+    línea no vacía (una de solo ``` o ** también cierra, así que una cita
+    dentro de un fence final no declara) y unreviewed, la última no vacía
+    antes de ella. Vale solo la línea unreviewed en columna 0, única con el
+    prefijo en todo el texto y con JSON de lista de rutas: cualquier desvío
+    (imitaciones incluidas) anula la declaración. Una declaración fuera de
+    lugar dice que el modelo no leyó algo: no es complete y, sin autenticación,
+    no acredita archivos."""
+    lines = (texto or "").rstrip().splitlines()
     line = lines[-1].strip().strip("`*") if lines else ""
     if line.upper().startswith("COVERAGE:"):
         status, _, detail = line.split(":", 1)[1].strip().partition("|")
@@ -450,15 +462,22 @@ def cierre_de_respuesta(text):
         if status in ("complete", "partial"):
             previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
             declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
-            if declaracion and rutas_declaradas(declaracion) != set():
+            rutas = rutas_declaradas(declaracion) if declaracion else None
+            if declaracion and rutas != set():
                 status = "partial"  # declaró archivos sin leer: no es complete
+            declaraciones = sum(
+                ln.startswith(UNREVIEWED_PREFIX) for ln in (texto or "").splitlines()
+            )
+            if status == "complete" and declaraciones > bool(declaracion):
+                status = "partial"
             prosa = "\n".join(lines[:-1]).rstrip()
-            return prosa, status, detail.strip(), declaracion
-    return (text or "").rstrip(), None, "", None
-
-
-def split_coverage(text):
-    return cierre_de_respuesta(text)[:3]
+            sin_revisar = (
+                frozenset(rutas)
+                if declaracion and declaraciones == 1 and rutas is not None
+                else None
+            )
+            return Cierre(prosa, status, detail.strip(), sin_revisar)
+    return Cierre((texto or "").rstrip(), None, "", None)
 
 
 def rutas_declaradas(linea):

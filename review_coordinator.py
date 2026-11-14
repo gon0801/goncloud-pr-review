@@ -54,8 +54,8 @@ from review_sticky import (
 )
 from review_domain import (
     FINDING_ID_DIGITS,
+    leer_cierre,
     parse_model_findings,
-    split_coverage,
     strip_findings_block,
     strip_model_findings_block,
 )
@@ -1343,7 +1343,7 @@ def texto_de_explicacion(artifact):
     Además de neutralizar_marcadores, no puede imitar las secciones que el
     re-render busca (encabezados bajan a ####, también con sangría) ni los
     avisos del programa (una cita `> **Comando no entendido:**` deja de serlo)."""
-    texto, _, _ = split_coverage(artifact.get("result") or "")
+    texto = leer_cierre(artifact.get("result") or "").prosa
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
     texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
     texto = neutralizar_marcadores(prosa_del_modelo(texto))
