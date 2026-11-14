@@ -22,6 +22,7 @@ from review_config import (
     politica_de_identidad,
 )
 import review_domain
+import review_github
 import review_run
 from review_render import (
     ALCANCE_INICIO,
@@ -417,44 +418,6 @@ def parse_dismiss_command(body):
     return ids, all_open
 
 
-def collaborator_permission(repo, user):
-    """Push access of a comment author, or None. A failed query is logged to
-    stderr (never silent: without it B4 would die quietly); no-write is not."""
-    try:
-        proc = sh(
-            "gh",
-            "api",
-            f"repos/{repo}/collaborators/{user}/permission",
-            "--jq",
-            ".permission",
-            check=False,
-        )
-    except OSError as exc:
-        print(
-            f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
-            f"su descarte se ignora",
-            file=sys.stderr,
-        )
-        return None
-    if proc.returncode != 0 and "HTTP 404" in (proc.stderr or ""):
-        # A login that no longer exists: a definitive "no", not a failure to retry.
-        print(
-            f"ai-review: {user} no existe para este repo (HTTP 404); su descarte se ignora",
-            file=sys.stderr,
-        )
-        return "none"
-    if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()
-        detail = f": {tail[-1][:200]}" if tail else ""
-        print(
-            f"ai-review: no se pudo verificar el permiso de {user} "
-            f"(gh api salió {proc.returncode}{detail}); su descarte se ignora",
-            file=sys.stderr,
-        )
-        return None
-    return proc.stdout.strip() or None
-
-
 def collect_dismissals(repo, pr, bot_login, comments, after=0):
     """Dismiss commands from writer+ commenters posted after comment id `after`.
 
@@ -472,7 +435,7 @@ def collect_dismissals(repo, pr, bot_login, comments, after=0):
         if not found and not wants_all:
             continue
         if user not in checked:
-            checked[user] = collaborator_permission(repo, user)
+            checked[user] = review_github.collaborator_permission(repo, user)
         if checked[user] is None:
             break  # permission unknown (API failure): this and later commands wait for the next push
         last = max(last, cid)
@@ -482,50 +445,12 @@ def collect_dismissals(repo, pr, bot_login, comments, after=0):
     return ids, all_open, last
 
 
-def sh(*args, check=True, **kw):
-    return subprocess.run(args, check=check, text=True, capture_output=True, **kw)
-
-
 def shb(*args, check=True, **kw):
     return subprocess.run(args, check=check, capture_output=True, **kw)
 
 
 def _repo_actual():
-    return GitRepository(Path(sh("git", "rev-parse", "--show-toplevel").stdout.strip()))
-
-
-def set_output(key, value):
-    with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-        fh.write(f"{key}={value}\n")
-
-
-def avisar_bloque_sin_cierre(texto):
-    """El bloque del modelo se recuperó sin su ` -->`: se publica, pero queda a la vista."""
-    found = find_model_findings_block(texto)
-    if found is not None and not found[3]:
-        print(
-            "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
-            "tras el JSON; se recuperó del JSON completo"
-        )
-
-
-def informar_revision(revisado):
-    """reviewed=true|false para el workflow: un fail-soft termina en verde y no
-    debe leerse como una revisión del SHA."""
-    if os.environ.get("GITHUB_OUTPUT"):
-        set_output("reviewed", "true" if revisado else "false")
-
-
-def fetch_all_comments(repo, pr):
-    out = sh(
-        "gh",
-        "api",
-        "--paginate",
-        f"repos/{repo}/issues/{pr}/comments?per_page=100",
-        "--jq",
-        ".[] | {id: .id, user: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at} | tojson",
-    ).stdout
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+    return GitRepository(Path(review_github.sh("git", "rev-parse", "--show-toplevel").stdout.strip()))
 
 
 def _snapshot_previo(prev):
@@ -542,7 +467,7 @@ def _snapshot_previo(prev):
 def cmd_gate(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
-    comments = fetch_all_comments(repo, pr)
+    comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
@@ -564,9 +489,9 @@ def cmd_gate(args):
         print(
             f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite."
         )
-        set_output("skip", "true")
+        review_github.set_output("skip", "true")
     else:
-        set_output("skip", "false")
+        review_github.set_output("skip", "false")
 
 
 def cmd_prepare(args):
@@ -574,7 +499,7 @@ def cmd_prepare(args):
     work.mkdir(parents=True, exist_ok=True)
     head = env("HEAD_SHA")
     base = env("BASE_SHA")
-    merge_base = sh("git", "merge-base", base, head).stdout.strip()
+    merge_base = review_github.sh("git", "merge-base", base, head).stdout.strip()
     repo = GitRepository(Path.cwd())
 
     prev_file = work / "prev.json"
@@ -586,13 +511,13 @@ def cmd_prepare(args):
     prev_sha = prev.get("sha")
     if prev_sha:
         have = (
-            sh(
+            review_github.sh(
                 "git", "cat-file", "-e", f"{prev_sha}^{{commit}}", check=False
             ).returncode
             == 0
         )
         if not have:
-            sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
+            review_github.sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
     policy = replace(
         politica_de_revision(),
         diff_max_bytes=int(os.environ.get("MAX_DIFF_BYTES", "1500000")),
@@ -740,7 +665,7 @@ def cmd_prepare(args):
         pr = _pr_via_api()
     (work / "pr.md").write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
 
-    rules = sh("git", "show", f"{base}:.github/ai-review.md", check=False)
+    rules = review_github.sh("git", "show", f"{base}:.github/ai-review.md", check=False)
     system = Path(args.prompt).read_text()
     if rules.returncode == 0 and rules.stdout.strip():
         system += (
@@ -762,7 +687,7 @@ def _pr_via_api():
     if not repo or not pr:
         return {}
     try:
-        respuesta = sh(
+        respuesta = review_github.sh(
             "gh",
             "api",
             f"repos/{repo}/pulls/{pr}",
@@ -840,7 +765,7 @@ def claude_prefix():
 
 def claude_version_ok(claude_bin):
     try:
-        found = sh(str(claude_bin), "--version", check=False)
+        found = review_github.sh(str(claude_bin), "--version", check=False)
     except OSError:
         return False
     return found.returncode == 0 and CLAUDE_CODE_VERSION in (found.stdout or "")
@@ -977,7 +902,7 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
         if (ancla.path, ancla.blob_sha) in blobs:
             continue
         try:
-            contenido = sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
+            contenido = review_github.sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
         except Exception:
             continue
         if contenido:
@@ -1601,9 +1526,9 @@ def cmd_publish(args):
     name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
     name = result.get("review_provider", name)
-    avisar_bloque_sin_cierre(result.get("result") or "")
+    review_github.avisar_bloque_sin_cierre(result.get("result") or "")
     manifest = json.loads((work / "manifest.json").read_text())
-    comments = fetch_all_comments(repo, pr)
+    comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
 
     revisado = False
@@ -1723,7 +1648,7 @@ def cmd_publish(args):
     if not escribir:
         print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
     elif sticky:
-        sh(
+        review_github.sh(
             "gh",
             "api",
             "-X",
@@ -1734,7 +1659,7 @@ def cmd_publish(args):
         )
         print(f"ai-review: comentario {sticky['id']} actualizado")
     else:
-        sh(
+        review_github.sh(
             "gh",
             "api",
             "-X",
@@ -1749,7 +1674,7 @@ def cmd_publish(args):
     if summary:
         with open(summary, "a") as fh:
             fh.write(summary_text + "\n")
-    informar_revision(revisado)
+    review_github.informar_revision(revisado)
 
 
 def _parser():
@@ -1795,14 +1720,14 @@ class ComentariosGh:
         self.repo, self.pr = repo, pr
 
     def leer(self):
-        return fetch_all_comments(self.repo, self.pr)
+        return review_github.fetch_all_comments(self.repo, self.pr)
 
     def parchar(self, cid, body):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
             fh.write(json.dumps({"body": body}))
             ruta = fh.name
         try:
-            sh(
+            review_github.sh(
                 "gh",
                 "api",
                 "-X",
@@ -1819,7 +1744,7 @@ class ComentariosGh:
             fh.write(json.dumps({"body": body}))
             ruta = fh.name
         try:
-            sh(
+            review_github.sh(
                 "gh",
                 "api",
                 "-X",
@@ -1833,7 +1758,7 @@ class ComentariosGh:
 
 
 def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
-    sh(
+    review_github.sh(
         "gh",
         "workflow",
         "run",
@@ -2017,7 +1942,7 @@ def corridas_por_solicitud(repo, pr):
     El run-name del worker es `PR <n> solicitud <id>`: así se atribuye también
     un run que terminó sin artifact."""
     datos = json.loads(
-        sh(
+        review_github.sh(
             "gh",
             "api",
             f"repos/{repo}/actions/workflows/ai-review-worker.yml/runs"
@@ -2044,13 +1969,13 @@ def sha_de_confianza(repo, worker_ref, sha_del_run, cache):
     run si es un ancestro suyo (main pudo avanzar mientras el worker corría)."""
     if "punta" not in cache:
         cache["punta"] = json.loads(
-            sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
+            review_github.sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
         ).get("sha")
     if not sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
         return cache["punta"]
     if sha_del_run not in cache:
         comparacion = json.loads(
-            sh("gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}").stdout
+            review_github.sh("gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}").stdout
         )
         cache[sha_del_run] = comparacion.get("status") in ("ahead", "identical")
     return sha_del_run if cache[sha_del_run] else cache["punta"]
@@ -2064,7 +1989,7 @@ def artefacto_del_run(repo, run, request_id, work):
         f"-run-{run['id']}-attempt-{run['run_attempt']}"
     )
     listado = json.loads(
-        sh(
+        review_github.sh(
             "gh", "api", f"repos/{repo}/actions/runs/{run['id']}/artifacts?per_page=100"
         ).stdout
     )
@@ -2074,7 +1999,7 @@ def artefacto_del_run(repo, run, request_id, work):
     ):
         return None
     destino = Path(work) / "cosecha" / f"{run['id']}-{run['run_attempt']}"
-    sh(
+    review_github.sh(
         "gh",
         "run",
         "download",
@@ -2327,7 +2252,7 @@ def cmd_reconcile(args):
     if event_name in ("issue_comment", "workflow_dispatch"):
         # el head/base vivos salen del PR por API, nunca del checkpoint
         try:
-            pr_data = json.loads(sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
+            pr_data = json.loads(review_github.sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
             head = pr_data["head"]["sha"]
             base = pr_data["base"]["sha"]
         except Exception as exc:
@@ -2358,7 +2283,7 @@ def cmd_reconcile(args):
     )
 
     def permisos(login_consultado):
-        return collaborator_permission(repo, login_consultado)
+        return review_github.collaborator_permission(repo, login_consultado)
 
     estado, trabajo, rechazos = review_domain.procesar_comandos(
         current,
@@ -2564,7 +2489,7 @@ def cmd_close_result(args):
         ruta = work / cruda
         if ruta.exists():
             ruta.write_text(redact(ruta.read_text(), secretos))
-    avisar_bloque_sin_cierre(texto)
+    review_github.avisar_bloque_sin_cierre(texto)
     # La identidad viaja en el paquete desde la solicitud del coordinador.
     identidad = paquete.get("finding_identity") or politica_de_identidad()
     if identidad not in IDENTIDADES:
@@ -2614,7 +2539,7 @@ def cmd_close_result(args):
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
-    informar_revision(ERROR_KEY not in paquete)
+    review_github.informar_revision(ERROR_KEY not in paquete)
     resumen = os.environ.get("GITHUB_STEP_SUMMARY")
     if ERROR_KEY in paquete and resumen:
         with open(resumen, "a") as fh:

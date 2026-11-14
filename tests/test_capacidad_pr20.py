@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
 
+import review_github
+
 import review_render
 
 import review_sticky
@@ -1072,7 +1074,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
                         "GITHUB_OUTPUT": str(salida),
                     },
                 ),
-                mock.patch.object(review, "fetch_all_comments", return_value=comments),
+                mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
                 mock.patch.object(review, "_repo_actual", return_value=None),
                 mock.patch.object(review, "libro_actualizado", return_value=None),
             ):
@@ -1086,7 +1088,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
 
                     return Hecho()
 
-                with mock.patch.object(review, "sh", falso_sh):
+                with mock.patch.object(review_github, "sh", falso_sh):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             cuerpo = json.loads((work / "comment.json").read_text())["body"]
             revisado = salida.read_text().strip() if salida.exists() else ""

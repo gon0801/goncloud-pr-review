@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
@@ -80,7 +81,7 @@ def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
     comentarios = (
         [{"id": 1, "user": BOT, "body": cuerpo_previo}] if cuerpo_previo else []
     )
-    sh_real = review.sh
+    sh_real = review_github.sh
 
     def correr(*args, **kwargs):
         if args[0] == "git":
@@ -97,8 +98,8 @@ def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
                 "GITHUB_STEP_SUMMARY": "",
             },
         ),
-        mock.patch.object(review, "fetch_all_comments", return_value=comentarios),
-        mock.patch.object(review, "sh", side_effect=correr),
+        mock.patch.object(review_github, "fetch_all_comments", return_value=comentarios),
+        mock.patch.object(review_github, "sh", side_effect=correr),
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):

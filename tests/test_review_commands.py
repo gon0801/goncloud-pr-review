@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_render
 import review_sticky
 import review_config
@@ -499,9 +500,9 @@ class CoordinadorComandos(unittest.TestCase):
                     )
                 )
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", return_value=pr_api):
+                    with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
-                            review,
+                            review_github,
                             "collaborator_permission",
                             return_value="write",
                         ):
@@ -527,7 +528,7 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_PATH=str(payload_path2),
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso2):
-                    with mock.patch.object(review, "sh", return_value=pr_api):
+                    with mock.patch.object(review_github, "sh", return_value=pr_api):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(falso2.patches, [])
 
@@ -568,9 +569,9 @@ class CoordinadorComandos(unittest.TestCase):
                     )
                 )
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", return_value=pr_api):
+                    with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
-                            review,
+                            review_github,
                             "collaborator_permission",
                             return_value="write",
                         ):
@@ -604,9 +605,9 @@ class CoordinadorComandos(unittest.TestCase):
                     GITHUB_EVENT_PATH=str(payload_path),
                 ),
                 mock.patch.object(review, "ComentariosGh", return_value=falso),
-                mock.patch.object(review, "sh", return_value=pr_api),
+                mock.patch.object(review_github, "sh", return_value=pr_api),
                 mock.patch.object(
-                    review,
+                    review_github,
                     "collaborator_permission",
                     side_effect=lambda repo, login: (
                         "write" if login == "jefe" else "read"
@@ -644,9 +645,9 @@ class CoordinadorComandos(unittest.TestCase):
                     GITHUB_EVENT_PATH=str(payload_path),
                 ),
                 mock.patch.object(review, "ComentariosGh", return_value=falso),
-                mock.patch.object(review, "sh", return_value=pr_api),
+                mock.patch.object(review_github, "sh", return_value=pr_api),
                 mock.patch.object(
-                    review,
+                    review_github,
                     "collaborator_permission",
                     side_effect=lambda repo, login: (
                         "write" if login == "jefe" else "read"
@@ -694,9 +695,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
-                            review, "collaborator_permission", return_value="write"
+                            review_github, "collaborator_permission", return_value="write"
                         ):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
@@ -721,9 +722,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
-                            review, "collaborator_permission", return_value="write"
+                            review_github, "collaborator_permission", return_value="write"
                         ):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         return falso.leer()[0]["body"]
@@ -756,9 +757,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
-                            review, "collaborator_permission", return_value="write"
+                            review_github, "collaborator_permission", return_value="write"
                         ):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
@@ -834,9 +835,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
-                            review, "collaborator_permission", return_value="write"
+                            review_github, "collaborator_permission", return_value="write"
                         ):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
@@ -884,9 +885,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
-                            review, "collaborator_permission", return_value="write"
+                            review_github, "collaborator_permission", return_value="write"
                         ):
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
@@ -1206,7 +1207,7 @@ class CoordinadorComandos(unittest.TestCase):
                 WORKER_ATTEMPT="1",
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=gh_falso):
+                    with mock.patch.object(review_github, "sh", side_effect=gh_falso):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertIn(
@@ -1264,9 +1265,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", return_value=pr_api):
+                    with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
-                            review,
+                            review_github,
                             "collaborator_permission",
                             side_effect=RuntimeError("API caída"),
                         ):
@@ -1426,8 +1427,8 @@ class EndurecimientoFrontera(unittest.TestCase):
             capturada["jq"] = args[args.index("--jq") + 1]
             return proc
 
-        with mock.patch.object(review, "sh", side_effect=falso_sh):
-            comentarios = review.fetch_all_comments("o/r", 1)
+        with mock.patch.object(review_github, "sh", side_effect=falso_sh):
+            comentarios = review_github.fetch_all_comments("o/r", 1)
         self.assertIn("created_at", capturada["jq"])
         self.assertIn("updated_at", capturada["jq"])
         self.assertEqual(comentarios[0]["created_at"], "2026-10-06T10:00:00Z")

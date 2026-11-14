@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
 
+import review_github
+
 import review_render
 
 import review_sticky
@@ -92,7 +94,7 @@ def publicar(work, head, manifest, result, body=None, repo=None):
     (work / "manifest.json").write_text(json.dumps(manifest))
     (work / "result.json").write_text(json.dumps(result))
     comments = [{"id": 1, "user": "github-actions[bot]", "body": body}] if body else []
-    real_sh = review.sh
+    real_sh = review_github.sh
 
     def run_command(*args, **kwargs):
         if args[0] == "git":
@@ -109,9 +111,9 @@ def publicar(work, head, manifest, result, body=None, repo=None):
                 "GITHUB_STEP_SUMMARY": "",
             },
         ),
-        mock.patch.object(review, "fetch_all_comments", return_value=comments),
-        mock.patch.object(review, "set_output"),
-        mock.patch.object(review, "sh", side_effect=run_command),
+        mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+        mock.patch.object(review_github, "set_output"),
+        mock.patch.object(review_github, "sh", side_effect=run_command),
         contextlib.redirect_stdout(io.StringIO()),
     ):
         review.cmd_publish(argparse.Namespace(work=str(work)))
@@ -130,8 +132,8 @@ def pasar_gate(work, head, body, attempt="1"):
                 "RUN_ATTEMPT": attempt,
             },
         ),
-        mock.patch.object(review, "fetch_all_comments", return_value=comments),
-        mock.patch.object(review, "set_output") as output,
+        mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+        mock.patch.object(review_github, "set_output") as output,
         contextlib.redirect_stdout(io.StringIO()),
     ):
         review.cmd_gate(argparse.Namespace(work=str(work)))

@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_sticky
 import review_config
 import review_domain as domain  # noqa: E402
@@ -1050,7 +1051,7 @@ class CoordinadorCli(unittest.TestCase):
                 WORKER_ATTEMPT="1",
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=falso_sh):
+                    with mock.patch.object(review_github, "sh", side_effect=falso_sh):
                         try:
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
                         except SystemExit as exc:

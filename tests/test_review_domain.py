@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
@@ -553,9 +554,9 @@ class PublicacionConMemoriaV2(unittest.TestCase):
             with mock.patch.dict(os.environ, envs):
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=[sticky]
+                        review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]

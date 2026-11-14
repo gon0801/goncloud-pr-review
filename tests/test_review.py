@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_render
 import review_sticky
 import review_run
@@ -2867,7 +2868,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(stdout=json.dumps({"artifacts": listado}))
 
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(review, "sh", side_effect=sh_falso):
+            with mock.patch.object(review_github, "sh", side_effect=sh_falso):
                 cosechado = review.artefacto_del_run(
                     "o/r", {"id": 4242, "run_attempt": 3}, 7, tmp
                 )
@@ -3244,7 +3245,7 @@ class Workflows(unittest.TestCase):
                 )
                 evento = Path(work) / "event.json"
                 evento.write_text("{}")
-                sh_real = review.sh
+                sh_real = review_github.sh
 
                 def sh_mixto(*args, **kw):
                     if args[0] == "gh":
@@ -3262,7 +3263,7 @@ class Workflows(unittest.TestCase):
                         env_de("preparar contexto", {"GITHUB_EVENT_PATH": str(evento)}),
                         clear=False,
                     ):
-                        with mock.patch.object(review, "sh", sh_mixto):
+                        with mock.patch.object(review_github, "sh", sh_mixto):
                             review.cmd_prepare(
                                 argparse.Namespace(
                                     work=work, prompt=str(ROOT / "prompt.md")
@@ -3337,6 +3338,7 @@ class Workflows(unittest.TestCase):
                 "review_run.py",
                 "review_sticky.py",
                 "review_render.py",
+                "review_github.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3473,7 +3475,7 @@ class Workflows(unittest.TestCase):
             with tempfile.TemporaryDirectory() as work:
 
                 def sh_mixto(returncode, salida):
-                    real = review.sh
+                    real = review_github.sh
 
                     def falso(*args, **kw):
                         if args[0] == "gh":
@@ -3495,7 +3497,7 @@ class Workflows(unittest.TestCase):
                         },
                         clear=False,
                     ):
-                        with mock.patch.object(review, "sh", con_mock):
+                        with mock.patch.object(review_github, "sh", con_mock):
                             with contextlib.chdir(repo):
                                 review.cmd_prepare(
                                     argparse.Namespace(
@@ -3847,7 +3849,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="")
 
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
-        with mock.patch.object(review, "sh", sh_falso):
+        with mock.patch.object(review_github, "sh", sh_falso):
             with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
                 review.despachar_worker(
                     solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
@@ -4038,7 +4040,7 @@ class Workflows(unittest.TestCase):
         base_env.update(entorno)
         with mock.patch.dict(os.environ, base_env, clear=False):
             with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                with mock.patch.object(review, "sh", sh_falso):
+                with mock.patch.object(review_github, "sh", sh_falso):
                     with mock.patch.object(
                         review,
                         "despachar_worker",
@@ -4483,7 +4485,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="")
 
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
-        with mock.patch.object(review, "sh", sh_falso):
+        with mock.patch.object(review_github, "sh", sh_falso):
             review.despachar_worker(
                 solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
             )
@@ -4912,7 +4914,7 @@ class DismissCommands(unittest.TestCase):
         ]
         perms = {"owner": "write", "reader": "read", "ghost": None}
         with mock.patch.object(
-            review,
+            review_github,
             "collaborator_permission",
             side_effect=lambda repo, user: perms[user],
         ) as perm:
@@ -4931,7 +4933,7 @@ class DismissCommands(unittest.TestCase):
             for i, u in ((21, "m"), (22, "a"))
         ]
         with mock.patch.object(
-            review, "collaborator_permission", side_effect=["maintain", "admin"]
+            review_github, "collaborator_permission", side_effect=["maintain", "admin"]
         ):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments),
@@ -4939,10 +4941,10 @@ class DismissCommands(unittest.TestCase):
             )
 
     def test_permission_uses_collaborators_endpoint_without_token_in_args(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 0
             fake.return_value.stdout = "write\n"
-            self.assertEqual(review.collaborator_permission("o/r", "ana"), "write")
+            self.assertEqual(review_github.collaborator_permission("o/r", "ana"), "write")
             args = fake.call_args[0]
             self.assertEqual(
                 args[:3], ("gh", "api", "repos/o/r/collaborators/ana/permission")
@@ -4952,27 +4954,27 @@ class DismissCommands(unittest.TestCase):
             )
 
     def test_unknown_user_is_not_writer(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 0
             fake.return_value.stdout = "\n"
-            self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
+            self.assertIsNone(review_github.collaborator_permission("o/r", "nadie"))
 
     def test_failed_permission_query_is_logged_not_silent(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stdout = ""
             fake.return_value.stderr = "gh: Server Error (HTTP 500)\n"
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
             self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
             self.assertIn("HTTP 500", err.getvalue())
 
     def test_permission_query_without_gh_is_logged_not_silent(self):
-        with mock.patch.object(review, "sh", side_effect=OSError("sin gh")):
+        with mock.patch.object(review_github, "sh", side_effect=OSError("sin gh")):
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
             self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
             self.assertIn("sin gh", err.getvalue())
 
@@ -5656,9 +5658,9 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
                     },
                 ),
                 mock.patch.object(
-                    review, "fetch_all_comments", return_value=comentarios
+                    review_github, "fetch_all_comments", return_value=comentarios
                 ),
-                mock.patch.object(review, "set_output"),
+                mock.patch.object(review_github, "set_output"),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 review.cmd_gate(argparse.Namespace(work=str(directo)))
@@ -5674,7 +5676,7 @@ class ReviewContinuity(unittest.TestCase):
         comments = (
             [{"id": 1, "user": "github-actions[bot]", "body": body}] if body else []
         )
-        real_sh = review.sh
+        real_sh = review_github.sh
 
         def run_command(*args, **kwargs):
             if args[0] == "git":
@@ -5691,8 +5693,8 @@ class ReviewContinuity(unittest.TestCase):
                     "GITHUB_STEP_SUMMARY": "",
                 },
             ),
-            mock.patch.object(review, "fetch_all_comments", return_value=comments),
-            mock.patch.object(review, "sh", side_effect=run_command),
+            mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+            mock.patch.object(review_github, "sh", side_effect=run_command),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             review.cmd_publish(argparse.Namespace(work=str(work)))
@@ -5710,8 +5712,8 @@ class ReviewContinuity(unittest.TestCase):
                     "RUN_ATTEMPT": attempt,
                 },
             ),
-            mock.patch.object(review, "fetch_all_comments", return_value=comments),
-            mock.patch.object(review, "set_output") as output,
+            mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+            mock.patch.object(review_github, "set_output") as output,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             review.cmd_gate(argparse.Namespace(work=str(work)))
@@ -7050,7 +7052,7 @@ class BlockingFixes(unittest.TestCase):
 
     def test_dismiss_all_applies_once_and_never_to_later_findings(self):
         todo = [{"id": 100, "user": "owner", "body": "ai-review: descartar todo"}]
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             ids, all_open, last = review.collect_dismissals("o/r", "7", "bot", todo, 0)
             self.assertEqual((ids, all_open, last), (set(), True, 100))
             self.assertEqual(
@@ -7090,7 +7092,7 @@ class BlockingFixes(unittest.TestCase):
         manifest = dict(
             MANIFEST, mode="full", reason="no-prev", reviewed=["src/app.py", "b.py"]
         )
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             first = review.build_findings(
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", comments
             )
@@ -7218,12 +7220,12 @@ class BlockingFixes(unittest.TestCase):
             {"id": 100, "user": "owner", "body": "ai-review: descartar F1"},
             {"id": 101, "user": "otro", "body": "ai-review: descartar F2"},
         ]
-        with mock.patch.object(review, "collaborator_permission", return_value=None):
+        with mock.patch.object(review_github, "collaborator_permission", return_value=None):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 (set(), False, 0),
             )
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 ({"F1", "F2"}, False, 101),
@@ -7235,7 +7237,7 @@ class BlockingFixes(unittest.TestCase):
             {"id": 101, "user": "u2", "body": "ai-review: descartar F2"},
         ]
         with mock.patch.object(
-            review, "collaborator_permission", side_effect=[None, "write"]
+            review_github, "collaborator_permission", side_effect=[None, "write"]
         ):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
@@ -7244,24 +7246,24 @@ class BlockingFixes(unittest.TestCase):
             )
 
     def test_deleted_login_is_a_definitive_no(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stderr = "gh: Not Found (HTTP 404)"
             fake.return_value.stdout = ""
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertEqual(review.collaborator_permission("o/r", "nadie"), "none")
+                self.assertEqual(review_github.collaborator_permission("o/r", "nadie"), "none")
             self.assertIn("nadie no existe para este repo (HTTP 404)", err.getvalue())
 
     def test_forbidden_is_retried_not_a_definitive_no(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stderr = (
                 "gh: Resource not accessible by integration (HTTP 403)"
             )
             fake.return_value.stdout = ""
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
 
     def test_unclosed_fence_does_not_protect_a_verdict(self):
         text = "Texto\n```\ncódigo sin cerrar\n**Veredicto:** del modelo"
@@ -7303,7 +7305,7 @@ class BlockingFixes(unittest.TestCase):
 
     def test_non_writer_dismiss_is_marked_seen(self):
         comments = [{"id": 100, "user": "lector", "body": "ai-review: descartar F1"}]
-        with mock.patch.object(review, "collaborator_permission", return_value="read"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="read"):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 (set(), False, 100),
@@ -8561,9 +8563,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=[sticky]
+                        review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
@@ -8621,9 +8623,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=[sticky]
+                        review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
@@ -8683,9 +8685,9 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=comments
+                        review_github, "fetch_all_comments", return_value=comments
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             return json.loads((work / "comment.json").read_text())["body"]
