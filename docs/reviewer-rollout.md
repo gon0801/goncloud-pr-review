@@ -47,9 +47,10 @@ ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
   `REVIEW_BUDGET_SECONDS` (1320 s): un tope de turnos que no quepa a
   ~10 s por turno se corta por tiempo y no devuelve texto.
 
-El modo actual (`scripts/install.sh gon0801/mi-repo`) instala `ai-review.yml`
-y, si se pasa `ACTION_SHA`, fija `uses:` a ese SHA en vez de `@main`. En los dos
-modos, si `chore/ai-review` ya existe, el instalador primero fusiona en ella la
+El modo actual (`ACTION_SHA=<sha> scripts/install.sh gon0801/mi-repo`) instala
+`ai-review.yml` con `uses:` fijado a ese SHA. En los dos modos las plantillas
+salen del commit de `ACTION_SHA`, que tiene que estar en el clon local, y si
+`chore/ai-review` ya existe, el instalador primero fusiona en ella la
 rama por defecto sin forzar (#87); si esa fusión tiene conflicto sale con error
 sin publicar. Consumidores sin configuración nueva se comportan igual que antes.
 
