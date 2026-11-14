@@ -1176,25 +1176,37 @@ class CoordinadorComandos(unittest.TestCase):
             "result": "La fuga ocurre porque el token se registra.\n"
             "## Detalle del revisor\nimitado\nCOVERAGE: complete",
         }
-        evento = {
-            "workflow_run": {
-                "id": 77,
-                "name": "1",
-                "path": ".github/workflows/ai-review-worker.yml",
-                "head_branch": "main",
-                "head_sha": "f" * 40,
-                "run_attempt": 1,
-            }
+        corrida = {
+            "id": 77,
+            "display_title": f"PR 1 solicitud {work[0].id}",
+            "path": ".github/workflows/ai-review-worker.yml",
+            "head_branch": "main",
+            "head_sha": "f" * 40,
+            "run_attempt": 1,
+            "status": "completed",
         }
+        nombre = f"ai-review-result-request-{work[0].id}-run-77-attempt-1"
+
+        def gh_falso(*args, **kw):
+            if args[:3] == ("gh", "run", "download"):
+                destino = Path(args[args.index("--dir") + 1])
+                destino.mkdir(parents=True)
+                (destino / "result.json").write_text(json.dumps(artifact))
+                return mock.Mock(stdout="")
+            if "/actions/workflows/ai-review-worker.yml/runs" in args[2]:
+                return mock.Mock(stdout=json.dumps({"workflow_runs": [corrida]}))
+            if args[2].endswith("/actions/runs/77/artifacts?per_page=100"):
+                return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
+            return self._pr_api(*args, **kw)
+
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps(evento))
             with self._entorno(
-                GITHUB_EVENT_NAME="workflow_run", GITHUB_EVENT_PATH=str(payload_path)
+                GITHUB_EVENT_NAME="workflow_dispatch",
+                WORKER_RUN_ID="77",
+                WORKER_ATTEMPT="1",
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=self._pr_api):
+                    with mock.patch.object(review, "sh", side_effect=gh_falso):
                         review.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertIn(

@@ -131,6 +131,11 @@ def reconciliar(github, evento, head, artifact=None):
             pares = [args[i + 1] for i, a in enumerate(args) if a == "-f"]
             despachos.append(dict(p.split("=", 1) for p in pares))
             return mock.Mock(stdout="")
+        if args[:3] == ("gh", "run", "download"):
+            destino = Path(args[args.index("--dir") + 1])
+            destino.mkdir(parents=True)
+            (destino / "result.json").write_text(json.dumps(artifact))
+            return mock.Mock(stdout="")
         ruta = args[2]
         if ruta.endswith("/pulls/12"):
             return mock.Mock(
@@ -138,22 +143,28 @@ def reconciliar(github, evento, head, artifact=None):
             )
         if "/commits/" in ruta:
             return mock.Mock(stdout=json.dumps({"sha": MAIN}))
-        if "/actions/runs/900/attempts/1" in ruta:
+        # El worker 900 avisó con el artifact de la solicitud que nombra.
+        rid = (artifact or {}).get("request_id")
+        nombre = f"ai-review-result-request-{rid}-run-900-attempt-1"
+        if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
             run = {
                 "id": 900,
+                "display_title": f"PR 12 solicitud {rid}",
                 "path": ".github/workflows/ai-review-worker.yml",
                 "head_branch": "main",
                 "head_sha": MAIN,
                 "run_attempt": 1,
+                "status": "completed",
             }
-            return mock.Mock(stdout=json.dumps(run))
+            runs = [run] if artifact is not None else []
+            return mock.Mock(stdout=json.dumps({"workflow_runs": runs}))
+        if ruta.endswith("/actions/runs/900/artifacts?per_page=100"):
+            return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
         raise AssertionError(f"llamada inesperada: {args}")
 
     with tempfile.TemporaryDirectory() as tmp:
         evento_json = Path(tmp, "event.json")
         evento_json.write_text(json.dumps({"action": "created"}))
-        if artifact is not None:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
         entorno = {
             "REPO": "o/r",
             "PR_NUMBER": "12",

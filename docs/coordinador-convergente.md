@@ -57,7 +57,10 @@ Orden de un run del coordinador (`cmd_reconcile`):
    corrida. Con artifact del attempt vigente lo baja, lo autentica igual que
    hoy y lo acepta. Terminada sin artifact (o el run avisado, cuyo `avisar`
    corre después de `execute`): `ReportFailed` reintentable con motivo, que se
-   ve como el aviso de fallo de siempre. En curso o sin corrida: espera.
+   ve como el aviso de fallo de siempre. En curso o sin corrida: espera. Un
+   run no confiable (otro workflow, otra rama, SHA fuera de main) o un
+   artifact que no autentica no cambia el estado y deja el run del
+   coordinador en rojo, como hoy.
 4. Admisión: el head (el del evento en un push; el vivo en el resto, solo si
    el PR está abierto, no es borrador y viene del mismo repo) que no está
    revisado ni tiene una solicitud de revisión viva recibe una solicitud

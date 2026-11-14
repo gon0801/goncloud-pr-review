@@ -54,9 +54,18 @@ En el modo coordinado, un push nuevo cancela la revisión que el worker seguía
 corriendo para el head anterior del mismo PR; las explicaciones
 (`ai-review: explicar F1`) no se cancelan. No relances a mano ("Re-run")
 ningún run viejo del worker de revisión, cancelado o terminado: entra al grupo
-del PR, cancela la revisión que esté corriendo y esa solicitud se queda sin
-worker hasta el siguiente evento del PR. Para repetir la revisión del mismo
-commit, comenta `ai-review: revisar`.
+del PR, cancela la revisión que esté corriendo y el siguiente evento del PR la
+marca como fallida. Para repetir la revisión del mismo commit, comenta
+`ai-review: revisar`; reabrir el PR o marcarlo listo no re-revisa un commit ya
+revisado.
+
+Cada run del coordinador deja el PR completo al día, sin importar qué lo
+despertó (un push, un comentario `ai-review:` o el aviso del worker): aplica
+los comandos pendientes, publica el resultado de cualquier worker que ya
+terminó, marca como fallida la revisión cuyo worker terminó sin resultado y
+admite el commit vivo si nadie lo revisó. Así un evento que GitHub descartó
+en la cola lo recupera el siguiente. Un comentario que no empieza con
+`ai-review:`, o que es de un issue, no corre el coordinador.
 
 En los dos modos, si `chore/ai-review` ya existe (por ejemplo tras un squash
 merge), el instalador primero fusiona la rama por defecto en ella sin forzar.

@@ -3096,6 +3096,20 @@ def forma_utilizable_del_artifact(artifact):
     )
 
 
+def rechazo_del_run(run_metadata, request):
+    """Por qué el run no es el worker confiable (repo, workflow, ref y SHA del
+    código), o None si lo es."""
+    if run_metadata.get("repository") != request.get("repository"):
+        return "repositorio del run incorrecto"
+    if run_metadata.get("workflow") != request.get("workflow"):
+        return "workflow del run incorrecto"
+    if run_metadata.get("ref") != request.get("ref"):
+        return "ref del run incorrecta"
+    if run_metadata.get("sha") != request.get("workflow_sha"):
+        return "SHA del workflow no es el código confiable"
+    return None
+
+
 def authenticate_result(run_metadata, artifact, request):
     """El SHA del workflow (código confiable) y el HEAD del PR se validan por
     separado; el contenido del artifact nunca se ejecuta.
@@ -3104,14 +3118,9 @@ def authenticate_result(run_metadata, artifact, request):
     def rechazo(motivo):
         return Rejected(motivo=motivo)
 
-    if run_metadata.get("repository") != request.get("repository"):
-        return rechazo("repositorio del run incorrecto")
-    if run_metadata.get("workflow") != request.get("workflow"):
-        return rechazo("workflow del run incorrecto")
-    if run_metadata.get("ref") != request.get("ref"):
-        return rechazo("ref del run incorrecta")
-    if run_metadata.get("sha") != request.get("workflow_sha"):
-        return rechazo("SHA del workflow no es el código confiable")
+    motivo = rechazo_del_run(run_metadata, request)
+    if motivo is not None:
+        return rechazo(motivo)
     if run_metadata.get("run_id") != artifact.get("run_id"):
         return rechazo("run_id no coincide con el artifact")
     if run_metadata.get("attempt") != artifact.get("attempt"):
@@ -3525,16 +3534,231 @@ def fallo_de_resultado(artifact, run_id, attempt):
     )
 
 
-def metadatos_del_run(repo, run_id, attempt):
-    """Metadatos del run del worker leídos de la API, con la forma del payload
-    de workflow_run. El worker avisa por workflow_dispatch porque un run
-    despachado con GITHUB_TOKEN no dispara workflow_run al terminar."""
-    return forma_del_run(
-        json.loads(
-            sh(
-                "gh", "api", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
-            ).stdout
+TITULO_DEL_WORKER = re.compile(r"PR ([0-9]{1,9}) solicitud ([0-9]{1,9})")
+
+
+@dataclass(frozen=True)
+class Entrega:
+    """Lo que dejó el run de una solicitud viva: su artifact autenticado, o
+    None si terminó sin subirlo."""
+
+    solicitud: object
+    meta: dict
+    conclusion: str | None
+    artifact: dict | None = None
+    autenticado: AuthenticatedResult | None = None
+
+
+def _run_avisado():
+    """(run, attempt) del worker que avisó; las entradas del dispatch solo se
+    comparan como enteros."""
+    run_id = os.environ.get("WORKER_RUN_ID") or ""
+    attempt = os.environ.get("WORKER_ATTEMPT") or "1"
+    if re.fullmatch(r"[0-9]{1,19}", run_id) and re.fullmatch(r"[0-9]{1,9}", attempt):
+        return int(run_id), int(attempt)
+    return None
+
+
+def corridas_por_solicitud(repo, pr):
+    """Los runs del worker de este PR por solicitud, del más nuevo al más viejo.
+    El run-name del worker es `PR <n> solicitud <id>`: así se atribuye también
+    un run que terminó sin artifact."""
+    datos = json.loads(
+        sh(
+            "gh",
+            "api",
+            f"repos/{repo}/actions/workflows/ai-review-worker.yml/runs"
+            "?event=workflow_dispatch&per_page=100",
+        ).stdout
+    )
+    corridas = {}
+    for run in datos.get("workflow_runs") or []:
+        titulo = TITULO_DEL_WORKER.fullmatch(str(run.get("display_title") or ""))
+        if (
+            titulo
+            and int(titulo.group(1)) == int(pr)
+            and type(run.get("id")) is int
+            and type(run.get("run_attempt")) is int
+        ):
+            corridas.setdefault(int(titulo.group(2)), []).append(run)
+    for runs in corridas.values():
+        runs.sort(key=lambda run: -run["id"])
+    return corridas
+
+
+def sha_de_confianza(repo, worker_ref, sha_del_run, cache):
+    """El SHA del código confiable para un run: la punta de worker_ref, o el del
+    run si es un ancestro suyo (main pudo avanzar mientras el worker corría)."""
+    if "punta" not in cache:
+        cache["punta"] = json.loads(
+            sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
+        ).get("sha")
+    if not _sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
+        return cache["punta"]
+    if sha_del_run not in cache:
+        comparacion = json.loads(
+            sh("gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}").stdout
         )
+        cache[sha_del_run] = comparacion.get("status") in ("ahead", "identical")
+    return sha_del_run if cache[sha_del_run] else cache["punta"]
+
+
+def artefacto_del_run(repo, run, request_id, work):
+    """El result.json del artifact del attempt vigente, o None si no lo subió.
+    El nombre y la carpeta salen de enteros, nunca del texto de la API."""
+    nombre = (
+        f"ai-review-result-request-{request_id}"
+        f"-run-{run['id']}-attempt-{run['run_attempt']}"
+    )
+    listado = json.loads(
+        sh(
+            "gh", "api", f"repos/{repo}/actions/runs/{run['id']}/artifacts?per_page=100"
+        ).stdout
+    )
+    if not any(
+        a.get("name") == nombre and not a.get("expired")
+        for a in listado.get("artifacts") or []
+    ):
+        return None
+    destino = Path(work) / "cosecha" / f"{run['id']}-{run['run_attempt']}"
+    sh(
+        "gh",
+        "run",
+        "download",
+        str(run["id"]),
+        "--repo",
+        repo,
+        "--name",
+        nombre,
+        "--dir",
+        str(destino),
+    )
+    encontrados = list(destino.rglob("result.json"))
+    if len(encontrados) != 1:
+        raise RuntimeError(f"{nombre} trae {len(encontrados)} result.json, no uno")
+    return json.loads(encontrados[0].read_text())
+
+
+def cosechar(estado, repo, pr, worker_ref, work, avisado):
+    """Lo que el worker ya dejó para las solicitudes pendientes y la del run
+    avisado. De cada una cuenta su run más nuevo y confiable: con artifact del
+    attempt vigente, o terminado sin él (el avisado ya terminó su execute
+    aunque su job de aviso siga en curso); si sigue en curso, espera.
+    Devuelve (entregas, hubo_rechazo)."""
+    vivas = {r.id: r for r in estado.pending_requests if r.state != "finished"}
+    if avisado is None and not any(r.state == "pending" for r in vivas.values()):
+        return [], False
+    corridas, rechazo, rid_avisado = corridas_por_solicitud(repo, pr), False, None
+    for rid, runs in corridas.items():
+        if avisado and any(run["id"] == avisado[0] for run in runs):
+            rid_avisado = rid
+    if avisado and rid_avisado is None:
+        print(
+            f"ai-review: el run avisado {avisado[0]} no es un worker de este PR",
+            file=sys.stderr,
+        )
+        rechazo = True
+    elif rid_avisado is not None and rid_avisado not in vivas:
+        if not 0 < rid_avisado <= estado.request_count:
+            sys.exit(f"ai-review: resultado de solicitud desconocida {rid_avisado!r}")
+        # La podó una solicitud más nueva, cuyo despacho cancela este worker;
+        # si el run alcanzó a avisar antes, no queda nada que publicar.
+        print(
+            f"ai-review: resultado de la solicitud {rid_avisado}"
+            " ignorado: ya no está pendiente",
+            file=sys.stderr,
+        )
+    confianza, entregas = {}, []
+    for solicitud in vivas.values():
+        if solicitud.state != "pending" and solicitud.id != rid_avisado:
+            continue
+        for run in corridas.get(solicitud.id, []):
+            forma = forma_del_run(run)
+            meta = {
+                "repository": repo,
+                "workflow": forma["name"],
+                "ref": forma["head_branch"],
+                "sha": forma["head_sha"],
+                "run_id": forma["id"],
+                "attempt": forma["run_attempt"],
+            }
+            request = request_de_solicitud(
+                solicitud,
+                repository=repo,
+                workflow="ai-review-worker",
+                ref=worker_ref,
+                workflow_sha=sha_de_confianza(repo, worker_ref, meta["sha"], confianza),
+            )
+            motivo = rechazo_del_run(meta, request)
+            if motivo is not None:
+                print(
+                    f"ai-review: run {run['id']} ignorado ({motivo})", file=sys.stderr
+                )
+                rechazo = True
+                continue
+            terminado = run.get("status") == "completed" or avisado == (
+                run["id"],
+                run["run_attempt"],
+            )
+            artifact = None
+            if terminado or run.get("status") == "in_progress":
+                artifact = artefacto_del_run(repo, run, solicitud.id, work)
+            if artifact is not None:
+                autenticado = authenticate_result(meta, artifact, request)
+                if isinstance(autenticado, Rejected):
+                    print(
+                        f"ai-review: resultado rechazado ({autenticado.motivo})",
+                        file=sys.stderr,
+                    )
+                    rechazo = True
+                    break
+                entregas.append(
+                    Entrega(
+                        solicitud, meta, run.get("conclusion"), artifact, autenticado
+                    )
+                )
+            elif terminado:
+                entregas.append(Entrega(solicitud, meta, run.get("conclusion")))
+            break
+    return entregas, rechazo
+
+
+def evento_de_entrega(entrega, facts, estado):
+    """El evento del dominio que deja una entrega, con los hechos con los que
+    se acepta."""
+    run_id, attempt = entrega.meta["run_id"], entrega.meta["attempt"]
+    if entrega.artifact is None:
+        motivo = (
+            f"el worker terminó sin resultado (run {run_id}, "
+            f"{entrega.conclusion or 'sin conclusión'})"
+        )
+        return (
+            review_domain.ReportFailed(
+                request_id=entrega.solicitud.id,
+                run_id=run_id,
+                attempt=attempt,
+                motivo=motivo,
+            ),
+            facts,
+        )
+    fallo = fallo_de_resultado(entrega.artifact, run_id, attempt)
+    if fallo is not None:
+        return fallo, facts
+    hechos = hechos_con_delta_del_worker(facts, entrega.artifact, estado)
+    hechos = hechos_con_recortes_del_worker(hechos, entrega.artifact)
+    return (
+        review_domain.ReportReady(
+            origin=review_domain.Origin(kind="re-run", run_id=run_id),
+            request_id=entrega.solicitud.id,
+            run_id=entrega.autenticado.run_id,
+            attempt=entrega.autenticado.attempt,
+            observaciones=tuple(
+                review_domain.observation_de_entrada(e)
+                for e in entrega.autenticado.observaciones
+            ),
+            cobertura=entrega.autenticado.cobertura,
+        ),
+        hechos,
     )
 
 
@@ -3639,7 +3863,7 @@ def cmd_reconcile(args):
     head = os.environ.get("HEAD_SHA") or ""
     base = os.environ.get("BASE_SHA") or ""
     pr_data = None
-    if event_name in ("workflow_run", "issue_comment", "workflow_dispatch"):
+    if event_name in ("issue_comment", "workflow_dispatch"):
         # el head/base vivos salen del PR por API, nunca del checkpoint
         try:
             pr_data = json.loads(sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
@@ -3689,104 +3913,7 @@ def cmd_reconcile(args):
         if effect in AVISOS_DE_RECHAZO
     )
 
-    artifact = solicitud = decision = None
-    resultado_despachado = event_name == "workflow_dispatch" and bool(
-        os.environ.get("WORKER_RUN_ID")
-    )
-    if event_name == "workflow_run" or resultado_despachado:
-        if resultado_despachado:
-            wr = metadatos_del_run(
-                repo,
-                int(os.environ["WORKER_RUN_ID"]),
-                int(os.environ.get("WORKER_ATTEMPT") or 1),
-            )
-        else:
-            payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            wr = forma_del_run(payload.get("workflow_run") or {})
-        artifact = json.loads((Path(args.work) / "result.json").read_text())
-        solicitud = next(
-            (r for r in estado.pending_requests if r.id == artifact.get("request_id")),
-            None,
-        )
-        rid = artifact.get("request_id")
-        emitida = type(rid) is int and 0 < rid <= estado.request_count
-        if solicitud is None and not emitida:
-            sys.exit(f"ai-review: resultado de solicitud desconocida {rid!r}")
-        if solicitud is None:
-            # La podó una solicitud más nueva, cuyo despacho cancela este worker;
-            # si el run alcanzó a avisar antes, no queda nada que publicar.
-            print(
-                f"ai-review: resultado de la solicitud {rid!r}"
-                " ignorado: ya no está pendiente",
-                file=sys.stderr,
-            )
-            artifact = None
-        else:
-            confiable = json.loads(
-                sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
-            ).get("sha")
-            sha_del_run = wr.get("head_sha") or ""
-            if sha_del_run and sha_del_run != confiable:
-                # main pudo avanzar mientras el worker corría: el código del run
-                # sigue siendo confiable si es un ancestro de worker_ref.
-                comparacion = json.loads(
-                    sh(
-                        "gh",
-                        "api",
-                        f"repos/{repo}/compare/{sha_del_run}...{worker_ref}",
-                    ).stdout
-                )
-                if comparacion.get("status") in ("ahead", "identical"):
-                    confiable = sha_del_run
-            request = request_de_solicitud(
-                solicitud,
-                repository=repo,
-                workflow="ai-review-worker",
-                ref=worker_ref,
-                workflow_sha=confiable,
-            )
-            autenticado = authenticate_result(
-                {
-                    "repository": repo,
-                    "workflow": wr.get("name"),
-                    "ref": wr.get("head_branch"),
-                    "sha": wr.get("head_sha"),
-                    "run_id": wr.get("id"),
-                    "attempt": wr.get("run_attempt"),
-                },
-                artifact,
-                request,
-            )
-            if isinstance(autenticado, Rejected):
-                print(
-                    f"ai-review: resultado rechazado ({autenticado.motivo})",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            fallo = fallo_de_resultado(artifact, wr.get("id"), wr.get("run_attempt"))
-            if fallo is not None:
-                decision = review_domain.reconcile(estado, fallo, facts, policy)
-            else:
-                observaciones = [
-                    review_domain.observation_de_entrada(e)
-                    for e in autenticado.observaciones
-                ]
-                facts = hechos_con_delta_del_worker(facts, artifact, estado)
-                facts = hechos_con_recortes_del_worker(facts, artifact)
-                decision = review_domain.reconcile(
-                    estado,
-                    review_domain.ReportReady(
-                        origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
-                        request_id=artifact.get("request_id"),
-                        run_id=autenticado.run_id,
-                        attempt=autenticado.attempt,
-                        observaciones=tuple(observaciones),
-                        cobertura=autenticado.cobertura,
-                    ),
-                    facts,
-                    policy,
-                )
-    elif event_name not in (
+    if event_name not in (
         "issue_comment",
         "workflow_dispatch",
         "pull_request",
@@ -3794,12 +3921,39 @@ def cmd_reconcile(args):
     ):
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
-            "(pull_request, pull_request_target, issue_comment, "
-            "workflow_run o workflow_dispatch)"
+            "(pull_request, pull_request_target, issue_comment o workflow_dispatch)"
         )
 
+    try:
+        entregas, rechazo = cosechar(
+            estado, repo, pr, worker_ref, args.work, _run_avisado()
+        )
+    except Exception as exc:
+        print(
+            f"ai-review: no se pudo cosechar el worker ({exc}); "
+            "se reintenta en el próximo evento",
+            file=sys.stderr,
+        )
+        entregas, rechazo = [], True
     previo = estado
-    if isinstance(decision, review_domain.Commit):
+    revision_entregada = explicacion = None
+    for entrega in entregas:
+        evento, hechos = evento_de_entrega(entrega, facts, estado)
+        decision = review_domain.reconcile(estado, evento, hechos, policy)
+        if not isinstance(decision, review_domain.Commit):
+            continue
+        solicitud, artifact = entrega.solicitud, entrega.artifact
+        # Solo un reporte del target vigente se muestra como revisión: el
+        # dominio también hace Commit al descartar un head viejo.
+        if review_domain._target_vigente(solicitud, facts, policy):
+            if solicitud.kind == "review":
+                revision_entregada = (
+                    artifact or {ERROR_KEY: evento.motivo},
+                    {f.id for f in estado.findings},
+                    solicitud.target.get("head_sha") or head,
+                )
+            elif artifact is not None and ERROR_KEY not in artifact:
+                explicacion = (solicitud.finding_id, texto_de_explicacion(artifact))
         estado = decision.snapshot
         trabajo = (*trabajo, *decision.work_after_commit)
     estado = review_domain.marcar_hallazgos_nuevos(
@@ -3824,28 +3978,15 @@ def cmd_reconcile(args):
 
     if estado == current and not trabajo:
         print("ai-review: nada cambió; el sticky queda como está")
+        if rechazo:
+            sys.exit(1)
         return
 
-    # Solo un reporte de revisión del target vigente acredita: el dominio
-    # devuelve Commit también al descartar un head viejo o al cerrar una
-    # explicación, y esos no pueden publicar un SHA revisado.
-    vigente = (
-        artifact is not None
-        and isinstance(decision, review_domain.Commit)
-        and review_domain._target_vigente(solicitud, facts, policy)
-    )
-    explicacion = None
-    if vigente and solicitud.kind == "explain" and ERROR_KEY not in artifact:
-        explicacion = (solicitud.finding_id, texto_de_explicacion(artifact))
     visible = estado_visible(estado, explicacion, avisos)
-    if vigente and solicitud.kind == "review":
-        revision = revision_visible(
-            artifact,
-            estado,
-            {f.id for f in previo.findings},
-            artifact.get("pr_head_sha") or head,
-        )
-        visible = encadenar(revision, visible) if avisos else revision
+    if revision_entregada is not None:
+        artifact, previos, cabeza = revision_entregada
+        revision = revision_visible(artifact, estado, previos, cabeza)
+        visible = encadenar(revision, visible) if avisos or explicacion else revision
     resultado = publish_checkpoint(
         review_domain.Commit(snapshot=estado, work_after_commit=trabajo),
         sticky or None,
@@ -3873,6 +4014,8 @@ def cmd_reconcile(args):
         print("ai-review: nada visible que mostrar; no se crea sticky")
     else:
         print("ai-review: checkpoint publicado sin trabajo nuevo")
+    if rechazo:
+        sys.exit(1)
 
 
 def cmd_execute_request(args):

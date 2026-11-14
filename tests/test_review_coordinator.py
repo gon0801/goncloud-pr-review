@@ -999,246 +999,113 @@ class CoordinadorCli(unittest.TestCase):
         self.assertEqual(len(falso.patches), 1)
         self.assertEqual(despachados, [1])
 
-    def test_resultado_de_head_viejo_es_rechazado(self):
-        estado = snapshot_base(generation=1)
-        creada = decision_con_trabajo(estado)
-        falso = _ComentarioFalso(
-            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
-        )
-        payload = {
-            "workflow_run": {
-                "id": 77,
-                "name": "ai-review-worker",
-                "path": ".github/workflows/ai-review-worker.yml",
-                "head_branch": "main",
-                "head_sha": "f" * 40,
-                "run_attempt": 1,
-            }
+    def _reconciliar_aviso(self, falso, run, artifact):
+        """El worker `run` avisó y dejó `artifact`; devuelve el código de salida."""
+        corrida = {
+            "display_title": f"PR 1 solicitud {artifact['request_id']}",
+            "path": ".github/workflows/ai-review-worker.yml",
+            "head_branch": "main",
+            "head_sha": "f" * 40,
+            "run_attempt": 1,
+            "status": "completed",
+            **run,
         }
-        artifact = {
-            "request_id": 1,
-            "run_id": 77,
-            "attempt": 1,
-            "pr_head_sha": "1" * 40,
-            "policy_digest": "d" * 64,
-            "target": {
-                "head_sha": "1" * 40,
-                "base_sha": "b" * 40,
-                "policy_digest": "d" * 64,
-            },
-            "observaciones": [],
-            "cobertura": "complete",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps(payload))
-            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
-            with self._entorno(
-                tmp,
-                GITHUB_EVENT_NAME="workflow_run",
-                GITHUB_EVENT_PATH=str(payload_path),
-            ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", return_value=gh_confiable):
-                        with self.assertRaises(SystemExit) as ctx:
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(falso.patches, [], "rechazado: no escribe ni despacha")
-
-    def test_run_desde_otra_ref_es_rechazado(self):
-        estado = snapshot_base(generation=1)
-        creada = decision_con_trabajo(estado)
-        falso = _ComentarioFalso(
-            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
+        nombre = (
+            f"ai-review-result-request-{artifact['request_id']}"
+            f"-run-{corrida['id']}-attempt-1"
         )
-        payload = {
-            "workflow_run": {
-                "id": 77,
-                "name": "ai-review-worker",
-                "path": ".github/workflows/ai-review-worker.yml",
-                "head_branch": "fork-de-atacante",
-                "head_sha": "1" * 40,
-                "run_attempt": 1,
-            }
-        }
-        artifact = {
-            "request_id": 1,
-            "run_id": 77,
-            "attempt": 1,
-            "pr_head_sha": "c" * 40,
-            "policy_digest": "d" * 64,
-            "observaciones": [],
-            "cobertura": "complete",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps(payload))
-            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
-            with self._entorno(
-                tmp,
-                GITHUB_EVENT_NAME="workflow_run",
-                GITHUB_EVENT_PATH=str(payload_path),
-            ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", return_value=gh_confiable):
-                        with self.assertRaises(SystemExit) as ctx:
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertEqual(falso.patches, [])
-
-    def test_resultado_vigente_se_acepta(self):
-        estado = snapshot_base(generation=1)
-        digest = review.digest_de_politica(review.politica_de_revision())
-        target = domain.ReviewTarget(
-            repository="o/r",
-            pr_number=1,
-            head_sha="c" * 40,
-            base_sha="b" * 40,
-            policy_digest=digest,
-        )
-        creada = domain.reconcile(
-            estado, domain.RequestReview(origin=PUSH, target=target), hechos(), POLICY
-        )
-        falso = _ComentarioFalso(
-            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
-        )
-        payload = {
-            "workflow_run": {
-                "id": 77,
-                "name": "ai-review-worker",
-                "path": ".github/workflows/ai-review-worker.yml",
-                "head_branch": "main",
-                "head_sha": "f" * 40,
-                "run_attempt": 1,
-            }
-        }
-        artifact = {
-            "request_id": 1,
-            "run_id": 77,
-            "attempt": 1,
-            "pr_head_sha": "c" * 40,
-            "policy_digest": digest,
-            "observaciones": [],
-            "cobertura": "complete",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps(payload))
-            pr_api = mock.Mock(
-                stdout=json.dumps(
-                    {
-                        "head": {"sha": "c" * 40},
-                        "base": {"sha": "b" * 40},
-                    }
-                )
-            )
-
-            gh_confiable = mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
-
-            def falso_sh(*args, **kw):
-                if any("commits/" in str(a) for a in args):
-                    return gh_confiable
-                assert any("pulls/1" in str(a) for a in args)
-                return pr_api
-
-            with self._entorno(
-                tmp,
-                GITHUB_EVENT_NAME="workflow_run",
-                GITHUB_EVENT_PATH=str(payload_path),
-            ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review, "sh", side_effect=falso_sh):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
-        self.assertEqual(len(falso.patches), 1)
-        carga = domain.read_snapshot(falso.leer()[0]["body"])
-        self.assertEqual(carga.snapshot.pending_requests, [])
-
-    def _reconcile_workflow_run(self, workflow_run):
-        estado = snapshot_base(generation=1)
-        digest = review.digest_de_politica(review.politica_de_revision())
-        target = domain.ReviewTarget(
-            repository="o/r",
-            pr_number=1,
-            head_sha="c" * 40,
-            base_sha="b" * 40,
-            policy_digest=digest,
-        )
-        creada = domain.reconcile(
-            estado, domain.RequestReview(origin=PUSH, target=target), hechos(), POLICY
-        )
-        falso = _ComentarioFalso(
-            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
-        )
-        artifact = {
-            "request_id": 1,
-            "run_id": 77,
-            "attempt": 1,
-            "pr_head_sha": "c" * 40,
-            "policy_digest": digest,
-            "observaciones": [],
-            "cobertura": "complete",
-        }
 
         def falso_sh(*args, **kw):
-            if any("commits/" in str(a) for a in args):
+            if args[:3] == ("gh", "run", "download"):
+                destino = Path(args[args.index("--dir") + 1])
+                destino.mkdir(parents=True)
+                (destino / "result.json").write_text(json.dumps(artifact))
+                return mock.Mock(stdout="")
+            ruta = args[2]
+            if "commits/" in ruta:
                 return mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
-            return mock.Mock(
-                stdout=json.dumps(
-                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
-                )
-            )
+            if "/compare/" in ruta:
+                return mock.Mock(stdout=json.dumps({"status": "diverged"}))
+            if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+                return mock.Mock(stdout=json.dumps({"workflow_runs": [corrida]}))
+            if "/artifacts" in ruta:
+                return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
+            assert ruta.endswith("pulls/1"), args
+            vivo = {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+            return mock.Mock(stdout=json.dumps(vivo))
 
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "result.json").write_text(json.dumps(artifact))
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps({"workflow_run": workflow_run}))
             with self._entorno(
                 tmp,
-                GITHUB_EVENT_NAME="workflow_run",
-                GITHUB_EVENT_PATH=str(payload_path),
+                GITHUB_EVENT_NAME="workflow_dispatch",
+                WORKER_RUN_ID=str(corrida["id"]),
+                WORKER_ATTEMPT="1",
             ):
                 with mock.patch.object(review, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review, "sh", side_effect=falso_sh):
                         try:
                             review.cmd_reconcile(argparse.Namespace(work=tmp))
                         except SystemExit as exc:
-                            return falso, exc.code
-        return falso, None
+                            return exc.code
+        return None
 
-    def test_workflow_run_con_run_name_identifica_el_worker_por_path(self):
-        # Con run-name, "name" y "display_title" traen el título del run (el PR).
-        falso, salida = self._reconcile_workflow_run(
-            {
-                "id": 77,
-                "name": "1",
-                "display_title": "1",
-                "path": ".github/workflows/ai-review-worker.yml",
-                "head_branch": "main",
-                "head_sha": "f" * 40,
-                "run_attempt": 1,
-            }
+    def _pendiente_vigente(self):
+        digest = review.digest_de_politica(review.politica_de_revision())
+        target = domain.ReviewTarget(
+            repository="o/r",
+            pr_number=1,
+            head_sha="c" * 40,
+            base_sha="b" * 40,
+            policy_digest=digest,
         )
-        self.assertIsNone(salida)
+        creada = domain.reconcile(
+            snapshot_base(generation=1),
+            domain.RequestReview(origin=PUSH, target=target),
+            hechos(),
+            POLICY,
+        )
+        falso = _ComentarioFalso(
+            [{"id": 7, "body": cuerpo_v3(creada.snapshot), "login": "bot"}]
+        )
+        artifact = {
+            "request_id": 1,
+            "run_id": 77,
+            "attempt": 1,
+            "pr_head_sha": "c" * 40,
+            "policy_digest": digest,
+            "observaciones": [],
+            "cobertura": "complete",
+        }
+        return falso, artifact
+
+    def test_resultado_de_head_viejo_es_rechazado(self):
+        falso, artifact = self._pendiente_vigente()
+        artifact["pr_head_sha"] = "1" * 40
+        salida = self._reconciliar_aviso(falso, {"id": 77}, artifact)
+        self.assertEqual(salida, 1)
+        self.assertEqual(falso.patches, [], "rechazado: no escribe ni despacha")
+
+    def test_run_desde_otra_ref_es_rechazado(self):
+        falso, artifact = self._pendiente_vigente()
+        run = {"id": 77, "head_branch": "fork-de-atacante", "head_sha": "1" * 40}
+        self.assertEqual(self._reconciliar_aviso(falso, run, artifact), 1)
+        self.assertEqual(falso.patches, [])
+
+    def test_resultado_vigente_se_acepta(self):
+        falso, artifact = self._pendiente_vigente()
+        self.assertIsNone(self._reconciliar_aviso(falso, {"id": 77}, artifact))
         self.assertEqual(len(falso.patches), 1)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.pending_requests, [])
 
-    def test_workflow_run_que_imita_el_nombre_desde_otro_workflow_se_rechaza(self):
-        falso, salida = self._reconcile_workflow_run(
-            {
-                "id": 77,
-                "name": "ai-review-worker",
-                "display_title": "ai-review-worker",
-                "path": ".github/workflows/otro.yml",
-                "head_branch": "main",
-                "head_sha": "f" * 40,
-                "run_attempt": 1,
-            }
-        )
-        self.assertEqual(salida, 1)
+    def test_el_worker_se_identifica_por_el_path_y_no_por_el_nombre(self):
+        falso, artifact = self._pendiente_vigente()
+        imitado = {
+            "id": 77,
+            "name": "ai-review-worker",
+            "path": ".github/workflows/otro.yml",
+        }
+        self.assertEqual(self._reconciliar_aviso(falso, imitado, artifact), 1)
         self.assertEqual(falso.patches, [])
 
     def test_sticky_legado_crea_solicitud_y_conserva_hallazgos(self):

@@ -79,7 +79,14 @@ class GitHubFalso:
         return re.sub(r"<!--.*?-->", "", self.sticky() or "", flags=re.S).strip()
 
     def worker(
-        self, rid, artifact=None, run_id=900, estado="completed", pr=12, rama="main"
+        self,
+        rid,
+        artifact=None,
+        run_id=900,
+        estado="completed",
+        pr=12,
+        rama="main",
+        intento=1,
     ):
         self.corridas.append(
             {
@@ -88,7 +95,7 @@ class GitHubFalso:
                 "path": WORKER_PATH,
                 "head_branch": rama,
                 "head_sha": MAIN,
-                "run_attempt": 1,
+                "run_attempt": intento,
                 "status": estado,
                 "conclusion": "failure" if estado == "completed" else None,
                 "event": "workflow_dispatch",
@@ -96,7 +103,8 @@ class GitHubFalso:
         )
         if artifact is not None:
             self.artefactos[run_id] = (
-                f"ai-review-result-request-{rid}-run-{run_id}-attempt-1",
+                f"ai-review-result-request-{rid}-run-{run_id}"
+                f"-attempt-{artifact['attempt']}",
                 artifact,
             )
 
@@ -202,17 +210,11 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
             return mock.Mock(stdout=json.dumps(github.pr()))
         if "/commits/" in ruta:
             return mock.Mock(stdout=json.dumps({"sha": MAIN}))
-        for corrida in github.corridas:
-            if ruta.endswith(f"/actions/runs/{corrida['id']}/attempts/1"):
-                return mock.Mock(stdout=json.dumps(corrida))
         raise AssertionError(f"llamada inesperada: {args}")
 
     with tempfile.TemporaryDirectory() as tmp:
         evento_json = Path(tmp, "event.json")
         evento_json.write_text(json.dumps({"action": "created"}))
-        if aviso and aviso[0] in github.artefactos:
-            resultado_avisado = github.artefactos[aviso[0]][1]
-            Path(tmp, "result.json").write_text(json.dumps(resultado_avisado))
         entorno = {
             "REPO": "o/r",
             "PR_NUMBER": "12",
@@ -452,6 +454,17 @@ class CosechaDeResultados(unittest.TestCase):
             avisado.estado().pending_requests[0].state, "failed_retryable"
         )
 
+    def test_solo_cuenta_el_artifact_del_attempt_vigente(self):
+        # Re-run del worker en curso: el artifact del attempt 1 ya no es el
+        # resultado de la solicitud.
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1, resultado(1, A, ["Viejo"]), estado="in_progress", intento=2)
+        escrituras = github.escrituras
+        self.assertEqual(correr(github, "issue_comment")[0], 0)
+        self.assertEqual(github.escrituras, escrituras)
+        self.assertEqual(github.estado().pending_requests[0].state, "pending")
+
     def test_una_explicacion_con_aviso_perdido_se_publica(self):
         github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
         github.comentar(20, "ai-review: explicar F1")
@@ -476,8 +489,9 @@ class CosechaDeResultados(unittest.TestCase):
             1, resultado(1, A, ["De otra rama"], run_id=902), run_id=902, rama="ataque"
         )
         escrituras = github.escrituras
-        codigo, despachos, _ = correr(github, "issue_comment")
-        self.assertEqual((codigo, despachos), (0, []))
+        codigo, despachos, err = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos), (1, []), "el run de otra rama se ve")
+        self.assertIn("ref del run incorrecta", err)
         self.assertEqual(github.escrituras, escrituras)
         self.assertEqual(github.estado().pending_requests[0].state, "pending")
 
