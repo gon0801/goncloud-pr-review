@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import review  # noqa: E402
+import review_coordinator
 
 import review_render
 import review_domain as domain  # noqa: E402
@@ -74,8 +74,8 @@ def manifest_del_worker(preparacion, base, head):
 
 
 def coordinador_acepta(creada, facts, artifact, policy):
-    facts = review.hechos_con_delta_del_worker(facts, artifact, creada.snapshot)
-    facts = review.hechos_con_recortes_del_worker(facts, artifact)
+    facts = review_coordinator.hechos_con_delta_del_worker(facts, artifact, creada.snapshot)
+    facts = review_coordinator.hechos_con_recortes_del_worker(facts, artifact)
     resultado = domain.ReportReady(
         origin=domain.Origin(kind="push", run_id=11),
         request_id=1,

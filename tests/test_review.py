@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_github
 import review_render
 import review_sticky
@@ -2869,7 +2870,7 @@ class Workflows(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(review_github, "sh", side_effect=sh_falso):
-                cosechado = review.artefacto_del_run(
+                cosechado = review_coordinator.artefacto_del_run(
                     "o/r", {"id": 4242, "run_attempt": 3}, 7, tmp
                 )
         self.assertEqual(cosechado, {"request_id": 7})
@@ -3074,7 +3075,7 @@ class Workflows(unittest.TestCase):
             lambda m: valores[m.group(1)],
             run_name,
         )
-        atribuido = review.TITULO_DEL_WORKER.fullmatch(titulo)
+        atribuido = review_coordinator.TITULO_DEL_WORKER.fullmatch(titulo)
         self.assertIsNotNone(atribuido, titulo)
         self.assertEqual(atribuido.groups(), ("12", "3"))
 
@@ -3228,8 +3229,8 @@ class Workflows(unittest.TestCase):
                     ),
                     clear=False,
                 ):
-                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                        review.cmd_execute_request(
+                    with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
+                        review_coordinator.cmd_execute_request(
                             argparse.Namespace(work=work, request_id="1")
                         )
                 paquete = json.loads((Path(work) / "request-package.json").read_text())
@@ -3299,7 +3300,7 @@ class Workflows(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {"GITHUB_WORKSPACE": str(ROOT)}, clear=False
                 ):
-                    review.cmd_close_result(argparse.Namespace(work=work))
+                    review_coordinator.cmd_close_result(argparse.Namespace(work=work))
                 fusion = json.loads((Path(work) / "result.json").read_text())
                 self.assertEqual(fusion["subtype"], "success")
                 self.assertIn("Detalle.", fusion["result"])
@@ -3340,6 +3341,7 @@ class Workflows(unittest.TestCase):
                 "review_render.py",
                 "review_github.py",
                 "review_commands.py",
+                "review_coordinator.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3707,14 +3709,14 @@ class Workflows(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    review.cmd_execute_request(
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
+                    review_coordinator.cmd_execute_request(
                         argparse.Namespace(work=work, request_id="1")
                     )
             (Path(work) / "result.json").write_text(
                 json.dumps({review_config.ERROR_KEY: "falta el secret AI_REVIEW_API_KEY"})
             )
-            review.cmd_close_result(argparse.Namespace(work=work))
+            review_coordinator.cmd_close_result(argparse.Namespace(work=work))
             paquete = json.loads((Path(work) / "result.json").read_text())
         self.assertEqual(
             paquete[review_config.ERROR_KEY],
@@ -3736,7 +3738,7 @@ class Workflows(unittest.TestCase):
                 "GITHUB_STEP_SUMMARY": str(w / "summary"),
             }
             with mock.patch.dict(os.environ, entorno):
-                review.cmd_close_result(argparse.Namespace(work=work))
+                review_coordinator.cmd_close_result(argparse.Namespace(work=work))
             return tuple(
                 (w / n).read_text() if (w / n).exists() else ""
                 for n in ("out", "summary")
@@ -3781,10 +3783,10 @@ class Workflows(unittest.TestCase):
                     )
                     (w / "result.json").write_text(json.dumps(resultado))
                     with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(w / "out")}):
-                        review.cmd_close_result(argparse.Namespace(work=work))
+                        review_coordinator.cmd_close_result(argparse.Namespace(work=work))
                     salida = (w / "out").read_text()
                     artifact = json.loads((w / "result.json").read_text())
-                fallo = review.fallo_de_resultado(artifact, 77, 1)
+                fallo = review_coordinator.fallo_de_resultado(artifact, 77, 1)
                 self.assertEqual(salida, esperado)
                 self.assertEqual(fallo is None, esperado == "reviewed=true\n")
 
@@ -3823,7 +3825,7 @@ class Workflows(unittest.TestCase):
                 )
             )
             with mock.patch.dict(os.environ, {"FINDING_IDENTITY": en_entorno}):
-                review.cmd_close_result(argparse.Namespace(work=work))
+                review_coordinator.cmd_close_result(argparse.Namespace(work=work))
             return json.loads((Path(work) / "result.json").read_text())
 
     def test_close_result_parsea_con_la_identidad_del_coordinador(self):
@@ -3852,7 +3854,7 @@ class Workflows(unittest.TestCase):
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
         with mock.patch.object(review_github, "sh", sh_falso):
             with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
-                review.despachar_worker(
+                review_coordinator.despachar_worker(
                     solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
                 )
         self.assertIn("finding_identity=anchors", capturado[0])
@@ -3902,7 +3904,7 @@ class Workflows(unittest.TestCase):
                 )
             )
             with mock.patch.dict(os.environ, {"API_KEY": "sk-secreto"}):
-                review.cmd_close_result(argparse.Namespace(work=work))
+                review_coordinator.cmd_close_result(argparse.Namespace(work=work))
             paquete = json.loads((Path(work) / "result.json").read_text())
         self.assertEqual(paquete["total_cost_usd"], 0.0421)
         self.assertEqual(paquete["usage"], {"input_tokens": 900, "output_tokens": 80})
@@ -4040,14 +4042,14 @@ class Workflows(unittest.TestCase):
         }
         base_env.update(entorno)
         with mock.patch.dict(os.environ, base_env, clear=False):
-            with mock.patch.object(review, "ComentariosGh", return_value=falso):
+            with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                 with mock.patch.object(review_github, "sh", sh_falso):
                     with mock.patch.object(
-                        review,
+                        review_coordinator,
                         "despachar_worker",
                         side_effect=lambda s, **kw: despachados.append(s.id),
                     ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         return falso.patches, despachados
 
     def test_el_error_del_worker_no_se_publica_como_revision(self):
@@ -4487,7 +4489,7 @@ class Workflows(unittest.TestCase):
 
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
         with mock.patch.object(review_github, "sh", sh_falso):
-            review.despachar_worker(
+            review_coordinator.despachar_worker(
                 solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
             )
         self.assertIn("head_sha=" + "c" * 40, capturado[0])
@@ -4550,8 +4552,8 @@ class Workflows(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    review.cmd_execute_request(
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
+                    review_coordinator.cmd_execute_request(
                         argparse.Namespace(work=tmp, request_id="1")
                     )
             paquete = json.loads((Path(tmp) / "request-package.json").read_text())
@@ -4582,8 +4584,8 @@ class Workflows(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                    review.cmd_execute_request(
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
+                    review_coordinator.cmd_execute_request(
                         argparse.Namespace(work=tmp, request_id="1")
                     )
             paquete = json.loads((Path(tmp) / "request-package.json").read_text())
@@ -4599,9 +4601,9 @@ class Workflows(unittest.TestCase):
                 {"REPO": "o/r", "PR_NUMBER": "1", "GITHUB_RUN_ID": "55"},
                 clear=False,
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with self.assertRaises(SystemExit):
-                        review.cmd_execute_request(
+                        review_coordinator.cmd_execute_request(
                             argparse.Namespace(work=tmp, request_id="99")
                         )
 
@@ -4635,8 +4637,8 @@ class Workflows(unittest.TestCase):
                     },
                     clear=False,
                 ):
-                    with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                        review.cmd_execute_request(
+                    with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
+                        review_coordinator.cmd_execute_request(
                             argparse.Namespace(work=str(trabajo), request_id="1")
                         )
             paquete = json.loads((trabajo / "request-package.json").read_text())
@@ -5572,10 +5574,10 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
                         "GITHUB_RUN_ATTEMPT": "1",
                     },
                 ),
-                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                review.cmd_execute_request(
+                review_coordinator.cmd_execute_request(
                     argparse.Namespace(work=str(work), request_id="2")
                 )
         finally:
@@ -5783,7 +5785,7 @@ class ReviewContinuity(unittest.TestCase):
                                 (work / "manifest.json").write_text(json.dumps(manifest))
                                 (work / "result.json").write_text(json.dumps(resultado))
                                 with contextlib.redirect_stdout(io.StringIO()):
-                                    review.cmd_close_result(argparse.Namespace(work=str(work)))
+                                    review_coordinator.cmd_close_result(argparse.Namespace(work=str(work)))
                                 artifact = json.loads((work / "result.json").read_text())
                                 self.assertFalse(artifact["model_ok"])
                                 self.assertEqual(artifact["cobertura"], domain.PARTIAL)
@@ -5793,11 +5795,11 @@ class ReviewContinuity(unittest.TestCase):
                                     model_ok=True, cobertura=domain.COMPLETE_CLAIM,
                                     observaciones=domain.legacy_raw_of({"findings": [invalida, valida]})["findings"],
                                 )
-                                autenticado = review.authenticate_result(
+                                autenticado = review_coordinator.authenticate_result(
                                     dict(repository="o/r", workflow="ai-review-worker", ref="main",
                                          sha="f" * 40, run_id=11, attempt=1),
                                     artifact,
-                                    review.request_de_solicitud(solicitud, repository="o/r", ref="main", workflow_sha="f" * 40),
+                                    review_coordinator.request_de_solicitud(solicitud, repository="o/r", ref="main", workflow_sha="f" * 40),
                                 )
                                 current = replace(
                                     domain.snapshot_a_v3(domain.read_snapshot(cuerpo_previo).snapshot),
@@ -5814,7 +5816,7 @@ class ReviewContinuity(unittest.TestCase):
                                     domain.RepositoryFacts(revision=revision, changed_paths=("other.py",), delta_calculado=True),
                                     policy,
                                 )
-                                cuerpo = review.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
+                                cuerpo = review_coordinator.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
                                     domain.encode_snapshot(decision.snapshot).block, cuerpo_previo
                                 )
                         self.assertEqual(review_sticky.reviewed_completion(cuerpo), "partial")
@@ -8118,7 +8120,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
     def test_las_explicaciones_son_texto_del_modelo_y_no_forman_un_aviso_del_programa(self):
         for nombre, variante in self.VARIANTES_DEL_MODELO.items():
             with self.subTest(variante=nombre):
-                texto = review.texto_de_explicacion(
+                texto = review_coordinator.texto_de_explicacion(
                     {"result": f"Causa.\n{variante}\nCOVERAGE: complete"}
                 )
                 self.assertIn(self.MARCA, texto)
@@ -8159,7 +8161,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         for banner in (
             review_render.AVISO_SIN_ESPACIO,
             review_render.caution_banner("falló", "a" * 40, False),
-            review.aviso_de_comando_no_entendido(5),
+            review_coordinator.aviso_de_comando_no_entendido(5),
         ):
             primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
             self.assertTrue(

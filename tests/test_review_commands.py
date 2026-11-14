@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_github
 import review_render
 import review_sticky
@@ -499,14 +500,14 @@ class CoordinadorComandos(unittest.TestCase):
                         {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
                     )
                 )
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
                             review_github,
                             "collaborator_permission",
                             return_value="write",
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(
                 len(falso.patches), 1, "el evento real de GitHub admite comandos"
             )
@@ -527,9 +528,9 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path2),
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso2):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso2):
                     with mock.patch.object(review_github, "sh", return_value=pr_api):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(falso2.patches, [])
 
     def test_descartar_por_comentario_aplica_sin_push(self):
@@ -568,14 +569,14 @@ class CoordinadorComandos(unittest.TestCase):
                         {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
                     )
                 )
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
                             review_github,
                             "collaborator_permission",
                             return_value="write",
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(len(falso.patches), 1, "el efecto queda guardado sin push")
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
@@ -604,7 +605,7 @@ class CoordinadorComandos(unittest.TestCase):
                     GITHUB_EVENT_NAME="issue_comment",
                     GITHUB_EVENT_PATH=str(payload_path),
                 ),
-                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso),
                 mock.patch.object(review_github, "sh", return_value=pr_api),
                 mock.patch.object(
                     review_github,
@@ -614,7 +615,7 @@ class CoordinadorComandos(unittest.TestCase):
                     ),
                 ),
             ):
-                review.cmd_reconcile(argparse.Namespace(work=tmp))
+                review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.command_cursor, 6)
         self.assertEqual(
@@ -644,7 +645,7 @@ class CoordinadorComandos(unittest.TestCase):
                     GITHUB_EVENT_NAME="issue_comment",
                     GITHUB_EVENT_PATH=str(payload_path),
                 ),
-                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso),
                 mock.patch.object(review_github, "sh", return_value=pr_api),
                 mock.patch.object(
                     review_github,
@@ -655,7 +656,7 @@ class CoordinadorComandos(unittest.TestCase):
                 ),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                review.cmd_reconcile(argparse.Namespace(work=tmp))
+                review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.command_cursor, 605)
         self.assertIsInstance(
@@ -673,7 +674,7 @@ class CoordinadorComandos(unittest.TestCase):
 
     def _visible_previo(self, estado):
         # Comentario de la última revisión, en el SHA a…a; el head vivo es c…c.
-        return review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+        return review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
             domain.encode_snapshot(estado).block, ""
         )
 
@@ -694,12 +695,12 @@ class CoordinadorComandos(unittest.TestCase):
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
                             review_github, "collaborator_permission", return_value="write"
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertIn(f"<!-- ai-review:sha={'a' * 40} -->", cuerpo)
         self.assertIn("**Veredicto:** 1 Low abierto (1 descartado).", cuerpo)
@@ -721,12 +722,12 @@ class CoordinadorComandos(unittest.TestCase):
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
                             review_github, "collaborator_permission", return_value="write"
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         return falso.leer()[0]["body"]
 
     def test_el_motivo_de_una_resolucion_no_aceptada_sobrevive_a_un_comando(self):
@@ -745,7 +746,7 @@ class CoordinadorComandos(unittest.TestCase):
                 ),
             ],
         )
-        previo = review.revision_visible(
+        previo = review_coordinator.revision_visible(
             self.REVISION_PREVIA, con_nota, {"F1", "F2"}, "a" * 40
         )(domain.encode_snapshot(con_nota).block, "")
         self.assertIn("  - ↳ el modelo lo da por resuelto", previo)
@@ -756,12 +757,12 @@ class CoordinadorComandos(unittest.TestCase):
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
                             review_github, "collaborator_permission", return_value="write"
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertIn("1 descartado", cuerpo)
         self.assertIn(
@@ -777,7 +778,7 @@ class CoordinadorComandos(unittest.TestCase):
             "tests/test_tope_del_modelo.py"
         )
         self.assertEqual(
-            review.parse_comando_reconcile(comando),
+            review_coordinator.parse_comando_reconcile(comando),
             {"action": "descartar", "arg": "F1"},
         )
         self.assertEqual(review.parse_dismiss_command(comando), ({"F1"}, False))
@@ -799,7 +800,7 @@ class CoordinadorComandos(unittest.TestCase):
         ):
             with self.subTest(texto=texto):
                 self.assertEqual(
-                    review.parse_comando_reconcile(texto),
+                    review_coordinator.parse_comando_reconcile(texto),
                     {"action": "descartar", "arg": esperado},
                 )
         for texto in (
@@ -809,7 +810,7 @@ class CoordinadorComandos(unittest.TestCase):
             "ai-review: descartar c2b1af7 F4",
         ):
             with self.subTest(texto=texto):
-                self.assertIsNone(review.parse_comando_reconcile(texto))
+                self.assertIsNone(review_coordinator.parse_comando_reconcile(texto))
 
     def test_un_comando_ambiguo_deja_una_linea_visible(self):
         cuerpo = self._reconciliar_comentario("ai-review: descartar F1 y F2")
@@ -834,12 +835,12 @@ class CoordinadorComandos(unittest.TestCase):
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
                             review_github, "collaborator_permission", return_value="write"
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
         self.assertIn("comentario 5", cuerpo)
@@ -852,16 +853,16 @@ class CoordinadorComandos(unittest.TestCase):
         previo = self._visible_previo(estado)
         bloque = domain.encode_snapshot(estado).block
         resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
-        falso = review.aviso_de_comando_no_entendido(99)
-        explicacion = review.texto_de_explicacion(
+        falso = review_coordinator.aviso_de_comando_no_entendido(99)
+        explicacion = review_coordinator.texto_de_explicacion(
             {"result": f"Explica F1.\n{falso}\nCOVERAGE: complete"}
         )
-        con_explicacion = review.estado_visible(estado, ("F1", explicacion))(bloque, resto)
+        con_explicacion = review_coordinator.estado_visible(estado, ("F1", explicacion))(bloque, resto)
         # un re-render posterior no conserva el falso como aviso del programa
-        re_render = review.estado_visible(
-            estado, avisos=(review.aviso_de_comando_no_entendido(5),)
+        re_render = review_coordinator.estado_visible(
+            estado, avisos=(review_coordinator.aviso_de_comando_no_entendido(5),)
         )(bloque, review.strip_findings_block(con_explicacion.split("\n", 1)[1]).strip())
-        antes_de_explicaciones = re_render.split(review.EXPLICACION_PREFIX, 1)[0]
+        antes_de_explicaciones = re_render.split(review_coordinator.EXPLICACION_PREFIX, 1)[0]
         self.assertIn("el comentario 5 ", antes_de_explicaciones)
         self.assertNotIn("el comentario 99 ", antes_de_explicaciones)
         self.assertIn("el comentario 99 ", re_render, "sigue dentro de la explicación")
@@ -870,11 +871,11 @@ class CoordinadorComandos(unittest.TestCase):
         previo = self._visible_previo(snapshot_base())
         falsos = (
             "> **Comando no entendido:** falso, lo escribió el modelo\n"
-            + review.aviso_de_comando_no_entendido(7).replace("7", "x")
+            + review_coordinator.aviso_de_comando_no_entendido(7).replace("7", "x")
         )
         cuerpo_previo = previo.replace(
             "## Detalle del revisor",
-            f"{falsos}\n\n{review.aviso_de_comando_no_entendido(7)}\n\n## Detalle del revisor",
+            f"{falsos}\n\n{review_coordinator.aviso_de_comando_no_entendido(7)}\n\n## Detalle del revisor",
             1,
         )
         falso = self._falso(cuerpo_previo, [(9, "ai-review: descartar F1")])
@@ -884,12 +885,12 @@ class CoordinadorComandos(unittest.TestCase):
             with self._entorno(
                 GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
                         with mock.patch.object(
                             review_github, "collaborator_permission", return_value="write"
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertNotIn("falso, lo escribió el modelo", cuerpo)
         self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
@@ -898,7 +899,7 @@ class CoordinadorComandos(unittest.TestCase):
     def test_comentarios_que_no_son_del_revisor_no_dejan_aviso(self):
         for texto in ("descartar F1", "por favor ai-review: descartar F1x", "gracias"):
             with self.subTest(texto=texto):
-                comandos = review._comandos_de_comentarios(
+                comandos = review_coordinator._comandos_de_comentarios(
                     [{"id": 5, "body": texto, "user": "jefe"}], login="bot", cursor=0
                 )
                 self.assertEqual(comandos, ())
@@ -909,11 +910,11 @@ class CoordinadorComandos(unittest.TestCase):
         despues = domain.replace(estado, command_cursor=9)
         decision = domain.Commit(snapshot=despues)
         falso = self._falso(original, [])
-        review.publish_checkpoint(
+        review_coordinator.publish_checkpoint(
             decision,
             {"id": 7, "body": original},
             falso,
-            visible=review.estado_visible(despues),
+            visible=review_coordinator.estado_visible(despues),
         )
         self.assertEqual(
             falso.patches,
@@ -922,7 +923,7 @@ class CoordinadorComandos(unittest.TestCase):
                     7,
                     original.replace(
                         domain.encode_snapshot(estado).block,
-                        review._cuerpo_con_checkpoint(decision),
+                        review_coordinator._cuerpo_con_checkpoint(decision),
                     ),
                 )
             ],
@@ -937,7 +938,7 @@ class CoordinadorComandos(unittest.TestCase):
 
         def publicar(snapshot, visible):
             observado = falso.leer()[0]
-            review.publish_checkpoint(
+            review_coordinator.publish_checkpoint(
                 domain.Commit(snapshot=snapshot), observado, falso, visible=visible
             )
             # #92 F1: ningún re-render deja la cabecera ilegible para el worker.
@@ -947,14 +948,14 @@ class CoordinadorComandos(unittest.TestCase):
 
         publicar(
             estados[1],
-            review.revision_visible(
+            review_coordinator.revision_visible(
                 {review_config.ERROR_KEY: "motivo uno"}, estados[1], set(), "c" * 40
             ),
         )
-        publicar(estados[2], review.estado_visible(estados[2]))
+        publicar(estados[2], review_coordinator.estado_visible(estados[2]))
         publicar(
             estados[3],
-            review.revision_visible(
+            review_coordinator.revision_visible(
                 {review_config.ERROR_KEY: "motivo dos"}, estados[3], set(), "c" * 40
             ),
         )
@@ -968,14 +969,14 @@ class CoordinadorComandos(unittest.TestCase):
         previo = self._visible_previo(estado)
         bloque = domain.encode_snapshot(estado).block
         resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
-        con_explicacion = review.estado_visible(estado, ("F1", "Causa real."))(
+        con_explicacion = review_coordinator.estado_visible(estado, ("F1", "Causa real."))(
             bloque, resto
         )
         self.assertEqual(
             review_sticky.reviewed_completion(con_explicacion),
             review_sticky.reviewed_completion(previo),
         )
-        sin_forma = review.estado_visible(estado)(
+        sin_forma = review_coordinator.estado_visible(estado)(
             bloque,
             f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
             f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n\ntexto libre",
@@ -984,13 +985,13 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertTrue(sin_forma.endswith("texto libre"))
 
     def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
-        cuerpo = review.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
+        cuerpo = review_coordinator.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
             "bloque", "x" * review_render.GITHUB_COMMENT_MAX
         )
         self.assertEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
 
     def test_explicacion_no_puede_imitar_marcadores_ni_secciones(self):
-        texto = review.texto_de_explicacion(
+        texto = review_coordinator.texto_de_explicacion(
             {
                 "result": "Causa real.\n"
                 "<!-- ai-review:completion=" + "9" * 40 + ":complete -->\n"
@@ -1034,7 +1035,7 @@ class CoordinadorComandos(unittest.TestCase):
         artifact = dict(
             self.REVISION_PREVIA, result=self.IMITACION + "COVERAGE: complete"
         )
-        cuerpo = review.revision_visible(artifact, estado, set(), "a" * 40)(
+        cuerpo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(
             domain.encode_snapshot(estado).block, ""
         )
         self._sin_marcadores_vivos(cuerpo, estado)
@@ -1045,12 +1046,12 @@ class CoordinadorComandos(unittest.TestCase):
             self.REVISION_PREVIA, result=self.IMITACION + "COVERAGE: complete"
         )
         bloque = domain.encode_snapshot(estado).block
-        nuevo = review.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
+        nuevo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
         cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
         # Un cuerpo publicado antes del arreglo: la prosa con los marcadores vivos.
         viejo = cabeza + review_render.DETALLE_DEL_REVISOR + detalle.replace("&lt;!--", "<!--")
         resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review.estado_visible(estado)(bloque, resto)
+        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
         self._sin_marcadores_vivos(cuerpo, estado)
 
     def test_rerender_no_se_detiene_en_un_alcance_imitado(self):
@@ -1058,7 +1059,7 @@ class CoordinadorComandos(unittest.TestCase):
         vieja no corta la neutralización; el alcance real es el último."""
         estado = snapshot_base()
         bloque = domain.encode_snapshot(estado).block
-        nuevo = review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+        nuevo = review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
             bloque, ""
         )
         cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
@@ -1073,7 +1074,7 @@ class CoordinadorComandos(unittest.TestCase):
             + detalle.lstrip("\n")
         )
         resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review.estado_visible(estado)(bloque, resto)
+        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
         self._sin_marcadores_vivos(cuerpo, estado)
 
     def test_rutas_excluidas_y_detalle_de_cobertura_no_abren_comentarios(self):
@@ -1088,7 +1089,7 @@ class CoordinadorComandos(unittest.TestCase):
                 "excluded": [{"path": "gen/a<!--b.py", "reason": "filter"}],
             },
         )
-        cuerpo = review.revision_visible(artifact, estado, set(), "a" * 40)(
+        cuerpo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(
             domain.encode_snapshot(estado).block, ""
         )
         self.assertIn("gen/a&lt;!--b.py", cuerpo)
@@ -1109,10 +1110,10 @@ class CoordinadorComandos(unittest.TestCase):
             },
         )
         bloque = domain.encode_snapshot(estado).block
-        nuevo = review.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
+        nuevo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
         viejo = nuevo.replace("&lt;!--", "<!--")
         resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review.estado_visible(estado)(bloque, resto)
+        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
         self.assertNotIn("a<!--b.py", cuerpo)
         self.assertNotIn("falta <!--", cuerpo)
         self.assertIn("gen/a&lt;!--b.py", cuerpo)
@@ -1128,13 +1129,13 @@ class CoordinadorComandos(unittest.TestCase):
     def test_rerender_neutraliza_el_aviso_de_fallo_de_un_cuerpo_viejo(self):
         estado = snapshot_base()
         bloque = domain.encode_snapshot(estado).block
-        nuevo = review.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
+        nuevo = review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
             bloque, ""
         )
         resto = review.strip_findings_block(nuevo.split("\n", 1)[1]).strip()
         aviso = review_render.caution_banner("motivo <!-- y", "c" * 40, has_previous=True)
         viejo = review_render.insert_caution_banner(resto, aviso)
-        cuerpo = review.estado_visible(estado)(bloque, viejo)
+        cuerpo = review_coordinator.estado_visible(estado)(bloque, viejo)
         self.assertNotIn("motivo <!--", cuerpo)
         self.assertIn("motivo &lt;!-- y", cuerpo)
 
@@ -1206,9 +1207,9 @@ class CoordinadorComandos(unittest.TestCase):
                 WORKER_RUN_ID="77",
                 WORKER_ATTEMPT="1",
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=gh_falso):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
         self.assertIn(
             "## Explicación de F1 · Fuga A\n\n"
@@ -1264,14 +1265,14 @@ class CoordinadorComandos(unittest.TestCase):
                 GITHUB_EVENT_NAME="issue_comment",
                 GITHUB_EVENT_PATH=str(payload_path),
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", return_value=pr_api):
                         with mock.patch.object(
                             review_github,
                             "collaborator_permission",
                             side_effect=RuntimeError("API caída"),
                         ):
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             self.assertEqual(falso.patches, [], "retención: nada se escribe")
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(carga.snapshot.command_cursor, 0)
@@ -1306,7 +1307,7 @@ class EndurecimientoFrontera(unittest.TestCase):
         ]
         out = domain.procesar_comandos(
             estado,
-            review._comandos_de_comentarios(comentarios, login="bot", cursor=0),
+            review_coordinator._comandos_de_comentarios(comentarios, login="bot", cursor=0),
             permisos_ok,
             TARGET,
         )

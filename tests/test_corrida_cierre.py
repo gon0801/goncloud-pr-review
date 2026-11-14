@@ -17,6 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_github
 import review_run
 import review_config
@@ -211,7 +212,7 @@ class VueltaDeCierre(unittest.TestCase):
             mock.patch.dict(os.environ, entorno),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            review.cmd_close_result(argparse.Namespace(work=str(self.work)))
+            review_coordinator.cmd_close_result(argparse.Namespace(work=str(self.work)))
         return json.loads((self.work / "result.json").read_text())
 
     def test_el_comentario_lleva_los_hallazgos_de_la_vuelta_de_cierre(self):

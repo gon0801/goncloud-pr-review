@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_config
 import review_github
 import review_sticky
@@ -184,7 +185,7 @@ def estados(github):
 
 def sticky_con(estado, visible=""):
     bloque = domain.encode_snapshot(estado).block
-    return {"id": 7, "body": review.cuerpo_con_cabecera(bloque, visible), "user": BOT}
+    return {"id": 7, "body": review_coordinator.cuerpo_con_cabecera(bloque, visible), "user": BOT}
 
 
 def correr(github, evento, head=None, permiso="write", aviso=None):
@@ -243,14 +244,14 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
         permisos = permiso if callable(permiso) else (lambda repo, login: permiso)
         with (
             mock.patch.dict(os.environ, entorno, clear=False),
-            mock.patch.object(review, "ComentariosGh", return_value=github),
+            mock.patch.object(review_coordinator, "ComentariosGh", return_value=github),
             mock.patch.object(review_github, "sh", side_effect=sh_falso),
             mock.patch.object(review_github, "collaborator_permission", side_effect=permisos),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(err),
         ):
             try:
-                review.cmd_reconcile(argparse.Namespace(work=tmp))
+                review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             except SystemExit as salida:
                 codigo = salida.code or 0
     return codigo, despachos, err.getvalue()
@@ -355,7 +356,7 @@ class ComandosEnCualquierEvento(unittest.TestCase):
             estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
         )
         self.assertEqual(github.estado().command_cursor, 30)
-        aviso = review.aviso_de_todo_tardio(20)
+        aviso = review_coordinator.aviso_de_todo_tardio(20)
         self.assertIn(aviso, github.sticky())
         github.comentar(31, "ai-review: descartar F2")
         correr(github, "issue_comment")

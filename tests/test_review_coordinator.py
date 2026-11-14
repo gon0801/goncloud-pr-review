@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_github
 import review_sticky
 import review_config
@@ -646,8 +647,8 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": self._con_revision(estado)}])
         decision = decision_con_trabajo(estado)
-        recibo = review.publish_checkpoint(decision, falso.leer()[0], falso)
-        self.assertIsInstance(recibo, review.PublishReceipt)
+        recibo = review_coordinator.publish_checkpoint(decision, falso.leer()[0], falso)
+        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
         cuerpo = falso.patches[-1][1]
         self.assertEqual(
             cuerpo.split("\n")[:3],
@@ -672,7 +673,7 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
         bloque = domain.encode_snapshot(estado).block
         resto = self._con_revision(estado).split("\n", 1)[1]
         resto = review.strip_findings_block(resto, last=False).strip()
-        cuerpo = review.revision_visible(
+        cuerpo = review_coordinator.revision_visible(
             {review_config.ERROR_KEY: "el proveedor no respondió"}, estado, set(), "f" * 40
         )(bloque, resto)
         self.assertEqual(
@@ -696,12 +697,12 @@ class CheckpointRecovery(unittest.TestCase):
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
         decision = decision_con_trabajo(estado)
         falso.perder_patch = True
-        resultado = review.publish_checkpoint(decision, falso.leer()[0], falso)
-        self.assertIsInstance(resultado, review.Unconfirmed)
+        resultado = review_coordinator.publish_checkpoint(decision, falso.leer()[0], falso)
+        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
 
         observado = falso.leer()[0]
-        confirmado = review.publish_checkpoint(decision, observado, falso)
-        self.assertIsInstance(confirmado, review.PublishReceipt)
+        confirmado = review_coordinator.publish_checkpoint(decision, observado, falso)
+        self.assertIsInstance(confirmado, review_coordinator.PublishReceipt)
         self.assertEqual(len(falso.patches), 1, "no reaplica el PATCH ya aplicado")
         self.assertEqual(confirmado.generacion, decision.snapshot.generation)
         self.assertEqual(len(confirmado.trabajo), 1)
@@ -710,19 +711,19 @@ class CheckpointRecovery(unittest.TestCase):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
         decision = decision_con_trabajo(estado)
-        recibo = review.publish_checkpoint(decision, falso.leer()[0], falso)
-        self.assertIsInstance(recibo, review.PublishReceipt)
+        recibo = review_coordinator.publish_checkpoint(decision, falso.leer()[0], falso)
+        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
 
         # caída antes de despachar: el próximo evento relee y recupera el trabajo
         despachados = []
-        review.dispatch_confirmed(recibo, despachar=despachados.append)
+        review_coordinator.dispatch_confirmed(recibo, despachar=despachados.append)
         self.assertEqual([s.id for s in despachados], [1])
 
     def test_dispatch_incierto_y_artifact_vencido(self):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
         decision = decision_con_trabajo(estado)
-        recibo = review.publish_checkpoint(decision, falso.leer()[0], falso)
+        recibo = review_coordinator.publish_checkpoint(decision, falso.leer()[0], falso)
 
         intentos = []
 
@@ -732,8 +733,8 @@ class CheckpointRecovery(unittest.TestCase):
                 raise RuntimeError("dispatch incierto")
 
         with self.assertRaises(RuntimeError):
-            review.dispatch_confirmed(recibo, despachar=despacho_incierto)
-        review.dispatch_confirmed(recibo, despachar=despacho_incierto)
+            review_coordinator.dispatch_confirmed(recibo, despachar=despacho_incierto)
+        review_coordinator.dispatch_confirmed(recibo, despachar=despacho_incierto)
         self.assertEqual(intentos, [1, 1], "la recuperación repite el intento")
 
         vencido = {
@@ -759,20 +760,20 @@ class CheckpointRecovery(unittest.TestCase):
             "ref": "refs/heads/main",
             "workflow_sha": "f" * 40,
         }
-        resultado = review.authenticate_result(vencido, artifact, request)
-        self.assertIsInstance(resultado, review.Rejected)
+        resultado = review_coordinator.authenticate_result(vencido, artifact, request)
+        self.assertIsInstance(resultado, review_coordinator.Rejected)
 
     def test_post_incierto_y_duplicados(self):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([])
         decision = decision_con_trabajo(estado)
         falso.perder_creacion = True
-        resultado = review.publish_checkpoint(
-            decision, None, falso, visible=review.estado_visible(decision.snapshot)
+        resultado = review_coordinator.publish_checkpoint(
+            decision, None, falso, visible=review_coordinator.estado_visible(decision.snapshot)
         )
-        self.assertIsInstance(resultado, review.Unconfirmed)
-        confirmado = review.publish_checkpoint(decision, falso.leer()[0], falso)
-        self.assertIsInstance(confirmado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
+        confirmado = review_coordinator.publish_checkpoint(decision, falso.leer()[0], falso)
+        self.assertIsInstance(confirmado, review_coordinator.PublishReceipt)
         self.assertEqual(len(falso.creaciones), 1, "no crea otro comentario")
 
         duplicados = _ComentarioFalso(
@@ -781,8 +782,8 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado)},
             ]
         )
-        detenido = review.publish_checkpoint(decision, duplicados.leer()[0], duplicados)
-        self.assertIsInstance(detenido, review.Unconfirmed)
+        detenido = review_coordinator.publish_checkpoint(decision, duplicados.leer()[0], duplicados)
+        self.assertIsInstance(detenido, review_coordinator.Unconfirmed)
         self.assertEqual(duplicados.patches, [])
         self.assertEqual(duplicados.creaciones, [])
 
@@ -792,10 +793,10 @@ class CheckpointRecovery(unittest.TestCase):
         citado = cuerpo_v3(snapshot_base(generation=9))
         cuerpo = f"{cuerpo_v3(estado)}\n\nLa prosa cita un bloque del PR:\n{citado}\n"
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo}])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             decision, falso.leer()[0], falso, login="bot"
         )
-        self.assertIsInstance(resultado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
         self.assertEqual(len(falso.patches), 1)
         cuerpo_nuevo = falso.leer()[0]["body"]
         carga = domain.read_snapshot(cuerpo_nuevo)
@@ -811,10 +812,10 @@ class CheckpointRecovery(unittest.TestCase):
         estado = snapshot_base(generation=1)
         decision = decision_con_trabajo(estado)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado), "user": "bot"}])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             decision, falso.leer()[0], falso, login="bot"
         )
-        self.assertIsInstance(resultado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
 
     def test_otros_logins_no_cuentan_como_duplicados(self):
         estado = snapshot_base(generation=1)
@@ -825,10 +826,10 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado), "login": "intruso"},
             ]
         )
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             decision, falso.leer()[0], falso, login="bot"
         )
-        self.assertIsInstance(resultado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
 
         dos_del_bot = _ComentarioFalso(
             [
@@ -836,22 +837,22 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado), "login": "bot"},
             ]
         )
-        detenido = review.publish_checkpoint(
+        detenido = review_coordinator.publish_checkpoint(
             decision, dos_del_bot.leer()[0], dos_del_bot, login="bot"
         )
-        self.assertIsInstance(detenido, review.Unconfirmed)
+        self.assertIsInstance(detenido, review_coordinator.Unconfirmed)
         self.assertEqual(dos_del_bot.patches, [])
 
     def test_keep_es_un_no_op_confirmado(self):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             domain.Keep(reason="resultado repetido"),
             falso.leer()[0],
             falso,
             login="bot",
         )
-        self.assertIsInstance(resultado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
         self.assertEqual(resultado.trabajo, ())
         self.assertEqual(falso.patches, [])
 
@@ -873,7 +874,7 @@ class CheckpointRecovery(unittest.TestCase):
             "observaciones": (),
             "cobertura": domain.COMPLETE_CLAIM,
         }
-        request = review.request_de_solicitud(
+        request = review_coordinator.request_de_solicitud(
             solicitud, repository="o/r", ref="main", workflow_sha="f" * 40
         )
         self.assertEqual(
@@ -889,8 +890,8 @@ class CheckpointRecovery(unittest.TestCase):
             "run_id": 11,
             "attempt": 1,
         }
-        rechazado = review.authenticate_result(metadata, artifact, request)
-        self.assertIsInstance(rechazado, review.Rejected)
+        rechazado = review_coordinator.authenticate_result(metadata, artifact, request)
+        self.assertIsInstance(rechazado, review_coordinator.Rejected)
 
 
 class ResultAuthentication(unittest.TestCase):
@@ -932,10 +933,10 @@ class ResultAuthentication(unittest.TestCase):
         return base
 
     def test_workflow_sha_is_not_pr_sha(self):
-        ok = review.authenticate_result(
+        ok = review_coordinator.authenticate_result(
             self._metadata(), self._artifact(), self._contexto()
         )
-        self.assertIsInstance(ok, review.AuthenticatedResult)
+        self.assertIsInstance(ok, review_coordinator.AuthenticatedResult)
         self.assertEqual(ok.observaciones, self._artifact()["observaciones"])
 
     def test_rechaza_cada_campo_incorrecto(self):
@@ -948,20 +949,20 @@ class ResultAuthentication(unittest.TestCase):
         }
         for nombre, (campo, valor) in casos.items():
             with self.subTest(caso=nombre):
-                rechazado = review.authenticate_result(
+                rechazado = review_coordinator.authenticate_result(
                     self._metadata(**{campo: valor}),
                     self._artifact(),
                     self._contexto(),
                 )
-                self.assertIsInstance(rechazado, review.Rejected)
+                self.assertIsInstance(rechazado, review_coordinator.Rejected)
 
         with self.subTest(caso="attempt"):
-            rechazado = review.authenticate_result(
+            rechazado = review_coordinator.authenticate_result(
                 self._metadata(attempt=2),
                 self._artifact(attempt=1),
                 self._contexto(),
             )
-            self.assertIsInstance(rechazado, review.Rejected)
+            self.assertIsInstance(rechazado, review_coordinator.Rejected)
 
         for nombre, over in {
             "request": {"request_id": 42},
@@ -969,10 +970,10 @@ class ResultAuthentication(unittest.TestCase):
             "digest": {"policy_digest": "9" * 64},
         }.items():
             with self.subTest(caso=nombre):
-                rechazado = review.authenticate_result(
+                rechazado = review_coordinator.authenticate_result(
                     self._metadata(), self._artifact(**over), self._contexto()
                 )
-                self.assertIsInstance(rechazado, review.Rejected)
+                self.assertIsInstance(rechazado, review_coordinator.Rejected)
 
 
 class CoordinadorCli(unittest.TestCase):
@@ -998,13 +999,13 @@ class CoordinadorCli(unittest.TestCase):
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(
-                        review,
+                        review_coordinator,
                         "despachar_worker",
                         side_effect=lambda s, **kw: despachados.append(s.id),
                     ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(len(falso.patches), 1)
         self.assertEqual(despachados, [1])
 
@@ -1050,10 +1051,10 @@ class CoordinadorCli(unittest.TestCase):
                 WORKER_RUN_ID=str(corrida["id"]),
                 WORKER_ATTEMPT="1",
             ):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(review_github, "sh", side_effect=falso_sh):
                         try:
-                            review.cmd_reconcile(argparse.Namespace(work=tmp))
+                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
                         except SystemExit as exc:
                             return exc.code
         return None
@@ -1140,13 +1141,13 @@ class CoordinadorCli(unittest.TestCase):
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(
-                        review,
+                        review_coordinator,
                         "despachar_worker",
                         side_effect=lambda s, **kw: despachados.append(s.id),
                     ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(len(falso.patches), 1)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
@@ -1166,13 +1167,13 @@ class CoordinadorCli(unittest.TestCase):
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(
-                        review,
+                        review_coordinator,
                         "despachar_worker",
                         side_effect=lambda s, **kw: despachados.append(s.id),
                     ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(despachados, [1])
 
     def test_base_ausente_sin_revision_falla_alto(self):
@@ -1189,9 +1190,9 @@ class CoordinadorCli(unittest.TestCase):
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(vacio)}])
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp, BASE_SHA=""):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with self.assertRaises(SystemExit):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
 
     def test_base_ausente_con_revision_usa_la_persistida(self):
         """BASE_SHA vacío cae a la revisión persistida del checkpoint."""
@@ -1203,13 +1204,13 @@ class CoordinadorCli(unittest.TestCase):
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
             with self._entorno(tmp, BASE_SHA=""):
-                with mock.patch.object(review, "ComentariosGh", return_value=falso):
+                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
                     with mock.patch.object(
-                        review,
+                        review_coordinator,
                         "despachar_worker",
                         side_effect=lambda s, **kw: despachados.append(s.id),
                     ):
-                        review.cmd_reconcile(argparse.Namespace(work=tmp))
+                        review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         self.assertEqual(len(falso.patches), 1)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertEqual(

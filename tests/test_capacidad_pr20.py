@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+import review_coordinator
 
 import review_github
 
@@ -188,15 +189,15 @@ class ElCasoDelPr20Publica(unittest.TestCase):
         sticky = sticky_pr20()
         decision = decision_de_ronda(sticky["body"], ronda_extra())
         previos = {f.id for f in domain.read_snapshot(sticky["body"]).snapshot.findings}
-        visible = review.revision_visible(
+        visible = review_coordinator.revision_visible(
             dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
             decision.snapshot,
             previos,
             ronda_extra()["head_sha"],
         )
         falso = _ComentariosFalsos([sticky])
-        recibo = review.publish_checkpoint(decision, sticky, falso, visible=visible)
-        self.assertIsInstance(recibo, review.PublishReceipt)
+        recibo = review_coordinator.publish_checkpoint(decision, sticky, falso, visible=visible)
+        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
         self.assertEqual(falso.creaciones, [])
         cuerpo = falso.leer()[0]["body"]
         carga = domain.read_snapshot(cuerpo)
@@ -267,10 +268,10 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         )
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             domain.Commit(snapshot=snapshot), sticky, falso
         )
-        self.assertIsInstance(resultado, review.Unconfirmed)
+        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás crea un sticky sin bloque")
         self.assertEqual(len(falso.patches), 1, "el aviso va al sticky existente")
         cuerpo = falso.leer()[0]["body"]
@@ -285,10 +286,10 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         self.assertIsInstance(encoded, domain.EncodedCheckpoint)
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        recibo = review.publish_checkpoint(
+        recibo = review_coordinator.publish_checkpoint(
             domain.Commit(snapshot=snapshot), sticky, falso
         )
-        self.assertIsInstance(recibo, review.PublishReceipt)
+        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
 
 
 class RoundtripDelEstadoCompacto(unittest.TestCase):
@@ -967,13 +968,13 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
         snapshot = snapshot_grande()
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             domain.Commit(snapshot=snapshot),
             sticky,
             falso,
             visible=self._visible_sin_espacio(snapshot),
         )
-        self.assertIsInstance(resultado, review.Unconfirmed)
+        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
         self.assertEqual(falso.creaciones, [])
         self.assertEqual(len(falso.patches), 1)
         cuerpo = falso.leer()[0]["body"]
@@ -987,13 +988,13 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
     def test_sin_sticky_previo_no_crea_nada(self):
         snapshot = snapshot_grande()
         falso = _ComentariosFalsos([])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             domain.Commit(snapshot=snapshot),
             None,
             falso,
             visible=self._visible_sin_espacio(snapshot),
         )
-        self.assertIsInstance(resultado, review.Unconfirmed)
+        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás un sticky sin bloque")
         self.assertEqual(falso.comentarios, [])
 
@@ -1001,10 +1002,10 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
         snapshot = snapshot_grande()
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review.publish_checkpoint(
+        resultado = review_coordinator.publish_checkpoint(
             domain.Commit(snapshot=snapshot), sticky, falso
         )
-        self.assertIsInstance(resultado, review.PublishReceipt)
+        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(carga.block, domain.encode_snapshot(snapshot).block)

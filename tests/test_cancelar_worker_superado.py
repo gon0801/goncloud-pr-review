@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_coordinator
 import review_config
 import review_github
 import review_sticky
@@ -198,14 +199,14 @@ def reconciliar(github, evento, head, artifact=None):
         codigo = 0
         with (
             mock.patch.dict(os.environ, entorno, clear=False),
-            mock.patch.object(review, "ComentariosGh", return_value=github),
+            mock.patch.object(review_coordinator, "ComentariosGh", return_value=github),
             mock.patch.object(review_github, "sh", side_effect=sh_falso),
             mock.patch.object(review_github, "collaborator_permission", return_value="write"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             try:
-                review.cmd_reconcile(argparse.Namespace(work=tmp))
+                review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
             except SystemExit as salida:
                 codigo = salida.code or 0
     return codigo, despachos
@@ -243,7 +244,7 @@ def sticky_con_hallazgo():
         command_cursor=0,
     )
     bloque = domain.encode_snapshot(estado).block
-    return {"id": 7, "body": review.cuerpo_con_cabecera(bloque, ""), "user": BOT}
+    return {"id": 7, "body": review_coordinator.cuerpo_con_cabecera(bloque, ""), "user": BOT}
 
 
 class PushNuevoCancelaAlWorkerAnterior(unittest.TestCase):
