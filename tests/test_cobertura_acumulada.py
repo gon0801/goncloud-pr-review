@@ -643,6 +643,36 @@ class FalloCerrado(unittest.TestCase):
             manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
         self.assertIn("c.py", manifest2["reviewed"])
 
+    def test_unreviewed_que_nombra_un_excluido_acredita_lo_demas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            for i in range(3):
+                (repo / f"grande{i}.py").write_text(lineas(200, f"g{i}_"))
+            head1 = commit(repo, "pasada-1")
+            work1 = Path(tmp, "work1")
+            with mock.patch.dict(os.environ, {"MAX_DIFF_BYTES_TEST": "6000"}):
+                manifest1 = preparar(
+                    repo, work1, base, head1, {"sha": None, "state": None}
+                )
+                self.assertIn(
+                    {"path": "grande2.py", "reason": "budget"}, manifest1["excluded"]
+                )
+                result1 = {
+                    "result": texto_pasada(
+                        "partial", unreviewed=["grande1.py", "grande2.py"], hallazgos=[]
+                    ),
+                    "subtype": "success",
+                }
+                cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+                prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
+                manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
+        _, libro = libro_del(cuerpo1)
+        self.assertEqual(sorted(libro), ["grande0.py"])
+        self.assertEqual(manifest2["mode"], "continuation")
+        self.assertEqual(sorted(manifest2["reviewed"]), ["grande1.py", "grande2.py"])
+
     def test_e_complete_con_excluido_por_budget_es_partial_y_no_lo_anota(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, base, head1 = Escenario().escenario(tmp)
