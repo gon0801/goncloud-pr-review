@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -340,6 +341,12 @@ FAKE_GH = textwrap.dedent(
 )
 
 
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+
 def _sembrar(repo, archivos, mensaje="base"):
     arbol = {}
     blobs = {}
@@ -373,6 +380,18 @@ class InstaladorTest(unittest.TestCase):
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
         self.estado = {"repos": {}}
+        # El instalador corre desde un clon del repo central con el commit
+        # que se fija, como el operador.
+        self.central = Path(self.tmp.name) / "central"
+        (self.central / "scripts").mkdir(parents=True)
+        shutil.copy2(ROOT / "scripts" / "install.sh", self.central / "scripts")
+        shutil.copytree(ROOT / "templates", self.central / "templates")
+        git(self.central, "init", "-q")
+        git(self.central, "config", "user.email", "t@t")
+        git(self.central, "config", "user.name", "t")
+        git(self.central, "add", "-A")
+        git(self.central, "commit", "-qm", "central")
+        self.sha = git(self.central, "rev-parse", "HEAD")
 
     def _repo(self, nombre, archivos):
         self.estado["repos"][nombre] = _sembrar(nombre, archivos)
@@ -400,7 +419,7 @@ class InstaladorTest(unittest.TestCase):
         )
         env.update(extra or {})
         return subprocess.run(
-            [str(ROOT / "scripts" / "install.sh"), *argumentos],
+            [str(self.central / "scripts" / "install.sh"), *argumentos],
             env=env,
             capture_output=True,
             text=True,
@@ -430,7 +449,7 @@ class AtomicInstall(InstaladorTest):
             },
         )
         punta_previa = self.estado["repos"]["o/r"]["branches"]["main"]
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "a" * 40})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         punta = repo["branches"]["chore/ai-review"]
@@ -449,7 +468,7 @@ class AtomicInstall(InstaladorTest):
         )
         for instalado in (publicador, worker):
             self.assertIn("repository: gon0801/goncloud-pr-review", instalado)
-            self.assertIn("ref: " + "a" * 40, instalado)
+            self.assertIn("ref: " + self.sha, instalado)
             self.assertIn("path: ai-review-code", instalado)
             self.assertIn("$GITHUB_WORKSPACE/ai-review-code/review.py", instalado)
         # El checkout del consumidor queda (con historia completa) para traer el PR
@@ -467,7 +486,7 @@ class AtomicInstall(InstaladorTest):
         self.assertEqual(len(repo["commits"]), 2)
         abiertos = [p for p in repo["prs"] if p["head"] == "chore/ai-review"]
         self.assertEqual(len(abiertos), 1)
-        self.assertIn("a" * 40, abiertos[0]["body"])
+        self.assertIn(self.sha, abiertos[0]["body"])
         self.assertIn("DEEPSEEK_API_KEY", abiertos[0]["body"])
         self.assertNotIn("FALLBACK_API_KEY", abiertos[0]["body"])
         self.assertIn("DEEPSEEK_API_KEY", commit["message"])
@@ -478,7 +497,7 @@ class AtomicInstall(InstaladorTest):
             "o/r", {".github/workflows/ai-review.yml": viejo, "README.md": "v1\n"}
         )
         resultado = self._correr(
-            "--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40}, raza={"o/r": 1}
+            "--coordinado", "o/r", extra={"ACTION_SHA": self.sha}, raza={"o/r": 1}
         )
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
@@ -521,7 +540,7 @@ class ReintentoAlDiaConMain(InstaladorTest):
         resultado = self._correr(
             "--coordinado",
             "o/r",
-            extra={"ACTION_SHA": "b" * 40},
+            extra={"ACTION_SHA": self.sha},
             raza={"o/r": 1},
             main_avanza={"o/r": True},
         )
@@ -543,7 +562,7 @@ class ReintentoAlDiaConMain(InstaladorTest):
         )
         resultado = self._correr(
             "o/r",
-            extra={"ACTION_SHA": "c" * 40},
+            extra={"ACTION_SHA": self.sha},
             raza={"o/r": 1},
             main_avanza={"o/r": True},
         )
@@ -570,32 +589,27 @@ class RefijadoDelCoordinado(InstaladorTest):
                 ".github/workflows/ai-review-worker.yml": self.WORKER_FIJADO,
             },
         )
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         (pr,) = repo["prs"]
-        self.assertEqual(
-            pr["title"], "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb"
-        )
+        titulo = f"ci: re-fija el revisor de PRs de aaaaaaa a {self.sha[:7]}"
+        self.assertEqual(pr["title"], titulo)
         enlace = (
             "https://github.com/gon0801/goncloud-pr-review/compare/"
             + "a" * 40
             + "..."
-            + "b" * 40
+            + self.sha
         )
         self.assertIn(enlace, pr["body"])
         self.assertNotIn("retira el escritor anterior", pr["body"])
         commit = repo["commits"][repo["branches"]["chore/ai-review"]]
-        self.assertTrue(
-            commit["message"].startswith(
-                "ci: re-fija el revisor de PRs de aaaaaaa a bbbbbbb\n"
-            )
-        )
+        self.assertTrue(commit["message"].startswith(titulo + "\n"))
         self.assertIn(enlace, commit["message"])
 
     def test_la_primera_instalacion_conserva_su_texto(self):
         self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "b" * 40})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         (pr,) = self._repo_final("o/r")["prs"]
         self.assertEqual(
@@ -655,7 +669,7 @@ class RamaPropiaVieja(InstaladorTest):
             {".github/workflows/ai-review.yml": "viejo\n", "README.md": "readme\n"},
             coordinado,
         )
-        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
+        resultado = self._correr("o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         punta = repo["branches"]["chore/ai-review"]
@@ -680,7 +694,7 @@ class RamaPropiaVieja(InstaladorTest):
             },
             directo,
         )
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "a" * 40})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         self.assertIn(
@@ -722,7 +736,7 @@ class RamaPropiaVieja(InstaladorTest):
         for modo in (("--coordinado", "o/r"), ("o/r",)):
             with self.subTest(modo=modo[0]):
                 punta_previa = self._rama_en_conflicto()
-                resultado = self._correr(*modo, extra={"ACTION_SHA": "a" * 40})
+                resultado = self._correr(*modo, extra={"ACTION_SHA": self.sha})
                 self.assertNotEqual(resultado.returncode, 0)
                 self.assertIn("tiene conflicto con main", resultado.stderr)
                 self.assertNotIn("bórrala", resultado.stderr)
@@ -735,7 +749,7 @@ class RamaPropiaVieja(InstaladorTest):
             with self.subTest(modo=modo[0]):
                 punta_previa = self._rama_en_conflicto()
                 resultado = self._correr(
-                    *modo, extra={"ACTION_SHA": "a" * 40}, fallos={"merges": 1}
+                    *modo, extra={"ACTION_SHA": self.sha}, fallos={"merges": 1}
                 )
                 self.assertNotEqual(resultado.returncode, 0)
                 self.assertIn(
@@ -756,7 +770,7 @@ class CoordinadoSinBandera(InstaladorTest):
             with self.subTest(bandera=bandera):
                 nombre = f"o/r{i}"
                 self._repo(nombre, {".github/workflows/ai-review.yml": "viejo\n"})
-                extra = {"ACTION_SHA": "a" * 40}
+                extra = {"ACTION_SHA": self.sha}
                 if bandera is not None:
                     extra["AI_REVIEW_PILOTO"] = bandera
                 resultado = self._correr("--coordinado", nombre, extra=extra)
@@ -778,7 +792,7 @@ class CoordinadoSinBandera(InstaladorTest):
                 ".github/workflows/ai-review-worker.yml": "worker\n",
             },
         )
-        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
+        resultado = self._correr("o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         self.assertEqual(
@@ -787,15 +801,67 @@ class CoordinadoSinBandera(InstaladorTest):
         )
 
 
-class CoordinadoSinActionSha(InstaladorTest):
-    def test_el_coordinado_sin_action_sha_sale_sin_tocar_nada(self):
-        self._repo("o/r", {".github/workflows/ai-review.yml": "viejo\n"})
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": ""})
-        self.assertEqual(resultado.returncode, 2)
-        self.assertIn("requiere ACTION_SHA", resultado.stderr)
+class PlantillasDelCommitFijado(InstaladorTest):
+    """Un clon atrasado respecto del pin instalaba un coordinador que manda
+    `kind` con un worker que no lo declara: GitHub rechazaba cada despacho
+    (422) y ninguna revisión corría."""
+
+    MARCA = "# plantilla del árbol de trabajo, no del commit fijado"
+    COORDINADO = (
+        ".github/workflows/ai-review-publish.yml",
+        ".github/workflows/ai-review-worker.yml",
+    )
+
+    def _arbol_de_trabajo_desfasado(self):
+        for plantilla in (self.central / "templates").iterdir():
+            with plantilla.open("a") as fh:
+                fh.write(self.MARCA + "\n")
+
+    def _assert_plantillas_del_commit(self, resultado, rutas):
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
-        self.assertNotIn("chore/ai-review", repo["branches"])
-        self.assertEqual(repo["prs"], [])
+        archivos = self._archivos_de(repo, "chore/ai-review")
+        for ruta in rutas:
+            instalado = self._contenido(repo, archivos, ruta)
+            self.assertIn(self.sha, instalado)
+            self.assertNotIn(self.MARCA, instalado)
+
+    def test_el_coordinado_publica_las_plantillas_del_commit_fijado(self):
+        self._arbol_de_trabajo_desfasado()
+        self._repo("o/r", {"README.md": "readme\n"})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
+        self._assert_plantillas_del_commit(resultado, self.COORDINADO)
+
+    def test_el_retorno_publica_la_plantilla_del_commit_fijado(self):
+        self._arbol_de_trabajo_desfasado()
+        self._repo("o/r", dict.fromkeys(self.COORDINADO, "x\n"))
+        resultado = self._correr("o/r", extra={"ACTION_SHA": self.sha})
+        self._assert_plantillas_del_commit(
+            resultado, [".github/workflows/ai-review.yml"]
+        )
+
+    def test_un_pin_que_no_es_un_commit_completo_del_clon_no_publica_nada(self):
+        arbol_vacio = git(self.central, "hash-object", "-w", "-t", "tree", "/dev/null")
+        pines = {
+            "vacío": "",
+            "rama": "main",
+            "corto": self.sha[:7],
+            "inexistente": "0" * 40,
+            "sin plantillas": git(self.central, "commit-tree", "-m", "vacío", arbol_vacio),
+        }
+        modos = (
+            (("--coordinado",), {".github/workflows/ai-review.yml": "viejo\n"}),
+            ((), dict.fromkeys(self.COORDINADO, "x\n")),
+        )
+        for modo, previo in modos:
+            for nombre, pin in pines.items():
+                with self.subTest(modo=modo, pin=nombre):
+                    self.estado = {"repos": {}}
+                    self._repo("o/r", previo)
+                    antes = json.loads(json.dumps(self.estado["repos"]["o/r"]))
+                    resultado = self._correr(*modo, "o/r", extra={"ACTION_SHA": pin})
+                    self.assertNotEqual(resultado.returncode, 0)
+                    self.assertEqual(self._repo_final("o/r"), antes)
 
 
 class CompatibleRollback(InstaladorTest):
@@ -811,7 +877,7 @@ class CompatibleRollback(InstaladorTest):
         repo_antes = self.estado["repos"]["o/r"]
         repo_antes["branches"]["chore/ai-review"] = repo_antes["branches"]["main"]
         punta_previa = repo_antes["branches"]["main"]
-        resultado = self._correr("o/r", extra={"ACTION_SHA": "c" * 40})
+        resultado = self._correr("o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         punta = repo["branches"]["chore/ai-review"]
@@ -821,7 +887,7 @@ class CompatibleRollback(InstaladorTest):
         self.assertNotIn(".github/workflows/ai-review-publish.yml", archivos)
         self.assertNotIn(".github/workflows/ai-review-worker.yml", archivos)
         restituido = self._contenido(repo, archivos, ".github/workflows/ai-review.yml")
-        self.assertIn("gon0801/goncloud-pr-review@" + "c" * 40, restituido)
+        self.assertIn("gon0801/goncloud-pr-review@" + self.sha, restituido)
         self.assertIn("README.md", archivos, "los cambios ajenos se conservan")
         self.assertEqual(commit["parents"], [punta_previa], "un solo commit atómico")
         self.assertNotIn("force-prohibido", open(self.registro_ruta).read())
@@ -838,7 +904,7 @@ class CompatibleRollback(InstaladorTest):
         resultado = self._correr(
             "--coordinado",
             "o/r",
-            extra={"ACTION_SHA": "d" * 40},
+            extra={"ACTION_SHA": self.sha},
             fallos={"git/commits/": 1},
         )
         self.assertNotEqual(
@@ -869,7 +935,7 @@ class CompatibleRollback(InstaladorTest):
         repo_antes["branches"]["chore/ai-review"] = repo_antes["branches"]["main"]
         punta_previa = repo_antes["branches"]["main"]
         resultado = self._correr(
-            "o/r", extra={"ACTION_SHA": "e" * 40}, fallos={"git/trees": 1}
+            "o/r", extra={"ACTION_SHA": self.sha}, fallos={"git/trees": 1}
         )
         self.assertNotEqual(resultado.returncode, 0)
         self.assertIn(
@@ -884,7 +950,7 @@ class CompatibleRollback(InstaladorTest):
         self._repo(
             "o/r", {"README.md": "readme del consumidor\n", "src/app.py": "x = 1\n"}
         )
-        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": "f" * 40})
+        resultado = self._correr("--coordinado", "o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         archivos = self._archivos_de(repo, "chore/ai-review")
@@ -913,12 +979,11 @@ class CompatibleRollback(InstaladorTest):
                 "body": "cuerpo viejo",
             }
         )
-        resultado = self._correr("o/r")
+        resultado = self._correr("o/r", extra={"ACTION_SHA": self.sha})
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         repo = self._repo_final("o/r")
         pr = repo["prs"][0]
         self.assertEqual(pr["number"], 9)
-        self.assertNotIn("@" + "e" * 40, pr["body"], "sin ACTION_SHA no hay pin")
         self.assertIn("ci: revisión automática", pr["title"])
         self.assertNotIn("cuerpo viejo", pr["body"])
 
