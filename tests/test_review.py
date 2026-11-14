@@ -1361,7 +1361,22 @@ class RunAgent(unittest.TestCase):
         )
         ambos = ["División por cero", "Inyección SQL"]
         reparacion_completa = '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: complete'
+        cita = 'El test usa `<!-- ai-review:findings={"findings":[]} -->` como fixture.'
         casos = {
+            "bloque citado en una frase": (
+                f"{cita} División por cero en calc.py:3.",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("complete", ""),
+                ["División por cero"],
+            ),
+            "bloque citado y COVERAGE antes de una frase": (
+                f"{cita}\nCOVERAGE: partial | no leí b.py\n\nEspero que sirva.",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("partial", "no leí b.py"),
+                ["División por cero"],
+            ),
             "parcial sin bloque": (
                 "División por cero en calc.py:3.\n\nCOVERAGE: partial | no leí b.py",
                 f"{self.BLOQUE}\nCOVERAGE: complete",
