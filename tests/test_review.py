@@ -1466,6 +1466,27 @@ class RunAgent(unittest.TestCase):
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
                 )
 
+    def test_una_declaracion_citada_no_acredita_archivos_sin_leer(self):
+        original = (
+            "El formato pedido:\n```\n<!-- ai-review:unreviewed=[] -->\n```\n\n"
+            f"Solo leí a.py.\n\n{self.BLOQUE}\nCOVERAGE: partial | no leí b.py"
+            "\n\nEspero que sirva."
+        )
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([{"result": original, "subtype": "success"}]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            review.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
+        )
+        self.assertIsNone(
+            review.unreviewed_de(result["result"]),
+            "la lista vacía es una cita del formato, no lo que el modelo declaró",
+        )
+
     def test_una_cita_de_coverage_no_sube_a_complete_una_pasada_parcial(self):
         sin_b = '<!-- ai-review:unreviewed=["b.py"] -->'
         parcial = "COVERAGE: partial | no leí b.py"
