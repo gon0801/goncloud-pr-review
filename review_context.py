@@ -955,14 +955,15 @@ def prepare_review(
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
     previa = cobertura_previa or {}
-    revision_previa = current.revision if current is not None else None
-    base_movida = bool(
-        revision_previa
-        and revision_previa.base_sha
-        and revision_previa.base_sha != base
-        and previous_head
-    )
+    base_movida = False
     if modo in ("incremental", "continuation"):
+        # El merge-base contra el que revisó la pasada previa. Un merge de la
+        # base en el PR o un cambio de base lo mueve, y entonces el delta
+        # previous_head..head trae contenido de la base.
+        base_previa = repo.merge_base(
+            current.revision.base_sha or base, previous_head
+        )
+        base_movida = base_previa != merge_base
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
@@ -970,7 +971,10 @@ def prepare_review(
         # acreditación fina que conservar y el alcance es solo el delta.
         # Mover la base puede meter en una ruta acreditada un tramo que antes
         # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
-        candidatas = list(delta_rutas)
+        # Del delta solo cuenta lo que el PR cambia contra su base: una ruta
+        # que head deja igual que el merge-base no es cambio del PR.
+        del_pr = set(historicas)
+        candidatas = [ruta for ruta in delta_rutas if ruta in del_pr]
         if previa:
             vistas = set(candidatas)
             for ruta in historicas:
@@ -987,19 +991,19 @@ def prepare_review(
                     if ruta in candidatas or ruta not in previa:
                         continue
                     if repo.diff_bytes(
-                        revision_previa.base_sha, previous_head, ruta
+                        base_previa, previous_head, ruta
                     ) != repo.diff_bytes(merge_base, head, ruta):
                         candidatas.append(ruta)
         elif base_movida:
             viejas = {
                 path.text
-                for path in repo.changed_files(revision_previa.base_sha, previous_head)
+                for path in repo.changed_files(base_previa, previous_head)
             }
             for ruta in historicas:
                 if ruta in candidatas:
                     continue
                 if ruta not in viejas or repo.diff_bytes(
-                    revision_previa.base_sha, previous_head, ruta
+                    base_previa, previous_head, ruta
                 ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)
         rutas_plan = list(candidatas)
@@ -1030,7 +1034,7 @@ def prepare_review(
         # pasada anterior no vio, el origen es la base actual del PR.
         acreditado = modo != "full" and ruta in delta_set and ruta in previa
         if acreditado and base_movida and repo.diff_bytes(
-            revision_previa.base_sha, previous_head, ruta
+            base_previa, previous_head, ruta
         ) != repo.diff_bytes(merge_base, previous_head, ruta):
             acreditado = False
         origen = previous_head if acreditado else merge_base
