@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -618,6 +620,47 @@ class CoordinadorComandos(unittest.TestCase):
             [type(f.status).__name__ for f in carga.snapshot.findings],
             ["StatusDismissed", "StatusOpen"],
             "el descarte del escritor aplica pese al comentario anterior",
+        )
+
+    def test_cientos_de_comentarios_ajenos_no_llenan_la_memoria(self):
+        ajenos = [(cid, f"ai-review: hola {cid}") for cid in range(5, 605)]
+        falso = self._falso(
+            f"{review.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
+            [*ajenos, (605, "ai-review: descartar F1")],
+        )
+        for comentario in falso.comentarios[1:-1]:
+            comentario["user"] = "visitante"
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp, "event.json")
+            payload_path.write_text(json.dumps({"action": "created"}))
+            pr_api = mock.Mock(
+                stdout=json.dumps(
+                    {"head": {"sha": "c" * 40}, "base": {"sha": "b" * 40}}
+                )
+            )
+            with (
+                self._entorno(
+                    GITHUB_EVENT_NAME="issue_comment",
+                    GITHUB_EVENT_PATH=str(payload_path),
+                ),
+                mock.patch.object(review, "ComentariosGh", return_value=falso),
+                mock.patch.object(review, "sh", return_value=pr_api),
+                mock.patch.object(
+                    review,
+                    "collaborator_permission",
+                    side_effect=lambda repo, login: (
+                        "write" if login == "jefe" else "read"
+                    ),
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                review.cmd_reconcile(argparse.Namespace(work=tmp))
+        carga = domain.read_snapshot(falso.leer()[0]["body"])
+        self.assertEqual(carga.snapshot.command_cursor, 605)
+        self.assertIsInstance(
+            carga.snapshot.findings[0].status,
+            domain.StatusDismissed,
+            "la memoria se sigue escribiendo y el comando del escritor aplica",
         )
 
     REVISION_PREVIA = {
