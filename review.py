@@ -2029,13 +2029,15 @@ def prompt_de_reparacion(work, texto):
 
 def partes_de_respuesta(texto):
     lineas = texto.splitlines()
+    leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
+    leidas = {i: c for i, c in leidas.items() if c[0] is not None}
     cobertura = None
-    for i in range(len(lineas) - 1, -1, -1):
-        _, estado, detalle = split_coverage(lineas[i])
-        if estado is not None:
-            cobertura = (estado, detalle)
-            del lineas[i]
-            break
+    if leidas:
+        # Gana la más conservadora: citar el formato no sube a complete una
+        # pasada que se declaró parcial.
+        i = max(leidas, key=lambda i: (leidas[i][0] == "partial", i))
+        cobertura = leidas[i]
+        del lineas[i]
     sin_revisar = [ln for ln in lineas if ln.startswith(UNREVIEWED_PREFIX)]
     resto = "\n".join(ln for ln in lineas if not ln.startswith(UNREVIEWED_PREFIX))
     hallado = find_model_findings_block(resto)
