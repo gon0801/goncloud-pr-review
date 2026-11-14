@@ -336,5 +336,43 @@ class ForcePushEnModoCoordinado(unittest.TestCase):
             )
 
 
+class DeltaNuloEnElManifest(unittest.TestCase):
+    MANIFEST = {
+        "mode": "incremental",
+        "reason": "",
+        "prev_sha": "a" * 40,
+        "changed_files": None,
+        "reviewed": ["a.py"],
+        "excluded": [],
+    }
+
+    def test_un_delta_nulo_no_deja_resolver_nada(self):
+        self.assertEqual(domain.rutas_de_cambio(self.MANIFEST), ())
+
+    def test_un_delta_nulo_no_tumba_el_comentario(self):
+        hallazgo = {
+            "id": "F1",
+            "file": "a.py",
+            "files": ["a.py"],
+            "line": 2,
+            "severity": "High",
+            "title": "eval",
+            "state": "open",
+        }
+        cuerpo = review.compose(
+            {"result": "Sigue abierto.\nCOVERAGE: complete", "subtype": "success"},
+            self.MANIFEST,
+            sha="b" * 40,
+            provider="opencode-go",
+            findings={
+                "merged": [hallazgo],
+                "new_ids": [],
+                "block": review.serialize_findings({"findings": [hallazgo], "next": 2}),
+                "model_ok": True,
+            },
+        )
+        self.assertIn("incremental desde aaaaaaa (0 archivo(s) cambiaron)", cuerpo)
+
+
 if __name__ == "__main__":
     unittest.main()
