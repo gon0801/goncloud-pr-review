@@ -2028,9 +2028,6 @@ def prompt_de_reparacion(work, texto):
 
 
 def partes_de_respuesta(texto):
-    """(prosa, bloque, cobertura) de una respuesta del modelo. El bloque es None
-    si no se lee como bloque; la cobertura es (estado, detalle) de la última
-    línea COVERAGE legible, aunque no cierre el texto, o None si no hay."""
     lineas = texto.splitlines()
     cobertura = None
     for i in range(len(lineas) - 1, -1, -1):
@@ -2064,8 +2061,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     if ERROR_KEY in result or hallazgo_a_explicar(work) or not falta_bloque(texto):
         return
     if not texto.strip():
-        # Sin respuesta no hay qué transcribir. La reparación inventaría un bloque
-        # vacío y una cobertura completa. Pasa al agotar el tope de turnos.
+        # La CLI no trae "result" cuando se agota el tope de turnos.
         print(
             "ai-review: la revisión no devolvió texto; no hay respuesta que reparar",
             file=sys.stderr,

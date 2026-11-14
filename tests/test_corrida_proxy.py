@@ -28,8 +28,6 @@ OK_REPLY = {
 
 
 class ProxyQueIgnoraSigterm:
-    """Un LiteLLM que no sale con SIGTERM: solo SIGKILL lo detiene."""
-
     def __init__(self):
         self.vivo = True
 
