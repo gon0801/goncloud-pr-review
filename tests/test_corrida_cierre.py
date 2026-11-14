@@ -17,6 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
 import review_run
 import review_config
 
@@ -169,7 +170,7 @@ class VueltaDeCierre(unittest.TestCase):
 
     def publicar(self, result):
         (self.work / "result.json").write_text(json.dumps(result))
-        real_sh = review.sh
+        real_sh = review_github.sh
 
         def run_command(*args, **kwargs):
             if args[0] == "git":
@@ -187,9 +188,9 @@ class VueltaDeCierre(unittest.TestCase):
                     "GITHUB_STEP_SUMMARY": "",
                 },
             ),
-            mock.patch.object(review, "fetch_all_comments", return_value=[]),
-            mock.patch.object(review, "set_output"),
-            mock.patch.object(review, "sh", side_effect=run_command),
+            mock.patch.object(review_github, "fetch_all_comments", return_value=[]),
+            mock.patch.object(review_github, "set_output"),
+            mock.patch.object(review_github, "sh", side_effect=run_command),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             review.cmd_publish(argparse.Namespace(work=str(self.work)))

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 
 SCRIPT = ROOT / "scripts" / "verify_sticky.py"
 SHA_A, SHA_B = "a" * 40, "b" * 40
@@ -56,8 +57,8 @@ def v2(completion):
 
 def sticky(marker, bloque, sha=SHA_A):
     return (
-        f"{review.MARKER}\n{review.SHA_PREFIX}{sha} -->\n"
-        f"{review.COMPLETION_PREFIX}{sha}:{marker} -->\n{bloque}\ncola"
+        f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{sha} -->\n"
+        f"{review_sticky.COMPLETION_PREFIX}{sha}:{marker} -->\n{bloque}\ncola"
     )
 
 
@@ -92,8 +93,8 @@ class VerificadorDeStickies(unittest.TestCase):
 
     def test_sin_bloque_frena(self):
         cuerpo = (
-            f"{review.MARKER}\n{review.SHA_PREFIX}{SHA_A} -->\n"
-            f"{review.COMPLETION_PREFIX}{SHA_A}:partial -->\nsolo prosa"
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA_A} -->\n"
+            f"{review_sticky.COMPLETION_PREFIX}{SHA_A}:partial -->\nsolo prosa"
         )
         rc, _ = self.correr(cuerpo)
         self.assertEqual(rc, 1)
@@ -112,8 +113,8 @@ class VerificadorDeStickies(unittest.TestCase):
 
     def sticky_con_libro(self, marker, bloque, linea_libro, sha=SHA_A):
         return (
-            f"{review.MARKER}\n{review.SHA_PREFIX}{sha} -->\n"
-            f"{review.COMPLETION_PREFIX}{sha}:{marker} -->\n"
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{sha} -->\n"
+            f"{review_sticky.COMPLETION_PREFIX}{sha}:{marker} -->\n"
             f"{linea_libro}\n{bloque}\ncola"
         )
 

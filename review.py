@@ -13,6 +13,7 @@ import tempfile
 import sys
 from pathlib import Path
 
+from review_commands import dismiss_targets
 from review_config import (
     ERROR_KEY,
     IDENTIDADES,
@@ -20,9 +21,44 @@ from review_config import (
     env,
     get_provider,
     politica_de_identidad,
+    politica_de_revision,
 )
 import review_domain
+import review_github
 import review_run
+from review_render import (
+    ALCANCE_INICIO,
+    DETALLE_DEL_REVISOR,
+    GITHUB_COMMENT_MAX,
+    VERDICT_RE,
+    aviso_md,
+    caution_banner,
+    compose,
+    cuerpo_publicable,
+    insert_caution_banner,
+    neutralizar_marcadores,
+    prosa_del_modelo,
+    redact,
+    sections_for,
+    strip_model_verdict,
+    verdict_for,
+)
+from review_sticky import (
+    COMPLETION_PREFIX,
+    COVERED_PREFIX,
+    MARKER,
+    SHA_PREFIX,
+    cobertura_declarada,
+    continuacion_terminal,
+    libro_de,
+    libro_fusionado,
+    modelo_utilizable,
+    prev_de_memoria,
+    recortes_de_continuacion,
+    reviewed_sha,
+    sha_hexa,
+    sticky_from_comments,
+)
 from review_domain import (
     DISMISSED,
     FINDING_FILES_MAX,
@@ -32,12 +68,9 @@ from review_domain import (
     FINDINGS_PREFIX,
     FINDINGS_SUFFIX,
     FINDINGS_TITLE_MAX,
-    LIBRO_MAX_ENTRADAS,
     OPEN,
     RESOLVED,
     SEVERITIES,
-    UNREVIEWED_PREFIX,
-    cierre_de_respuesta,
     derive_next,
     find_findings_block,
     find_model_findings_block,
@@ -45,7 +78,6 @@ from review_domain import (
     normalize_severity,
     one_line,
     parse_model_findings,
-    rutas_declaradas,
     same_issue,
     sanitize_finding,
     split_coverage,
@@ -64,7 +96,6 @@ from review_context import (
     INCREMENTAL_SMALL_BYTES,
     INCREMENTAL_SMALL_FILES,
     LARGE_DIFF_MAX_TURNS,
-    LIBRO_BORRADO,
     SearchComplete,
     SearchFailed,
     SearchTruncated,
@@ -148,14 +179,6 @@ __all__ = [
     "unique_paths",
 ]
 
-MARKER = "<!-- ai-review:sticky -->"
-SHA_PREFIX = "<!-- ai-review:sha="
-COMPLETION_PREFIX = "<!-- ai-review:completion="
-COVERED_PREFIX = "<!-- ai-review:covered="
-LIBRO_MAX_BYTES = 30000
-COMMENT_LIMIT = 50000
-GITHUB_COMMENT_MAX = 65000
-
 FINDINGS_MAX_BYTES = 8000
 
 # Findings memory (PR B). The model emits one hidden block BEFORE the COVERAGE line
@@ -163,7 +186,6 @@ FINDINGS_MAX_BYTES = 8000
 # from the end). Publish re-emits the canonical block right after the SHA marker, so
 # tail trims can never eat it; the review text budget reserves its bytes.
 # The constants and the state functions live in review_domain; re-exported above.
-SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "⚪"}
 
 # Dismiss commands (B4): `ai-review: descartar F3` / `ai-review: descartar todo`.
 # Only applied when the comment author has push access, checked with the same token
@@ -173,179 +195,14 @@ SEVERITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "
 # implicitly (`metadata` is not even a settable `permissions:` key), so the
 # minimal template token (contents:read + pull-requests:write) is enough.
 DISMISS_RE = re.compile(r"ai-review:\s*descartar\s+(.+)", re.IGNORECASE)
-DISMISS_ALL_WORD = "todo"
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 CLAUDE_CODE_VERSION = "2.1.282"
 LITELLM_VERSION = "1.102.1"
 
 
-def reviewed_sha(body):
-    start = body.find(SHA_PREFIX)
-    if start < 0:
-        return None
-    end = body.find(" -->", start)
-    return body[start + len(SHA_PREFIX) : end] if end > 0 else None
-
-
-def reviewed_completion(body):
-    lines = body.splitlines()
-    if len(lines) < 3 or lines[0] != MARKER or body.count(COMPLETION_PREFIX) != 1:
-        return None
-    match = re.fullmatch(
-        r"<!-- ai-review:completion=([0-9a-f]{40}):(complete|partial) -->", lines[2]
-    )
-    if not match or lines[1] != f"{SHA_PREFIX}{match[1]} -->":
-        return None
-    return match[2]
-
-
-def libro_a_linea(head_sha, libro):
-    """El libro de cobertura como línea oculta del sticky; None si no cabe."""
-    if len(libro) > LIBRO_MAX_ENTRADAS:
-        return None
-    # Las flechas del comentario viajan como secuencias \uXXXX dentro del JSON:
-    # json.loads las decodifica al leer y una ruta con `-->` no rompe el comentario.
-    cuerpo = (
-        json.dumps(libro, ensure_ascii=True, separators=(",", ":"))
-        .replace("-->", "\\u002d\\u002d\\u003e")
-        .replace("<!--", "\\u003c\\u0021\\u002d\\u002d")
-    )
-    linea = f"{COVERED_PREFIX}{head_sha}:{cuerpo} -->"
-    return linea if len(linea.encode("utf-8")) <= LIBRO_MAX_BYTES else None
-
-
-def libro_de_linea(linea):
-    if not linea.startswith(COVERED_PREFIX):
-        return None, None
-    resto = linea[len(COVERED_PREFIX) :]
-    cabeza, sep, resto = resto.partition(":")
-    if not sep or not re.fullmatch(r"[0-9a-f]{40}", cabeza):
-        return None, None
-    fin = resto.rfind(" -->")
-    if fin < 0:
-        return None, None
-    try:
-        libro = json.loads(resto[:fin])
-    except json.JSONDecodeError:
-        return None, None
-    if not isinstance(libro, dict) or len(libro) > LIBRO_MAX_ENTRADAS:
-        return None, None
-    for ruta, blob in libro.items():
-        if not isinstance(ruta, str) or not ruta:
-            return None, None
-        if not isinstance(blob, str) or not (
-            re.fullmatch(r"[0-9a-f]{40}", blob) or blob == LIBRO_BORRADO
-        ):
-            return None, None
-    return cabeza, libro
-
-
-def libro_de(body):
-    """El libro del sticky: la primera línea covered= válida y del head de la
-    cabecera; cualquier desvío es (None, None), nunca un libro ajeno."""
-    for linea in (body or "").splitlines():
-        if linea.startswith(COVERED_PREFIX):
-            cabeza, libro = libro_de_linea(linea)
-            if libro is not None and cabeza == reviewed_sha(body):
-                return cabeza, libro
-            return None, None
-    return None, None
-
-
-def unreviewed_de(texto):
-    """Lo que el modelo declaró no revisar; None si falta o no se lee.
-
-    Vale solo la línea de cierre_de_respuesta (columna 0), única con el prefijo en todo
-    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
-    incluidas) anula la declaración."""
-    declaracion = cierre_de_respuesta(texto)[3]
-    lineas = (texto or "").splitlines()
-    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
-    return rutas_declaradas(declaracion) if declaracion and unica else None
-
-
-def modelo_utilizable(modelo):
-    """La forma la decide el transporte del dominio, sin descartar el bloque."""
-    return modelo is not None and not modelo.get("rechazadas_forma") and not any(
-        isinstance(
-            review_domain.observation_de_entrada(entrada),
-            review_domain.ObservationRejected,
-        )
-        for entrada in modelo.get("findings", [])
-    )
-
-
-def pasada_acredita(result, model_ok):
-    """Una pasada acredita cobertura solo si su resultado es utilizable
-    entero: COVERAGE declarada, runtime terminado y hallazgos del modelo
-    válidos; si no, no agrega nada al libro."""
-    if ERROR_KEY in (result or {}):
-        return False
-    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
-    return (
-        cobertura is not None
-        and (result or {}).get("subtype") != "error_max_turns"
-        and bool(model_ok)
-        and modelo_utilizable(
-            parse_model_findings(
-                (result or {}).get("result") or "", conservar_anclas=True
-            )
-        )
-    )
-
-
-def libro_fusionado(previo, manifest, result, repo, model_ok):
-    """El libro tras una pasada: lo cubierto ahora con su blob en head (o el
-    centinela del borrado), más lo cubierto antes que sigue intacto; el resto
-    queda fuera."""
-    head = manifest["head"]
-    # Sin head verificable nada es reclamable: ni blobs (un None de blob_at
-    # puede ser un head que no resuelve, no un borrado) ni centinelas.
-    if not repo.cat_file_exists(f"{head}^{{commit}}"):
-        return {}
-    texto = (result or {}).get("result") or ""
-    if pasada_acredita(result, model_ok):
-        _, cobertura, _ = split_coverage(texto)
-        revisados = manifest.get("reviewed") or []
-        if cobertura == "complete":
-            cubiertos = revisados
-        elif cobertura == "partial":
-            sin = unreviewed_de(texto)
-            excluidos = {e["path"] for e in manifest.get("excluded") or []}
-            reconocibles = set(revisados) | excluidos
-            declaracion_verificable = sin is not None and sin <= reconocibles
-            if declaracion_verificable:
-                cubiertos = [p for p in revisados if p not in sin]
-            else:
-                cubiertos = []
-        else:
-            cubiertos = []
-    else:
-        cubiertos = []
-    cubierto = set(cubiertos)
-    fused = {}
-    for p, b in (previo or {}).items():
-        if p in cubierto:
-            continue
-        blob = repo.blob_at(head, p)
-        if (blob is None and b == LIBRO_BORRADO) or blob == b:
-            fused[p] = b
-    for p in cubiertos:
-        blob = repo.blob_at(head, p)
-        fused[p] = blob if blob else LIBRO_BORRADO
-    return fused
-
-
 def libro_actualizado(sticky, manifest, result, repo, model_ok):
     previo = libro_de((sticky or {}).get("body") or "")[1] or {}
     return libro_fusionado(previo, manifest, result, repo, model_ok)
-
-
-def redact(text, secrets):
-    for secret in secrets:
-        if secret and len(secret) >= 8:
-            text = text.replace(secret, "[REDACTED]")
-    return text
 
 
 def parse_findings_block(text, *, last=False):
@@ -498,40 +355,6 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
     return dict(state, findings=findings)
 
 
-DISMISS_TARGETS_RE = re.compile(
-    r"(?:\s*(?:[,;]|\b[yeo]\b|F"
-    + FINDING_ID_DIGITS
-    + r"\b|"
-    + DISMISS_ALL_WORD
-    + r"\b(?:\s+lo\s+dem[áa]s\b)?))*",
-    re.IGNORECASE,
-)
-DISMISS_FIRST_TOKEN_RE = re.compile(
-    r"\s*(?:F" + FINDING_ID_DIGITS + r"\b|" + DISMISS_ALL_WORD + r"\b)",
-    re.IGNORECASE,
-)
-
-
-def dismiss_targets(rest):
-    """(ids, todo) de lo que sigue a "descartar". Solo el tramo inicial de ids,
-    comas, conjunciones y `todo [lo demás]` es el objetivo; el resto es el
-    motivo y no cambia el comando (un SHA como c2b1af7 trae "f7"). El primer
-    token tiene que ser un id o `todo`. `todo` seguido de una palabra
-    ("todo bien") es prosa y nunca descarta todo."""
-    if not DISMISS_FIRST_TOKEN_RE.match(rest):
-        return set(), False
-    end = DISMISS_TARGETS_RE.match(rest).end()
-    lead, tail = rest[:end], rest[end:]
-    ids = {
-        f"F{int(n)}"
-        for n in re.findall(rf"\bF({FINDING_ID_DIGITS})", lead, re.IGNORECASE)
-    }
-    todo = bool(re.search(r"\btodo\b", lead, re.IGNORECASE)) and not re.match(
-        r"\s*\w", tail
-    )
-    return ids, todo
-
-
 def parse_comando_reconcile(body):
     """Dict con acción y argumento del comentario-comando ai-review:, o None."""
     texto = (body or "").strip()
@@ -562,44 +385,6 @@ def parse_dismiss_command(body):
     return ids, all_open
 
 
-def collaborator_permission(repo, user):
-    """Push access of a comment author, or None. A failed query is logged to
-    stderr (never silent: without it B4 would die quietly); no-write is not."""
-    try:
-        proc = sh(
-            "gh",
-            "api",
-            f"repos/{repo}/collaborators/{user}/permission",
-            "--jq",
-            ".permission",
-            check=False,
-        )
-    except OSError as exc:
-        print(
-            f"ai-review: no se pudo verificar el permiso de {user} ({exc}); "
-            f"su descarte se ignora",
-            file=sys.stderr,
-        )
-        return None
-    if proc.returncode != 0 and "HTTP 404" in (proc.stderr or ""):
-        # A login that no longer exists: a definitive "no", not a failure to retry.
-        print(
-            f"ai-review: {user} no existe para este repo (HTTP 404); su descarte se ignora",
-            file=sys.stderr,
-        )
-        return "none"
-    if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()
-        detail = f": {tail[-1][:200]}" if tail else ""
-        print(
-            f"ai-review: no se pudo verificar el permiso de {user} "
-            f"(gh api salió {proc.returncode}{detail}); su descarte se ignora",
-            file=sys.stderr,
-        )
-        return None
-    return proc.stdout.strip() or None
-
-
 def collect_dismissals(repo, pr, bot_login, comments, after=0):
     """Dismiss commands from writer+ commenters posted after comment id `after`.
 
@@ -617,7 +402,7 @@ def collect_dismissals(repo, pr, bot_login, comments, after=0):
         if not found and not wants_all:
             continue
         if user not in checked:
-            checked[user] = collaborator_permission(repo, user)
+            checked[user] = review_github.collaborator_permission(repo, user)
         if checked[user] is None:
             break  # permission unknown (API failure): this and later commands wait for the next push
         last = max(last, cid)
@@ -627,597 +412,12 @@ def collect_dismissals(repo, pr, bot_login, comments, after=0):
     return ids, all_open, last
 
 
-def plural(count, singular):
-    return f"{count} {singular}" + ("" if count == 1 else "s")
-
-
-def verdict_for(merged):
-    open_findings = [f for f in merged if f["state"] == OPEN]
-    resolved = sum(1 for f in merged if f["state"] == RESOLVED)
-    dismissed = sum(1 for f in merged if f["state"] == DISMISSED)
-    if not open_findings:
-        head = "sin problemas abiertos"
-    else:
-        counts = [
-            (s, sum(1 for f in open_findings if f["severity"] == s)) for s in SEVERITIES
-        ]
-        head = ", ".join(f"{n} {s}" for s, n in counts if n) + (
-            " abierto" if len(open_findings) == 1 else " abiertos"
-        )
-    tail = ", ".join(
-        [plural(resolved, "resuelto")] * bool(resolved)
-        + [plural(dismissed, "descartado")] * bool(dismissed)
-    )
-    return f"**Veredicto:** {head}" + (f" ({tail})." if tail else ".")
-
-
-def finding_line(finding):
-    where = (
-        finding["file"]
-        if not finding["line"]
-        else f"{finding['file']}:{finding['line']}"
-    )
-    # La ruta de un ancla legada sale del modelo: no puede imitar un marcador.
-    where = neutralizar_marcadores(where.replace("`", "'"))
-    title = html.escape(finding["title"], quote=False)
-    return (
-        f"- {SEVERITY_EMOJI[finding['severity']]} {finding['severity']} · `{where}` · "
-        f"{title} · {finding['id']}"
-    )
-
-
-MOTIVO_SIN_CAMBIO_PERTINENTE = (
-    "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
-)
-
-
-def motivo_line(finding_id, no_acreditados):
-    """Una línea bajo el hallazgo abierto que el modelo dio por resuelto sin que
-    el programa lo acepte. Sangrada: no termina en ` · Fn` como una de hallazgo."""
-    if finding_id not in no_acreditados:
-        return []
-    return [f"  - ↳ {MOTIVO_SIN_CAMBIO_PERTINENTE}"]
-
-
-def sections_for(merged, new_ids, no_acreditados=()):
-    new = {i for i in new_ids}
-    fresh = [f for f in merged if f["id"] in new and f["state"] == OPEN]
-    still = [f for f in merged if f["id"] not in new and f["state"] == OPEN]
-    done = [f for f in merged if f["state"] == RESOLVED]
-    dropped = [f for f in merged if f["state"] == DISMISSED]
-    parts = ["## Nuevos en este push", ""]
-    parts += [finding_line(f) for f in fresh] or ["Ninguno."]
-    parts += ["", "## Siguen abiertos", ""]
-    parts += [
-        line
-        for f in still
-        for line in [finding_line(f), *motivo_line(f["id"], no_acreditados)]
-    ] or ["Ninguno."]
-    if done:
-        parts += ["", f"<details><summary>Resueltos ({len(done)})</summary>", ""]
-        parts += [finding_line(f) for f in done]
-        parts += ["", "</details>"]
-    if dropped:
-        parts += ["", f"<details><summary>Descartados ({len(dropped)})</summary>", ""]
-        parts += [finding_line(f) for f in dropped]
-        parts += ["", "</details>"]
-    return parts
-
-
-VERDICT_RE = re.compile(r"^\s*\*\*Veredicto:\*\*")
-
-
-def strip_model_verdict(text):
-    """Drop every verdict line the model wrote (the publisher writes the only verdict),
-    except inside code fences, where it is quoted content."""
-    lines = (text or "").split("\n")
-    fenced, opened = set(), None
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith("```"):
-            if opened is None:
-                opened = i
-            else:
-                fenced.update(range(opened, i + 1))
-                opened = None
-    # An unclosed fence counts as plain text: it can't hide a verdict to strip.
-    return "\n".join(
-        line
-        for i, line in enumerate(lines)
-        if i in fenced or not VERDICT_RE.match(line)
-    ).strip()
-
-
-def estimate_cost(prices, usage):
-    if not prices or not usage:
-        return None
-    miss = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
-    hit = usage.get("cache_read_input_tokens", 0)
-    out = usage.get("output_tokens", 0)
-    return (miss * prices[0] + hit * prices[1] + out * prices[2]) / 1_000_000
-
-
-def scope_lines(result, manifest, provider):
-    scope = [f"- Revisados: {len(manifest['reviewed'])} archivo(s)"]
-    if manifest["excluded"]:
-        shown = manifest["excluded"][:40]
-        scope.append(f"- Excluidos: {len(manifest['excluded'])}")
-        # La ruta sale del PR: tampoco puede abrir un comentario HTML.
-        scope += [
-            f"  - `{neutralizar_marcadores(e['path'][:200])}` ({e['reason']})"
-            for e in shown
-        ]
-        if len(manifest["excluded"]) > len(shown):
-            scope.append(f"  - … y {len(manifest['excluded']) - len(shown)} más")
-    usage = (result or {}).get("usage") or {}
-    if usage:
-        cost = estimate_cost(provider["prices"], usage)
-        cap = manifest.get("max_turns")
-        turns = (
-            f"{(result or {}).get('num_turns', '?')}/{cap}"
-            if cap
-            else f"{(result or {}).get('num_turns', '?')}"
-        )
-        scope.append(
-            f"- Turnos: {turns} · tokens entrada "
-            f"{usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0):,}"
-            f" (+{usage.get('cache_read_input_tokens', 0):,} en caché) · salida {usage.get('output_tokens', 0):,}"
-            + (f" · costo aprox ${cost:.3f}" if cost is not None else "")
-        )
-    return scope
-
-
-def _marcador_cobertura(warnings, findings):
-    derivada = findings.get("completion") if findings else None
-    if derivada is not None:
-        return review_domain.marker_of(derivada)
-    return "partial" if warnings else "complete"
-
-
-AVISO_DE_PRESUPUESTO = "\n\n_(Revisión recortada al presupuesto de capacidad.)_"
-
-
-def prosa_en_presupuesto(armar, prosa, budget):
-    """La prosa recortada para que armar(prosa), el comentario entero, quepa en
-    el presupuesto por caracteres y por bytes; None si ni el cuerpo sin prosa
-    cabe (el presupuesto se rechaza y mandan los topes actuales). armar une la
-    prosa como un elemento más, así que el cuerpo mide fijo + prosa."""
-    fijo = armar("")
-    chars = budget.comment_max_chars - len(fijo)
-    octetos = budget.comment_max_bytes - len(fijo.encode("utf-8"))
-    if chars < 0 or octetos < 0:
-        return None
-    if len(prosa) <= chars and len(prosa.encode("utf-8")) <= octetos:
-        return prosa
-    aviso = AVISO_DE_PRESUPUESTO
-    if len(aviso) > chars or len(aviso.encode("utf-8")) > octetos:
-        aviso = ""  # margen menor que el aviso: se recorta sin él
-    recorte = prosa[: chars - len(aviso)]
-    return trim_utf8(recorte, octetos - len(aviso.encode("utf-8")), "") + aviso
-
-
-def _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso):
-    """El cuerpo del comentario cuando el fijo no cabe: aviso visible, sin
-    bloque de estado y sin marcar sha ni cobertura (el camino del desborde
-    de memoria, también para un comentario sin espacio). Nunca corta a
-    ciegas: un marcador oculto partido rompería el estado del próximo push."""
-
-    def recorte():
-        return (
-            review[:disponible]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
-
-    partes = [
-        MARKER,
-        aviso,
-        "",
-        DETALLE_DEL_REVISOR,
-        "",
-        "",
-        "",
-        ALCANCE_INICIO,
-        "",
-        *scope_lines(result, manifest, provider),
-        "",
-        "</details>",
-    ]
-    overhead = len("\n".join(partes)) + 100  # margen para la nota de recorte
-    disponible = max(0, GITHUB_COMMENT_MAX - overhead)
-    partes[5] = (recorte() if len(review) > disponible else review) or (
-        "_El revisor no devolvió texto._"
-    )
-    return "\n".join(partes)
-
-
-# Avisos que escribe el programa en el comentario. La autoridad la da el lugar:
-# solo salen de secciones que arma el programa y su texto lo sabe el programa;
-# nunca llevan texto del modelo, que va únicamente en su sección ("Detalle del
-# revisor" y las explicaciones). Todos salen de aviso_md.
-AVISOS_DEL_PROGRAMA = (
-    "Revisión incompleta",
-    "Memoria conservada sin actualizar",
-    "Comentario sin espacio para el estado",
-    "No se pudo revisar el commit",
-    "Comando no entendido",
-    "Comando no aplicado",
-    "Revisión en curso",
-    "Sin revisión publicada",
-)
-
-
-def aviso_md(etiqueta, texto, nivel=None):
-    if not any(etiqueta.startswith(e) for e in AVISOS_DEL_PROGRAMA):
-        raise ValueError(f"aviso sin registrar en AVISOS_DEL_PROGRAMA: {etiqueta!r}")
-    cabeza = f"> [!{nivel}]\n" if nivel else ""
-    return f"{cabeza}> **{etiqueta}:** {texto}"
-
-
-AVISO_SIN_ESPACIO = aviso_md(
-    "Comentario sin espacio para el estado",
-    "el cuerpo fijo del sticky no cabe en el presupuesto del comentario (con y "
-    "sin libro de cobertura); esta revisión no se marca como revisada ni "
-    "confirma cobertura.",
-    "CAUTION",
-)
-
-
-def compose(result, manifest, *, sha, provider, findings=None, budget=None, libro=None):
-    provider = PROVIDERS[provider]
-    text = (result or {}).get("result") or ""
-    review, coverage, detail = split_coverage(text)
-    budget_cut = [e for e in manifest["excluded"] if e["reason"] == "budget"]
-
-    warnings = []
-    reviewed_any = bool(manifest["reviewed"])
-    if (result or {}).get("subtype") == "error_max_turns":
-        warnings.append("el revisor se quedó sin turnos antes de terminar")
-    if coverage is None and reviewed_any:
-        warnings.append("el revisor no declaró su cobertura")
-    elif coverage == "partial":
-        # El aviso dice solo lo que sabe el programa. El motivo que dio el modelo
-        # es texto suyo y va en su sección, tras su prosa.
-        warnings.append("el revisor no alcanzó a revisar todo")
-        if detail:
-            review = (
-                f"{review}\n\n" if review else ""
-            ) + f"Cobertura declarada por el revisor: parcial | {detail}"
-    if budget_cut:
-        warnings.append(
-            f"{len(budget_cut)} archivo(s) quedaron fuera por tamaño del diff"
-        )
-    encoding_omitted = [e for e in manifest["excluded"] if e["reason"] == "encoding"]
-    if encoding_omitted:
-        warnings.append(
-            f"{len(encoding_omitted)} archivo(s) no se pudieron leer como UTF-8"
-        )
-    if findings is not None and not findings.get("model_ok", True) and reviewed_any:
-        warnings.append(
-            "el revisor no entregó su bloque de hallazgos utilizable; "
-            "esta pasada no acredita cobertura y conserva los hallazgos anteriores"
-        )
-
-    if findings is not None and findings.get("merged"):
-        return compose_with_findings(
-            result,
-            manifest,
-            sha=sha,
-            provider=provider,
-            findings=findings,
-            review=review,
-            warnings=warnings,
-            budget=budget,
-            libro=libro,
-        )
-
-    if findings is not None:
-        review = strip_model_findings_block(review)
-    review = neutralizar_marcadores(prosa_del_modelo(review))
-    parts = [
-        MARKER,
-        f"{SHA_PREFIX}{sha} -->",
-        f"{COMPLETION_PREFIX}{sha}:{_marcador_cobertura(warnings, findings)} -->",
-    ]
-    linea_libro = libro_a_linea(sha, libro) if libro is not None else None
-    if linea_libro is not None:
-        parts.insert(3, linea_libro)
-    if findings is not None:
-        parts.append(findings["block"])
-    parts += [f"### Revisión automática · {provider['label']} · {sha[:7]}", ""]
-    if warnings:
-        parts += [
-            *aviso_md(
-                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
-            ).split("\n"),
-            "",
-        ]
-    # El texto del modelo va en una sola sección, rotulada, también aquí.
-    parts += [DETALLE_DEL_REVISOR, ""]
-    scope = [
-        ALCANCE_INICIO,
-        "",
-        *scope_lines(result, manifest, provider),
-        "",
-        "</details>",
-    ]
-    if not manifest["reviewed"]:
-        review = (
-            review
-            or "No hay archivos revisables en este PR (todo quedó excluido por filtro)."
-        )
-    review = review or "_El revisor no devolvió texto._"
-
-    def armar(prosa):
-        return "\n".join(parts + [prosa, ""] + scope)
-
-    if budget is not None:
-        prosa = prosa_en_presupuesto(armar, review, budget)
-        if prosa is not None:
-            return armar(prosa)[:GITHUB_COMMENT_MAX]
-        if linea_libro is not None:
-            # El estado manda sobre el libro: la línea es prescindible (sin
-            # ella la siguiente pasada revisa full, que es seguro) y el corte
-            # a ciegas podría partir el bloque de estado.
-            def armar_sin_libro(prosa):
-                cuerpo = [p for p in parts if p is not linea_libro]
-                return "\n".join(cuerpo + [prosa, ""] + scope)
-
-            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
-            if prosa is not None:
-                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
-        return _cuerpo_de_aviso_de_capacidad(
-            result, manifest, provider, review, AVISO_SIN_ESPACIO
-        )
-    if len(review) > COMMENT_LIMIT:
-        review = (
-            review[:COMMENT_LIMIT]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
-    return armar(review)[:GITHUB_COMMENT_MAX]
-
-
-def compose_with_findings(
-    result,
-    manifest,
-    *,
-    sha,
-    provider,
-    findings,
-    review,
-    warnings,
-    budget=None,
-    libro=None,
-):
-    merged, new_ids, block = (
-        findings["merged"],
-        findings.get("new_ids", []),
-        findings["block"],
-    )
-    review = neutralizar_marcadores(
-        prosa_del_modelo(strip_model_verdict(strip_model_findings_block(review)))
-    )
-    no_acreditados = tuple(findings.get("no_acreditados", ()))
-    sections = sections_for(merged, new_ids, no_acreditados)
-    if isinstance(block, review_domain.CapacityExceeded):
-        # Memoria íntegra que no cabe: no se publica bloque ni se marca el
-        # commit como revisado; sólo el aviso visible, dentro del tope.
-        aviso = aviso_md(
-            "Memoria conservada sin actualizar",
-            f"el estado ({block.needed} bytes) no cabe en el bloque de "
-            f"{block.limit} bytes; esta revisión no se marca como revisada ni "
-            "confirma cobertura.",
-            "CAUTION",
-        )
-        return _cuerpo_de_aviso_de_capacidad(result, manifest, provider, review, aviso)
-    title = f"### Revisión automática · {provider['label']} · {sha[:7]}"
-    if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
-        title += f" · incremental desde {manifest['prev_sha'][:7]}"
-    parts = [
-        MARKER,
-        f"{SHA_PREFIX}{sha} -->",
-        f"{COMPLETION_PREFIX}{sha}:{_marcador_cobertura(warnings, findings)} -->",
-        block,
-        title,
-        "",
-    ]
-    linea_libro = libro_a_linea(sha, libro) if libro is not None else None
-    if linea_libro is not None:
-        parts.insert(3, linea_libro)
-    if warnings:
-        parts += [
-            *aviso_md(
-                "Revisión incompleta", "; ".join(warnings) + ".", "WARNING"
-            ).split("\n"),
-            "",
-        ]
-    parts += [verdict_for(merged), ""]
-    parts += sections
-    if not review:
-        if not manifest["reviewed"]:
-            review = "No hubo archivos revisables en este push; los hallazgos anteriores se conservan."
-        elif findings.get("model_ok", True):
-            review = "Sin hallazgos nuevos en este push."
-        else:
-            review = "_El revisor no devolvió texto._"
-    parts += ["", "## Detalle del revisor", ""]
-    # Esta sección es del modelo y el programa no escribe en ella: si su prosa
-    # dice "resuelto" de un hallazgo que el veredicto deja abierto, la
-    # explicación está en la línea del hallazgo, en "Siguen abiertos".
-    i_prosa = len(parts)
-    parts += [review, ""]
-    scope = scope_lines(result, manifest, provider)
-    if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
-        cambiados = manifest.get("changed_files")
-        delta = (
-            "delta no verificable"
-            if cambiados is None
-            else f"{len(cambiados)} archivo(s) cambiaron"
-        )
-        scope.insert(
-            0, f"- Modo: incremental desde {manifest['prev_sha'][:7]} ({delta})"
-        )
-    parts += [
-        ALCANCE_INICIO,
-        "",
-        *scope,
-        "",
-        "</details>",
-    ]
-
-    def armar(prosa):
-        return "\n".join(parts[:i_prosa] + [prosa] + parts[i_prosa + 1 :])
-
-    # El checkpoint confirmado jamás se recorta: el estado manda sobre el
-    # libro (la línea es prescindible: sin ella la siguiente pasada revisa
-    # full), y si el fijo no cabe ni sin libro manda el aviso de capacidad,
-    # nunca el corte a ciegas que podría partir el bloque de estado.
-    if budget is not None:
-        prosa = prosa_en_presupuesto(armar, review, budget)
-        if prosa is not None:
-            return armar(prosa)[:GITHUB_COMMENT_MAX]
-        if linea_libro is not None:
-
-            def armar_sin_libro(prosa):
-                cuerpo = [p for p in parts if p is not linea_libro]
-                # sin libro la prosa vive en i_prosa - 1: ocupa ESE hueco y la
-                # cola sigue en i_prosa, o el fijo mediría la prosa completa.
-                return "\n".join(cuerpo[: i_prosa - 1] + [prosa] + cuerpo[i_prosa:])
-
-            prosa = prosa_en_presupuesto(armar_sin_libro, review, budget)
-            if prosa is not None:
-                return armar_sin_libro(prosa)[:GITHUB_COMMENT_MAX]
-        return _cuerpo_de_aviso_de_capacidad(
-            result, manifest, provider, review, AVISO_SIN_ESPACIO
-        )
-    budget_prosa = max(0, COMMENT_LIMIT - len(block) - len("\n".join(sections)))
-    if len(review) > budget_prosa:
-        review = (
-            review[:budget_prosa]
-            + "\n\n_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_"
-        )
-    return armar(review)[:GITHUB_COMMENT_MAX]
-
-
-CAUTION_MARK = "> [!CAUTION]"
-
-
-def caution_banner(reason, head, has_previous):
-    banner = aviso_md(
-        f"No se pudo revisar el commit {head[:7]}",
-        f"{una_linea_literal(reason)}.",
-        "CAUTION",
-    )
-    if has_previous:
-        banner += (
-            " Lo de abajo es de la revisión anterior. Se reintenta con el próximo "
-            'push o con "Re-run jobs".'
-        )
-    return banner
-
-
-def strip_caution_banner(text):
-    """Drop a previously-inserted caution banner so a new one replaces it instead of stacking."""
-    lines = text.split("\n")
-    # El bloque de memoria va entre la cabecera y el aviso: al quitarlo queda
-    # una línea vacía antes del aviso.
-    inicio = next((k for k, linea in enumerate(lines) if linea), len(lines))
-    if inicio == len(lines) or lines[inicio] != CAUTION_MARK:
-        return text
-    i = inicio + 1
-    while i < len(lines) and lines[i].startswith(">"):
-        i += 1
-    while i < len(lines) and lines[i] == "":
-        i += 1
-    return "\n".join(lines[i:])
-
-
-def insert_caution_banner(sticky_body, banner):
-    lines = sticky_body.split("\n")
-    idx = 0
-    if idx < len(lines) and lines[idx] == MARKER:
-        idx += 1
-    if idx < len(lines) and lines[idx].startswith(SHA_PREFIX):
-        idx += 1
-    if idx < len(lines) and lines[idx].startswith(COMPLETION_PREFIX):
-        idx += 1
-    if idx < len(lines) and lines[idx].startswith(COVERED_PREFIX):
-        idx += 1
-    prefix = lines[:idx]
-    rest = strip_caution_banner("\n".join(lines[idx:]))
-    head = "\n".join(prefix) + "\n" if prefix else ""
-    return head + banner + "\n\n" + rest
-
-
-def sh(*args, check=True, **kw):
-    return subprocess.run(args, check=check, text=True, capture_output=True, **kw)
-
-
 def shb(*args, check=True, **kw):
     return subprocess.run(args, check=check, capture_output=True, **kw)
 
 
 def _repo_actual():
-    return GitRepository(Path(sh("git", "rev-parse", "--show-toplevel").stdout.strip()))
-
-
-def set_output(key, value):
-    with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-        fh.write(f"{key}={value}\n")
-
-
-def avisar_bloque_sin_cierre(texto):
-    """El bloque del modelo se recuperó sin su ` -->`: se publica, pero queda a la vista."""
-    found = find_model_findings_block(texto)
-    if found is not None and not found[3]:
-        print(
-            "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
-            "tras el JSON; se recuperó del JSON completo"
-        )
-
-
-def informar_revision(revisado):
-    """reviewed=true|false para el workflow: un fail-soft termina en verde y no
-    debe leerse como una revisión del SHA."""
-    if os.environ.get("GITHUB_OUTPUT"):
-        set_output("reviewed", "true" if revisado else "false")
-
-
-def fetch_all_comments(repo, pr):
-    out = sh(
-        "gh",
-        "api",
-        "--paginate",
-        f"repos/{repo}/issues/{pr}/comments?per_page=100",
-        "--jq",
-        ".[] | {id: .id, user: .user.login, body: .body, created_at: .created_at, updated_at: .updated_at} | tojson",
-    ).stdout
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
-
-
-def sticky_from_comments(comments, login):
-    """Latest sticky among fetched comments. A missing user only happens with test
-    doubles (the real API always sends user.login); those still count as sticky."""
-    found = [
-        c
-        for c in comments or []
-        if MARKER in (c.get("body") or "") and c.get("user", login) == login
-    ]
-    return found[-1] if found else None
-
-
-def prev_de_memoria(body):
-    """El prev.json que lee prepare, desde el cuerpo del sticky. Lo escriben gate
-    (ruta directa) y execute-request (worker): sin él el modelo revisa sin los
-    hallazgos previos. También entiende la memoria v2/v3 del coordinador."""
-    if body is None:
-        return {"sha": None, "state": None, "completion": None}
-    load = review_domain.read_snapshot(body)
-    return {
-        "sha": reviewed_sha(body),
-        "state": review_domain.estado_legado_de_memoria(body),
-        "completion": reviewed_completion(body),
-        "covered": libro_de(body)[1],
-        "snapshot": load.block if isinstance(load, review_domain.Valid) else None,
-    }
+    return GitRepository(Path(review_github.sh("git", "rev-parse", "--show-toplevel").stdout.strip()))
 
 
 def _snapshot_previo(prev):
@@ -1234,7 +434,7 @@ def _snapshot_previo(prev):
 def cmd_gate(args):
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
-    comments = fetch_all_comments(repo, pr)
+    comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
@@ -1256,9 +456,9 @@ def cmd_gate(args):
         print(
             f"ai-review: {head[:7]} ya tiene revisión (comentario {sticky['id']}); se omite."
         )
-        set_output("skip", "true")
+        review_github.set_output("skip", "true")
     else:
-        set_output("skip", "false")
+        review_github.set_output("skip", "false")
 
 
 def cmd_prepare(args):
@@ -1266,7 +466,7 @@ def cmd_prepare(args):
     work.mkdir(parents=True, exist_ok=True)
     head = env("HEAD_SHA")
     base = env("BASE_SHA")
-    merge_base = sh("git", "merge-base", base, head).stdout.strip()
+    merge_base = review_github.sh("git", "merge-base", base, head).stdout.strip()
     repo = GitRepository(Path.cwd())
 
     prev_file = work / "prev.json"
@@ -1278,13 +478,13 @@ def cmd_prepare(args):
     prev_sha = prev.get("sha")
     if prev_sha:
         have = (
-            sh(
+            review_github.sh(
                 "git", "cat-file", "-e", f"{prev_sha}^{{commit}}", check=False
             ).returncode
             == 0
         )
         if not have:
-            sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
+            review_github.sh("git", "fetch", "--no-tags", "--quiet", "origin", prev_sha, check=False)
     policy = replace(
         politica_de_revision(),
         diff_max_bytes=int(os.environ.get("MAX_DIFF_BYTES", "1500000")),
@@ -1335,7 +535,7 @@ def cmd_prepare(args):
             previo_snapshot,
             completion=review_domain.parse_coverage(prev.get("completion")),
         )
-    elif prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
+    elif prev_sha and sha_hexa(prev_sha) and prev.get("state"):
         current = review_domain.snapshot_a_v3(
             review_domain.Snapshot(
                 schema=2,
@@ -1432,7 +632,7 @@ def cmd_prepare(args):
         pr = _pr_via_api()
     (work / "pr.md").write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
 
-    rules = sh("git", "show", f"{base}:.github/ai-review.md", check=False)
+    rules = review_github.sh("git", "show", f"{base}:.github/ai-review.md", check=False)
     system = Path(args.prompt).read_text()
     if rules.returncode == 0 and rules.stdout.strip():
         system += (
@@ -1454,7 +654,7 @@ def _pr_via_api():
     if not repo or not pr:
         return {}
     try:
-        respuesta = sh(
+        respuesta = review_github.sh(
             "gh",
             "api",
             f"repos/{repo}/pulls/{pr}",
@@ -1532,7 +732,7 @@ def claude_prefix():
 
 def claude_version_ok(claude_bin):
     try:
-        found = sh(str(claude_bin), "--version", check=False)
+        found = review_github.sh(str(claude_bin), "--version", check=False)
     except OSError:
         return False
     return found.returncode == 0 and CLAUDE_CODE_VERSION in (found.stdout or "")
@@ -1603,19 +803,6 @@ def cmd_install(args):
 # emisión de anclas por el modelo llega con la activación del CIERRE.
 
 
-def politica_de_revision(manifest=None, identidad=None):
-    """ReviewPolicy normaliza la identidad externa (`current` → `titles`)."""
-    return review_domain.ReviewPolicy(
-        finding_identity=identidad or politica_de_identidad(),
-        diff_mode=(manifest or {}).get("mode", "full"),
-    )
-
-
-def _sha_hexa(valor):
-    valor = valor or ""
-    return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
-
-
 def hechos_de_repo(
     manifest, reverted_files, renames=(), blobs=None, policy_digest="", omissions=()
 ):
@@ -1629,10 +816,10 @@ def hechos_de_repo(
     base, head = manifest.get("base"), manifest.get("head")
     omissions = tuple(omissions or ())
     desde = base
-    if _sha_hexa(manifest.get("prev_sha")):
+    if sha_hexa(manifest.get("prev_sha")):
         desde = manifest["prev_sha"]
     calculado = False
-    if _sha_hexa(desde) and _sha_hexa(head):
+    if sha_hexa(desde) and sha_hexa(head):
         delta, omis_delta, calculado = delta_real(
             GitRepository(Path.cwd()), desde, head
         )
@@ -1674,7 +861,7 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
         if (ancla.path, ancla.blob_sha) in blobs:
             continue
         try:
-            contenido = sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
+            contenido = review_github.sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
         except Exception:
             continue
         if contenido:
@@ -1697,35 +884,6 @@ def anclas_locadas(snapshot):
             if isinstance(ancla, review_domain.AnchorLocated):
                 vistas.append(ancla)
     return vistas
-
-
-def cobertura_declarada(texto, modelo):
-    """Cobertura respaldada por el bloque del modelo; sin bloque, UNKNOWN."""
-    _, cobertura, _ = split_coverage(texto)
-    mapeada = {
-        "complete": review_domain.COMPLETE_CLAIM,
-        "partial": review_domain.PARTIAL,
-    }.get(cobertura, review_domain.UNKNOWN)
-    return review_domain.UNKNOWN if modelo is None else mapeada
-
-
-def recortes_de_continuacion(manifest):
-    """Las entradas de excluded que degradan: presupuesto o encoding."""
-    return [
-        e
-        for e in ((manifest or {}).get("excluded") or [])
-        if e.get("reason") in ("budget", "encoding")
-    ]
-
-
-def continuacion_terminal(manifest):
-    """Continuación sin nada por leer: solo presupuesto y encoding degradan."""
-    manifest = manifest or {}
-    return (
-        manifest.get("mode") == "continuation"
-        and not manifest.get("reviewed")
-        and not recortes_de_continuacion(manifest)
-    )
 
 
 def actualizar_memoria_valida(
@@ -1784,7 +942,7 @@ def actualizar_memoria_valida(
     head = manifest.get("head")
     revision = None
     digest = digest_de_politica(policy)
-    if _sha_hexa(head) and _sha_hexa(manifest.get("base")):
+    if sha_hexa(head) and sha_hexa(manifest.get("base")):
         # El digest viaja en la revisión persistida: la siguiente preparación
         # compara contra él para decidir si la cobertura previa sigue válida.
         # La base persistida es la SOLICITADA (el tip de BASE_SHA): el
@@ -2088,18 +1246,6 @@ def _avisar_sin_espacio(decision, observado, adaptador):
     return _parchar_aviso(observado, adaptador, banner)
 
 
-def cuerpo_publicable(cuerpo, bloque):
-    """Una sola fuente de verdad para "no cabe": un cuerpo solo es
-    publicable si read_snapshot lo lee (Valid o Legacy: el formato legado es
-    memoria legítima) y trae EXACTAMENTE el bloque codificado. El aviso de
-    capacidad (sin bloque) o un marcador partido no se escriben nunca:
-    borrarían o romperían la memoria del sticky."""
-    carga = review_domain.read_snapshot(cuerpo or "")
-    if isinstance(carga, (review_domain.Valid, review_domain.Legacy)):
-        return carga.block == bloque
-    return False
-
-
 def _login_de(comentario):
     user = comentario.get("user")
     if isinstance(user, str):
@@ -2339,9 +1485,9 @@ def cmd_publish(args):
     name, _ = get_provider()
     result = json.loads((work / "result.json").read_text())
     name = result.get("review_provider", name)
-    avisar_bloque_sin_cierre(result.get("result") or "")
+    review_github.avisar_bloque_sin_cierre(result.get("result") or "")
     manifest = json.loads((work / "manifest.json").read_text())
-    comments = fetch_all_comments(repo, pr)
+    comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
 
     revisado = False
@@ -2461,7 +1607,7 @@ def cmd_publish(args):
     if not escribir:
         print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
     elif sticky:
-        sh(
+        review_github.sh(
             "gh",
             "api",
             "-X",
@@ -2472,7 +1618,7 @@ def cmd_publish(args):
         )
         print(f"ai-review: comentario {sticky['id']} actualizado")
     else:
-        sh(
+        review_github.sh(
             "gh",
             "api",
             "-X",
@@ -2487,7 +1633,7 @@ def cmd_publish(args):
     if summary:
         with open(summary, "a") as fh:
             fh.write(summary_text + "\n")
-    informar_revision(revisado)
+    review_github.informar_revision(revisado)
 
 
 def _parser():
@@ -2533,14 +1679,14 @@ class ComentariosGh:
         self.repo, self.pr = repo, pr
 
     def leer(self):
-        return fetch_all_comments(self.repo, self.pr)
+        return review_github.fetch_all_comments(self.repo, self.pr)
 
     def parchar(self, cid, body):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
             fh.write(json.dumps({"body": body}))
             ruta = fh.name
         try:
-            sh(
+            review_github.sh(
                 "gh",
                 "api",
                 "-X",
@@ -2557,7 +1703,7 @@ class ComentariosGh:
             fh.write(json.dumps({"body": body}))
             ruta = fh.name
         try:
-            sh(
+            review_github.sh(
                 "gh",
                 "api",
                 "-X",
@@ -2571,7 +1717,7 @@ class ComentariosGh:
 
 
 def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
-    sh(
+    review_github.sh(
         "gh",
         "workflow",
         "run",
@@ -2755,7 +1901,7 @@ def corridas_por_solicitud(repo, pr):
     El run-name del worker es `PR <n> solicitud <id>`: así se atribuye también
     un run que terminó sin artifact."""
     datos = json.loads(
-        sh(
+        review_github.sh(
             "gh",
             "api",
             f"repos/{repo}/actions/workflows/ai-review-worker.yml/runs"
@@ -2782,13 +1928,13 @@ def sha_de_confianza(repo, worker_ref, sha_del_run, cache):
     run si es un ancestro suyo (main pudo avanzar mientras el worker corría)."""
     if "punta" not in cache:
         cache["punta"] = json.loads(
-            sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
+            review_github.sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
         ).get("sha")
-    if not _sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
+    if not sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
         return cache["punta"]
     if sha_del_run not in cache:
         comparacion = json.loads(
-            sh("gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}").stdout
+            review_github.sh("gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}").stdout
         )
         cache[sha_del_run] = comparacion.get("status") in ("ahead", "identical")
     return sha_del_run if cache[sha_del_run] else cache["punta"]
@@ -2802,7 +1948,7 @@ def artefacto_del_run(repo, run, request_id, work):
         f"-run-{run['id']}-attempt-{run['run_attempt']}"
     )
     listado = json.loads(
-        sh(
+        review_github.sh(
             "gh", "api", f"repos/{repo}/actions/runs/{run['id']}/artifacts?per_page=100"
         ).stdout
     )
@@ -2812,7 +1958,7 @@ def artefacto_del_run(repo, run, request_id, work):
     ):
         return None
     destino = Path(work) / "cosecha" / f"{run['id']}-{run['run_attempt']}"
-    sh(
+    review_github.sh(
         "gh",
         "run",
         "download",
@@ -2989,7 +2135,7 @@ def hechos_con_delta_del_worker(facts, artifact, current):
     cambiados = manifest.get("changed_files")
     esperado = current.revision.head_sha if current.revision else None
     if (
-        _sha_hexa(desde)
+        sha_hexa(desde)
         and desde == esperado
         and isinstance(cambiados, list)
         and all(isinstance(ruta, str) and ruta for ruta in cambiados)
@@ -3065,7 +2211,7 @@ def cmd_reconcile(args):
     if event_name in ("issue_comment", "workflow_dispatch"):
         # el head/base vivos salen del PR por API, nunca del checkpoint
         try:
-            pr_data = json.loads(sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
+            pr_data = json.loads(review_github.sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
             head = pr_data["head"]["sha"]
             base = pr_data["base"]["sha"]
         except Exception as exc:
@@ -3096,7 +2242,7 @@ def cmd_reconcile(args):
     )
 
     def permisos(login_consultado):
-        return collaborator_permission(repo, login_consultado)
+        return review_github.collaborator_permission(repo, login_consultado)
 
     estado, trabajo, rechazos = review_domain.procesar_comandos(
         current,
@@ -3302,7 +2448,7 @@ def cmd_close_result(args):
         ruta = work / cruda
         if ruta.exists():
             ruta.write_text(redact(ruta.read_text(), secretos))
-    avisar_bloque_sin_cierre(texto)
+    review_github.avisar_bloque_sin_cierre(texto)
     # La identidad viaja en el paquete desde la solicitud del coordinador.
     identidad = paquete.get("finding_identity") or politica_de_identidad()
     if identidad not in IDENTIDADES:
@@ -3352,7 +2498,7 @@ def cmd_close_result(args):
     if ERROR_KEY in resultado:
         paquete[ERROR_KEY] = redact(resultado[ERROR_KEY], secretos)
     (work / "result.json").write_text(json.dumps(paquete))
-    informar_revision(ERROR_KEY not in paquete)
+    review_github.informar_revision(ERROR_KEY not in paquete)
     resumen = os.environ.get("GITHUB_STEP_SUMMARY")
     if ERROR_KEY in paquete and resumen:
         with open(resumen, "a") as fh:
@@ -3417,8 +2563,6 @@ def revision_visible(artifact, snapshot, previos, head):
 
 
 TITULO_DE_REVISION = "### Revisión automática · "
-DETALLE_DEL_REVISOR = "## Detalle del revisor"
-ALCANCE_INICIO = "<details><summary>Alcance de la revisión</summary>"
 EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
 EXPLICACIONES_VISIBLES = 3
@@ -3447,7 +2591,7 @@ def linea_en_curso(snapshot):
     if pendiente is None:
         return None
     head = pendiente.target.get("head_sha", "")
-    commit = f"el commit `{head[:7]}`" if _sha_hexa(head) else "el PR"
+    commit = f"el commit `{head[:7]}`" if sha_hexa(head) else "el PR"
     return (
         f"{AVISO_EN_CURSO_PREFIX}el revisor está revisando {commit}; este "
         "comentario se actualiza cuando termine."
@@ -3484,38 +2628,6 @@ AVISOS_DE_RECHAZO = {
     review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
     review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
 }
-
-
-_ENTIDAD_RE = re.compile(r"&(?!amp;)(?=#?\w+;)")
-
-
-def prosa_del_modelo(texto):
-    """Texto del modelo, listo para ir en la única sección que lo lleva ("Detalle
-    del revisor" y las explicaciones). La autoridad la da el lugar, no el texto:
-    los avisos del programa solo salen de secciones que arma el programa
-    (aviso_md, sections_for, estado_visible) y nunca contienen texto del modelo,
-    así que lo que parezca un aviso dentro de la sección del modelo se lee como
-    del modelo. Aquí solo hace falta el escapado básico para que no rompa el resto
-    del comentario: el `&` de una referencia de carácter se escapa para que se vea
-    literal (`<!--` y `<details` los neutraliza neutralizar_marcadores)."""
-    return _ENTIDAD_RE.sub("&amp;", texto)
-
-
-def una_linea_literal(texto):
-    """Causa externa (no del modelo, p. ej. el error del worker) que el programa
-    interpola en un aviso suyo: una sola línea, con HTML y markdown escapados para
-    que se vea literal y no forme otra línea o etiqueta dentro del aviso."""
-    texto = " ".join(str(texto).split())
-    texto = html.escape(texto, quote=False)
-    return re.sub(r"([\\`*_~\[\]])", r"\\\1", texto)
-
-
-def neutralizar_marcadores(texto):
-    """Prosa del modelo (sale del contenido del PR) dentro del comentario: no
-    puede imitar los marcadores ai-review:* ni dejar un comentario HTML abierto
-    (todo <!-- se escapa), ni abrir o cerrar un <details>. Idempotente."""
-    texto = texto.replace("<!--", "&lt;!--")
-    return re.sub(r"<(/?details)", r"&lt;\1", texto, flags=re.I)
 
 
 def texto_de_explicacion(artifact):

@@ -21,6 +21,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
+import review_github
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 WORKER = (ROOT / "templates" / "ai-review-worker.yml").read_text()
@@ -120,7 +123,7 @@ class GitHubFalso:
         )
 
     def sticky(self):
-        return review.sticky_from_comments(self.leer(), BOT)["body"]
+        return review_sticky.sticky_from_comments(self.leer(), BOT)["body"]
 
 
 def reconciliar(github, evento, head, artifact=None):
@@ -196,8 +199,8 @@ def reconciliar(github, evento, head, artifact=None):
         with (
             mock.patch.dict(os.environ, entorno, clear=False),
             mock.patch.object(review, "ComentariosGh", return_value=github),
-            mock.patch.object(review, "sh", side_effect=sh_falso),
-            mock.patch.object(review, "collaborator_permission", return_value="write"),
+            mock.patch.object(review_github, "sh", side_effect=sh_falso),
+            mock.patch.object(review_github, "collaborator_permission", return_value="write"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
@@ -214,14 +217,14 @@ def resultado_del_worker(request_id, head):
         "run_id": 900,
         "attempt": 1,
         "pr_head_sha": head,
-        "policy_digest": review.digest_de_politica(review.politica_de_revision()),
+        "policy_digest": review.digest_de_politica(review_config.politica_de_revision()),
         "observaciones": [],
         "cobertura": "complete",
     }
 
 
 def sticky_con_hallazgo():
-    digest = review.digest_de_politica(review.politica_de_revision())
+    digest = review.digest_de_politica(review_config.politica_de_revision())
     estado = domain.Snapshot(
         schema=3,
         generation=2,

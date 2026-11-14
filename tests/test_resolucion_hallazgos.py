@@ -13,6 +13,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
+import review_github
+import review_render
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 BOT = "github-actions[bot]"
@@ -78,7 +82,7 @@ def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
     comentarios = (
         [{"id": 1, "user": BOT, "body": cuerpo_previo}] if cuerpo_previo else []
     )
-    sh_real = review.sh
+    sh_real = review_github.sh
 
     def correr(*args, **kwargs):
         if args[0] == "git":
@@ -95,8 +99,8 @@ def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
                 "GITHUB_STEP_SUMMARY": "",
             },
         ),
-        mock.patch.object(review, "fetch_all_comments", return_value=comentarios),
-        mock.patch.object(review, "sh", side_effect=correr),
+        mock.patch.object(review_github, "fetch_all_comments", return_value=comentarios),
+        mock.patch.object(review_github, "sh", side_effect=correr),
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):
@@ -150,7 +154,7 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
             c2 = git(repo, "rev-parse", "HEAD")
 
             work2 = Path(tmp, "work2")
-            manifest = preparar(repo, work2, m1, c2, review.prev_de_memoria(cuerpo))
+            manifest = preparar(repo, work2, m1, c2, review_sticky.prev_de_memoria(cuerpo))
             self.assertEqual(manifest["changed_files"], ["caller.py"])
             cuerpo = publicar_directo(
                 repo,
@@ -168,7 +172,7 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
 
 
 def coordinador_revisa(repo, work, actual, base, head, texto):
-    policy = review.politica_de_revision()
+    policy = review_config.politica_de_revision()
     digest = review.digest_de_politica(policy)
     facts = domain.RepositoryFacts(
         revision=domain.Revision(base_sha=base, head_sha=head, policy_digest=digest)
@@ -189,14 +193,14 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
         policy,
     )
     revisado = (
-        [f"{review.SHA_PREFIX}{actual.revision.head_sha} -->"]
+        [f"{review_sticky.SHA_PREFIX}{actual.revision.head_sha} -->"]
         if actual.revision
         else []
     )
     cuerpo = "\n".join(
-        [review.MARKER, *revisado, domain.encode_snapshot(pedido.snapshot).block]
+        [review_sticky.MARKER, *revisado, domain.encode_snapshot(pedido.snapshot).block]
     )
-    manifest = preparar(repo, work, base, head, review.prev_de_memoria(cuerpo))
+    manifest = preparar(repo, work, base, head, review_sticky.prev_de_memoria(cuerpo))
     artifact = {
         "manifest": {k: manifest[k] for k in review.CAMPOS_DEL_ALCANCE if k in manifest}
     }
@@ -213,7 +217,7 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
             observaciones=tuple(
                 domain.observation_de_entrada(e) for e in modelo["findings"]
             ),
-            cobertura=review.cobertura_declarada(texto, modelo),
+            cobertura=review_sticky.cobertura_declarada(texto, modelo),
         ),
         facts,
         policy,
@@ -359,7 +363,7 @@ class DeltaNuloEnElManifest(unittest.TestCase):
             "title": "eval",
             "state": "open",
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": "Sigue abierto.\nCOVERAGE: complete", "subtype": "success"},
             self.MANIFEST,
             sha="b" * 40,

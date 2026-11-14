@@ -23,6 +23,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_github
+import review_render
+import review_sticky
 import review_run
 import review_domain
 import review_config
@@ -89,14 +92,14 @@ class Coverage(unittest.TestCase):
 
 class Compose(unittest.TestCase):
     def test_complete_review_has_marker_sha_and_no_warning(self):
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** sin problemas.\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
             provider="opencode-go",
         )
-        self.assertTrue(body.startswith(review.MARKER))
-        self.assertEqual(review.reviewed_sha(body), SHA)
+        self.assertTrue(body.startswith(review_sticky.MARKER))
+        self.assertEqual(review_sticky.reviewed_sha(body), SHA)
         self.assertIn(
             "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · 0123456",
             body,
@@ -107,7 +110,7 @@ class Compose(unittest.TestCase):
 
     def test_max_turns_and_budget_cut_are_never_silent(self):
         manifest = dict(MANIFEST, excluded=[{"path": "big.py", "reason": "budget"}])
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** 1 High.", "subtype": "error_max_turns"},
             manifest,
             sha=SHA,
@@ -126,7 +129,7 @@ class Compose(unittest.TestCase):
             MANIFEST,
             excluded=[{"path": "x" * 300, "reason": "filtro " + "y" * 3000}] * 40,
         )
-        body = review.compose(
+        body = review_render.compose(
             {"result": "x" * 70000 + "\nCOVERAGE: complete"},
             manifest,
             sha=SHA,
@@ -135,7 +138,7 @@ class Compose(unittest.TestCase):
         self.assertEqual(len(body), 65000)
 
     def test_partial_coverage_detail_is_shown(self):
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: partial | tests/ sin leer"},
             MANIFEST,
             sha=SHA,
@@ -152,7 +155,7 @@ class Compose(unittest.TestCase):
             "cache_read_input_tokens": 1_000_000,
             "output_tokens": 10_000,
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
             MANIFEST,
             sha=SHA,
@@ -167,7 +170,7 @@ class Compose(unittest.TestCase):
         manifest = dict(
             MANIFEST, excluded=[{"path": "p/" + "x" * 240, "reason": "budget"}] * 60
         )
-        body = review.compose(
+        body = review_render.compose(
             {"result": "x" * 70000 + "\nCOVERAGE: complete"},
             manifest,
             sha=SHA,
@@ -187,7 +190,7 @@ class Redact(unittest.TestCase):
         key, token = "sk-" + "a1" * 16, "ghs_" + "Zz9" * 12
         self.assertEqual((len(key), len(token)), (35, 40))
         self.assertEqual(
-            review.redact(f"key {key} and {token}", [key, token, ""]),
+            review_render.redact(f"key {key} and {token}", [key, token, ""]),
             "key [REDACTED] and [REDACTED]",
         )
 
@@ -423,7 +426,7 @@ class GitHubGlue(unittest.TestCase):
             return calls, output, posted
 
     def sticky(self, sha):
-        return {"id": 99, "body": f"{review.MARKER}\n{review.SHA_PREFIX}{sha} -->\nold"}
+        return {"id": 99, "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{sha} -->\nold"}
 
     def test_gate_skips_same_sha(self):
         _, output, _ = self.run_cmd("gate", [self.sticky(SHA)])
@@ -441,13 +444,13 @@ class GitHubGlue(unittest.TestCase):
         forged = {
             "id": 7,
             "user": "mallory",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\nfake",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\nfake",
         }
         _, output, _ = self.run_cmd("gate", [forged])
         self.assertEqual(output, "skip=false\n")
 
     def test_gate_sticky_without_sha_marker_does_not_skip(self):
-        sticky = {"id": 5, "body": f"{review.MARKER}\nold review, no sha marker"}
+        sticky = {"id": 5, "body": f"{review_sticky.MARKER}\nold review, no sha marker"}
         _, output, _ = self.run_cmd("gate", [sticky])
         self.assertEqual(output, "skip=false\n")
 
@@ -536,10 +539,10 @@ class GitHubGlue(unittest.TestCase):
         self,
     ):
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{old_sha} -->", body)
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{old_sha} -->", body)
         self.assertNotIn(SHA, body)
         self.assertIn("> [!CAUTION]", body)
         self.assertIn("No se pudo revisar el commit", body)
@@ -549,7 +552,7 @@ class GitHubGlue(unittest.TestCase):
 
     def test_publish_with_error_twice_replaces_banner_instead_of_stacking(self):
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
         first = self.run_cmd_with_error(
             [{"id": 99, "body": old_body}], reason="el proxy LiteLLM no arrancó"
         )
@@ -566,14 +569,14 @@ class GitHubGlue(unittest.TestCase):
     def test_publish_with_error_and_no_sticky_creates_marker_without_sha(self):
         posted = self.run_cmd_with_error([])
         body = posted["body"]
-        self.assertIn(review.MARKER, body)
-        self.assertNotIn(review.SHA_PREFIX, body)
+        self.assertIn(review_sticky.MARKER, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body)
         self.assertIn("> [!CAUTION]", body)
 
     def test_publish_with_error_and_notice_only_sticky_does_not_claim_a_previous_review(
         self,
     ):
-        old_body = f"{review.MARKER}\n> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falla vieja."
+        old_body = f"{review_sticky.MARKER}\n> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falla vieja."
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
         self.assertIn("> [!CAUTION]", body)
@@ -583,7 +586,7 @@ class GitHubGlue(unittest.TestCase):
     def test_publish_error_path_redacts_secrets(self):
         secret = "sk-" + "b2" * 16
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### vieja"
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### vieja"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
@@ -1544,7 +1547,7 @@ class RunAgent(unittest.TestCase):
                 self.assertEqual(len(calls), llamadas)
                 self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertIsNone(
-                    review.unreviewed_de(result["result"]),
+                    review_sticky.unreviewed_de(result["result"]),
                     "una respuesta rearmada no acredita cobertura parcial",
                 )
                 modelo = review.parse_model_findings(result["result"])
@@ -1569,7 +1572,7 @@ class RunAgent(unittest.TestCase):
             review_domain.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
         )
         self.assertIsNone(
-            review.unreviewed_de(result["result"]),
+            review_sticky.unreviewed_de(result["result"]),
             "la lista vacía es una cita del formato, no lo que el modelo declaró",
         )
 
@@ -1606,7 +1609,7 @@ class RunAgent(unittest.TestCase):
                     review_domain.split_coverage(result["result"])[1:],
                     ("partial", "no leí b.py"),
                 )
-                self.assertIsNone(review.unreviewed_de(result["result"]))
+                self.assertIsNone(review_sticky.unreviewed_de(result["result"]))
                 modelo = review.parse_model_findings(result["result"])
                 self.assertEqual(
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
@@ -1922,7 +1925,7 @@ class MaxTurns(unittest.TestCase):
     def test_compose_shows_used_over_cap(self):
         manifest = dict(MANIFEST, max_turns=40)
         usage = {"input_tokens": 10, "output_tokens": 5}
-        body = review.compose(
+        body = review_render.compose(
             {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
             manifest,
             sha=SHA,
@@ -2865,7 +2868,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(stdout=json.dumps({"artifacts": listado}))
 
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(review, "sh", side_effect=sh_falso):
+            with mock.patch.object(review_github, "sh", side_effect=sh_falso):
                 cosechado = review.artefacto_del_run(
                     "o/r", {"id": 4242, "run_attempt": 3}, 7, tmp
                 )
@@ -3188,7 +3191,7 @@ class Workflows(unittest.TestCase):
 
         pasos = self._pasos()
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         with self._repo_minimo() as (repo, base, head):
@@ -3242,7 +3245,7 @@ class Workflows(unittest.TestCase):
                 )
                 evento = Path(work) / "event.json"
                 evento.write_text("{}")
-                sh_real = review.sh
+                sh_real = review_github.sh
 
                 def sh_mixto(*args, **kw):
                     if args[0] == "gh":
@@ -3260,7 +3263,7 @@ class Workflows(unittest.TestCase):
                         env_de("preparar contexto", {"GITHUB_EVENT_PATH": str(evento)}),
                         clear=False,
                     ):
-                        with mock.patch.object(review, "sh", sh_mixto):
+                        with mock.patch.object(review_github, "sh", sh_mixto):
                             review.cmd_prepare(
                                 argparse.Namespace(
                                     work=work, prompt=str(ROOT / "prompt.md")
@@ -3333,6 +3336,10 @@ class Workflows(unittest.TestCase):
                 "review_context.py",
                 "review_config.py",
                 "review_run.py",
+                "review_sticky.py",
+                "review_render.py",
+                "review_github.py",
+                "review_commands.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3469,7 +3476,7 @@ class Workflows(unittest.TestCase):
             with tempfile.TemporaryDirectory() as work:
 
                 def sh_mixto(returncode, salida):
-                    real = review.sh
+                    real = review_github.sh
 
                     def falso(*args, **kw):
                         if args[0] == "gh":
@@ -3491,7 +3498,7 @@ class Workflows(unittest.TestCase):
                         },
                         clear=False,
                     ):
-                        with mock.patch.object(review, "sh", con_mock):
+                        with mock.patch.object(review_github, "sh", con_mock):
                             with contextlib.chdir(repo):
                                 review.cmd_prepare(
                                     argparse.Namespace(
@@ -3683,7 +3690,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         with tempfile.TemporaryDirectory() as work:
@@ -3843,7 +3850,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="")
 
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
-        with mock.patch.object(review, "sh", sh_falso):
+        with mock.patch.object(review_github, "sh", sh_falso):
             with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "anchors"}):
                 review.despachar_worker(
                     solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
@@ -3920,7 +3927,7 @@ class Workflows(unittest.TestCase):
     def _estado_pendiente(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         return domain.Snapshot(
             schema=3,
             generation=1,
@@ -3954,7 +3961,7 @@ class Workflows(unittest.TestCase):
     def _reconciliar(self, estado, tmp, evento, **entorno):
         import review_domain as domain
 
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         falso.patches = []
@@ -4034,7 +4041,7 @@ class Workflows(unittest.TestCase):
         base_env.update(entorno)
         with mock.patch.dict(os.environ, base_env, clear=False):
             with mock.patch.object(review, "ComentariosGh", return_value=falso):
-                with mock.patch.object(review, "sh", sh_falso):
+                with mock.patch.object(review_github, "sh", sh_falso):
                     with mock.patch.object(
                         review,
                         "despachar_worker",
@@ -4056,7 +4063,7 @@ class Workflows(unittest.TestCase):
                         "attempt": 1,
                         "pr_head_sha": "c" * 40,
                         "policy_digest": review.digest_de_politica(
-                            review.politica_de_revision()
+                            review_config.politica_de_revision()
                         ),
                         "target": domain.ReviewTarget(
                             repository="o/r",
@@ -4064,7 +4071,7 @@ class Workflows(unittest.TestCase):
                             head_sha="c" * 40,
                             base_sha="b" * 40,
                             policy_digest=review.digest_de_politica(
-                                review.politica_de_revision()
+                                review_config.politica_de_revision()
                             ),
                         ).json(),
                         "observaciones": [],
@@ -4089,7 +4096,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._estado_pendiente()
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4251,10 +4258,10 @@ class Workflows(unittest.TestCase):
             )
         cuerpo = patches[-1][1]
         lineas = cuerpo.split("\n")
-        self.assertEqual(lineas[0], review.MARKER)
-        self.assertEqual(lineas[1], f"{review.SHA_PREFIX}{'c' * 40} -->")
+        self.assertEqual(lineas[0], review_sticky.MARKER)
+        self.assertEqual(lineas[1], f"{review_sticky.SHA_PREFIX}{'c' * 40} -->")
         self.assertEqual(
-            lineas[2], f"{review.COMPLETION_PREFIX}{'c' * 40}:complete -->"
+            lineas[2], f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:complete -->"
         )
         self.assertIn(
             "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · ccccccc",
@@ -4311,7 +4318,7 @@ class Workflows(unittest.TestCase):
                 lineas = cuerpo.split("\n")
                 self.assertEqual(
                     lineas[2],
-                    f"{review.COMPLETION_PREFIX}{'c' * 40}:{marcador} -->",
+                    f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:{marcador} -->",
                 )
                 if aviso is None:
                     self.assertNotIn("quedaron fuera", cuerpo)
@@ -4346,7 +4353,7 @@ class Workflows(unittest.TestCase):
             )
         self.assertEqual(despachados, [2], "se pide revisar el head vivo")
         cuerpo = patches[-1][1]
-        self.assertNotIn(review.SHA_PREFIX, cuerpo)
+        self.assertNotIn(review_sticky.SHA_PREFIX, cuerpo)
         self.assertNotIn("Texto de un head viejo.", cuerpo)
 
     def test_el_error_del_worker_avisa_en_visible_sin_marcar_revisado(self):
@@ -4371,12 +4378,12 @@ class Workflows(unittest.TestCase):
             ),
             lineas[3],
         )
-        self.assertNotIn(review.SHA_PREFIX, cuerpo)
+        self.assertNotIn(review_sticky.SHA_PREFIX, cuerpo)
 
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4410,7 +4417,7 @@ class Workflows(unittest.TestCase):
     def _resultado_de_corrida(self, tmp, corrida):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         (Path(tmp) / "result.json").write_text(
             json.dumps(
                 {
@@ -4479,7 +4486,7 @@ class Workflows(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="")
 
         solicitud = mock.Mock(id=1, target={"head_sha": "c" * 40, "base_sha": "b" * 40})
-        with mock.patch.object(review, "sh", sh_falso):
+        with mock.patch.object(review_github, "sh", sh_falso):
             review.despachar_worker(
                 solicitud, repo="o/r", ref="main", run_id="55", pr_number="12"
             )
@@ -4525,7 +4532,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
         falso = mock.Mock()
         falso.leer = lambda: comentarios
@@ -4556,7 +4563,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
         self.assertEqual(
             paquete["policy_digest"],
-            review.digest_de_politica(review.politica_de_revision()),
+            review.digest_de_politica(review_config.politica_de_revision()),
             "el digest sale de la política normalizada, no del checkpoint",
         )
         self.assertEqual(paquete["finding_identity"], "current")
@@ -4908,7 +4915,7 @@ class DismissCommands(unittest.TestCase):
         ]
         perms = {"owner": "write", "reader": "read", "ghost": None}
         with mock.patch.object(
-            review,
+            review_github,
             "collaborator_permission",
             side_effect=lambda repo, user: perms[user],
         ) as perm:
@@ -4927,7 +4934,7 @@ class DismissCommands(unittest.TestCase):
             for i, u in ((21, "m"), (22, "a"))
         ]
         with mock.patch.object(
-            review, "collaborator_permission", side_effect=["maintain", "admin"]
+            review_github, "collaborator_permission", side_effect=["maintain", "admin"]
         ):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments),
@@ -4935,10 +4942,10 @@ class DismissCommands(unittest.TestCase):
             )
 
     def test_permission_uses_collaborators_endpoint_without_token_in_args(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 0
             fake.return_value.stdout = "write\n"
-            self.assertEqual(review.collaborator_permission("o/r", "ana"), "write")
+            self.assertEqual(review_github.collaborator_permission("o/r", "ana"), "write")
             args = fake.call_args[0]
             self.assertEqual(
                 args[:3], ("gh", "api", "repos/o/r/collaborators/ana/permission")
@@ -4948,27 +4955,27 @@ class DismissCommands(unittest.TestCase):
             )
 
     def test_unknown_user_is_not_writer(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 0
             fake.return_value.stdout = "\n"
-            self.assertIsNone(review.collaborator_permission("o/r", "nadie"))
+            self.assertIsNone(review_github.collaborator_permission("o/r", "nadie"))
 
     def test_failed_permission_query_is_logged_not_silent(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stdout = ""
             fake.return_value.stderr = "gh: Server Error (HTTP 500)\n"
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
             self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
             self.assertIn("HTTP 500", err.getvalue())
 
     def test_permission_query_without_gh_is_logged_not_silent(self):
-        with mock.patch.object(review, "sh", side_effect=OSError("sin gh")):
+        with mock.patch.object(review_github, "sh", side_effect=OSError("sin gh")):
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
             self.assertIn("no se pudo verificar el permiso de ana", err.getvalue())
             self.assertIn("sin gh", err.getvalue())
 
@@ -5133,7 +5140,7 @@ class Fallback(unittest.TestCase):
             dismiss_ids=set(),
             dismiss_all=False,
         )
-        body = review.compose(
+        body = review_render.compose(
             result,
             manifest,
             sha=SHA,
@@ -5144,7 +5151,7 @@ class Fallback(unittest.TestCase):
                 "block": review.serialize_findings(merged),
             },
         )
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertEqual(
             review.parse_findings_block(body)["findings"], merged["findings"]
         )
@@ -5170,7 +5177,7 @@ class Fallback(unittest.TestCase):
 
     def test_empty_state_uses_legacy_body(self):
         result = {"result": "**Veredicto:** 1 High.\n\nDetalle.\nCOVERAGE: complete"}
-        body = review.compose(
+        body = review_render.compose(
             result,
             MANIFEST,
             sha=SHA,
@@ -5195,7 +5202,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F4", state="dismissed"),
         ]
         self.assertEqual(
-            review.verdict_for(merged),
+            review_render.verdict_for(merged),
             "**Veredicto:** 1 High, 1 Medium abiertos (1 resuelto, 1 descartado).",
         )
 
@@ -5205,7 +5212,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F2", state="resolved"),
         ]
         self.assertEqual(
-            review.verdict_for(merged),
+            review_render.verdict_for(merged),
             "**Veredicto:** sin problemas abiertos (2 resueltos).",
         )
 
@@ -5216,7 +5223,7 @@ class VerdictSections(unittest.TestCase):
             make_finding("F3", state="resolved"),
             make_finding("F4", state="dismissed"),
         ]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5237,7 +5244,7 @@ class VerdictSections(unittest.TestCase):
 
     def test_el_motivo_de_una_resolucion_no_aceptada_sale_bajo_el_hallazgo_abierto(self):
         merged = [make_finding("F1"), make_finding("F2")]
-        partes = review.sections_for(merged, [], no_acreditados=("F1",))
+        partes = review_render.sections_for(merged, [], no_acreditados=("F1",))
         siguen = partes.index("## Siguen abiertos")
         bloque = partes[siguen:]
         i = next(n for n, linea in enumerate(bloque) if linea.endswith(" · F1"))
@@ -5250,14 +5257,14 @@ class VerdictSections(unittest.TestCase):
             len([l for l in partes if "no cambió ningún archivo pertinente" in l]), 1
         )
         self.assertEqual(
-            review.sections_for(merged, [], no_acreditados=()),
-            review.sections_for(merged, []),
+            review_render.sections_for(merged, [], no_acreditados=()),
+            review_render.sections_for(merged, []),
             "sin resoluciones no aceptadas el render no cambia",
         )
 
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"
             },
@@ -5275,7 +5282,7 @@ class VerdictSections(unittest.TestCase):
 
     def test_metadata_precedes_review_and_stays_within_budgets(self):
         merged = [make_finding("F1")]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5287,16 +5294,16 @@ class VerdictSections(unittest.TestCase):
             },
         )
         lines = body.split("\n")
-        self.assertEqual(lines[0], review.MARKER)
-        self.assertTrue(lines[1].startswith(review.SHA_PREFIX))
-        self.assertTrue(lines[2].startswith(review.COMPLETION_PREFIX))
+        self.assertEqual(lines[0], review_sticky.MARKER)
+        self.assertTrue(lines[1].startswith(review_sticky.SHA_PREFIX))
+        self.assertTrue(lines[2].startswith(review_sticky.COMPLETION_PREFIX))
         self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
 
     def test_oversized_block_never_eats_the_scope_section(self):
         merged = [make_finding("F1")]
-        body = review.compose(
+        body = review_render.compose(
             {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -5304,7 +5311,7 @@ class VerdictSections(unittest.TestCase):
             findings={
                 "merged": merged,
                 "new_ids": ["F1"],
-                "block": "B" * (review.COMMENT_LIMIT + 10000),
+                "block": "B" * (review_render.COMMENT_LIMIT + 10000),
             },
         )
         self.assertIn("recortada por el límite", body)
@@ -5521,7 +5528,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
                 base_sha=base,
                 head_sha=prev,
                 policy_digest=review.digest_de_politica(
-                    review.politica_de_revision()
+                    review_config.politica_de_revision()
                 ),
             ),
         )
@@ -5652,9 +5659,9 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
                     },
                 ),
                 mock.patch.object(
-                    review, "fetch_all_comments", return_value=comentarios
+                    review_github, "fetch_all_comments", return_value=comentarios
                 ),
-                mock.patch.object(review, "set_output"),
+                mock.patch.object(review_github, "set_output"),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 review.cmd_gate(argparse.Namespace(work=str(directo)))
@@ -5670,7 +5677,7 @@ class ReviewContinuity(unittest.TestCase):
         comments = (
             [{"id": 1, "user": "github-actions[bot]", "body": body}] if body else []
         )
-        real_sh = review.sh
+        real_sh = review_github.sh
 
         def run_command(*args, **kwargs):
             if args[0] == "git":
@@ -5687,8 +5694,8 @@ class ReviewContinuity(unittest.TestCase):
                     "GITHUB_STEP_SUMMARY": "",
                 },
             ),
-            mock.patch.object(review, "fetch_all_comments", return_value=comments),
-            mock.patch.object(review, "sh", side_effect=run_command),
+            mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+            mock.patch.object(review_github, "sh", side_effect=run_command),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             review.cmd_publish(argparse.Namespace(work=str(work)))
@@ -5706,8 +5713,8 @@ class ReviewContinuity(unittest.TestCase):
                     "RUN_ATTEMPT": attempt,
                 },
             ),
-            mock.patch.object(review, "fetch_all_comments", return_value=comments),
-            mock.patch.object(review, "set_output") as output,
+            mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
+            mock.patch.object(review_github, "set_output") as output,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             review.cmd_gate(argparse.Namespace(work=str(work)))
@@ -5723,10 +5730,10 @@ class ReviewContinuity(unittest.TestCase):
             libro_previo = {"app.py": git(repo, "rev-parse", f"{prev}:app.py")}
             cuerpo_previo = "\n".join(
                 [
-                    review.MARKER,
-                    f"{review.SHA_PREFIX}{prev} -->",
-                    f"{review.COMPLETION_PREFIX}{prev}:partial -->",
-                    review.libro_a_linea(prev, libro_previo),
+                    review_sticky.MARKER,
+                    f"{review_sticky.SHA_PREFIX}{prev} -->",
+                    f"{review_sticky.COMPLETION_PREFIX}{prev}:partial -->",
+                    review_sticky.libro_a_linea(prev, libro_previo),
                     block_of(anterior),
                 ]
             )
@@ -5756,7 +5763,7 @@ class ReviewContinuity(unittest.TestCase):
                                 )
                             else:
                                 work.mkdir(exist_ok=True)
-                                policy = review.politica_de_revision()
+                                policy = review_config.politica_de_revision()
                                 revision = domain.Revision(
                                     base_sha=base, head_sha=head,
                                     policy_digest=review.digest_de_politica(policy),
@@ -5810,8 +5817,8 @@ class ReviewContinuity(unittest.TestCase):
                                 cuerpo = review.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
                                     domain.encode_snapshot(decision.snapshot).block, cuerpo_previo
                                 )
-                        self.assertEqual(review.reviewed_completion(cuerpo), "partial")
-                        self.assertEqual(review.libro_de(cuerpo)[1], libro_previo)
+                        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "partial")
+                        self.assertEqual(review_sticky.libro_de(cuerpo)[1], libro_previo)
                         findings = domain.estado_legado_de_memoria(cuerpo)["findings"]
                         self.assertEqual([(f["id"], f["title"], f["state"]) for f in findings], [
                             ("F1", "Hallazgo previo", "open"),
@@ -5850,7 +5857,7 @@ class ReviewContinuity(unittest.TestCase):
             command_cursor=7,
         )
         cuerpo = (
-            f"{review.MARKER}\n{review.SHA_PREFIX}{'c' * 40} -->\n"
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'c' * 40} -->\n"
             f"{domain.encode_snapshot(estado)}\n### Revisión"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -5892,7 +5899,7 @@ class ReviewContinuity(unittest.TestCase):
             repo, work, base, prev, head = fixture.make_repo(tmp)
             dismissed = make_finding(file="app.py", state="dismissed")
             old = (
-                f"{review.MARKER}\n{review.SHA_PREFIX}{base} -->\n{block_of(dismissed)}"
+                f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{base} -->\n{block_of(dismissed)}"
             )
             manifest = {
                 "base": base,
@@ -6132,7 +6139,7 @@ class ReviewContinuity(unittest.TestCase):
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
-            header = f"{review.MARKER}\n{review.SHA_PREFIX}{prev} -->\n"
+            header = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{prev} -->\n"
             complete = f"<!-- ai-review:completion={prev}:complete -->"
             statuses = [
                 "",
@@ -6221,7 +6228,7 @@ class ReviewContinuity(unittest.TestCase):
                 findings=[],
                 command_cursor=0,
             )
-            semilla = f"{review.MARKER}\n{domain.encode_snapshot(vacio)}"
+            semilla = f"{review_sticky.MARKER}\n{domain.encode_snapshot(vacio)}"
             antes = os.getcwd()
             os.chdir(repo)
             try:
@@ -6278,7 +6285,7 @@ class ReviewContinuity(unittest.TestCase):
                         body = self.publish(
                             work, "b" * 40, MANIFEST, {review_config.ERROR_KEY: reason}, body
                         )
-                    self.assertEqual(body.count(review.CAUTION_MARK), 1)
+                    self.assertEqual(body.count(review_render.CAUTION_MARK), 1)
                     self.assertNotIn("first failure", body)
                     previous, _ = self.gate(work, "b" * 40, body)
                     self.assertEqual(previous["sha"], SHA)
@@ -6293,7 +6300,7 @@ class ReviewContinuity(unittest.TestCase):
                     "block": block_of(*merged),
                     "model_ok": True,
                 }
-                body = review.compose(
+                body = review_render.compose(
                     {"result": "x" * 100_000 + "\nCOVERAGE: complete"},
                     MANIFEST,
                     sha=SHA,
@@ -6341,7 +6348,7 @@ class GatePrev(unittest.TestCase):
         block = block_of(make_finding("F1"), next=2)
         sticky = {
             "id": 9,
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
         }
         output, prev = self.run_gate([sticky])
         self.assertEqual(output, "skip=false\n")
@@ -6354,7 +6361,7 @@ class GatePrev(unittest.TestCase):
             {
                 "id": 9,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
             },
             {"id": 10, "user": "owner", "body": "ai-review: descartar F1"},
         ]
@@ -6396,7 +6403,7 @@ class GatePrev(unittest.TestCase):
             {
                 "id": 9,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
             },
             {"id": 10, "user": "owner", "body": "ai-review: descartar todo"},
         ]
@@ -6588,27 +6595,27 @@ class IncrementalRun(unittest.TestCase):
 class StickyComments(unittest.TestCase):
     def test_latest_bot_sticky_wins(self):
         comments = [
-            {"id": 1, "user": "github-actions[bot]", "body": f"{review.MARKER}\nold"},
-            {"id": 2, "user": "ana", "body": f"{review.MARKER}\nplantado"},
-            {"id": 3, "user": "github-actions[bot]", "body": f"{review.MARKER}\nnew"},
+            {"id": 1, "user": "github-actions[bot]", "body": f"{review_sticky.MARKER}\nold"},
+            {"id": 2, "user": "ana", "body": f"{review_sticky.MARKER}\nplantado"},
+            {"id": 3, "user": "github-actions[bot]", "body": f"{review_sticky.MARKER}\nnew"},
         ]
         self.assertEqual(
-            review.sticky_from_comments(comments, "github-actions[bot]")["id"], 3
+            review_sticky.sticky_from_comments(comments, "github-actions[bot]")["id"], 3
         )
 
     def test_no_sticky_returns_none(self):
         self.assertIsNone(
-            review.sticky_from_comments(
+            review_sticky.sticky_from_comments(
                 [{"id": 1, "user": "ana", "body": "hola"}], "bot"
             )
         )
-        self.assertIsNone(review.sticky_from_comments([], "bot"))
+        self.assertIsNone(review_sticky.sticky_from_comments([], "bot"))
 
     def test_summary_skips_hidden_markers(self):
         body = "\n".join(
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{SHA} -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{SHA} -->",
                 block_of(make_finding()),
                 "### Título",
                 "",
@@ -6638,7 +6645,7 @@ class PublishFindings(unittest.TestCase):
             {
                 "id": 99,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
             },
             {"id": 100, "user": "owner", "body": "ai-review: descartar F1, gracias"},
         ]
@@ -6916,7 +6923,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "texto\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
@@ -6935,7 +6942,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "", "subtype": "success"},
             manifest,
             sha=SHA,
@@ -6962,19 +6969,19 @@ class BlockingFixes(unittest.TestCase):
             "model_ok": True,
             "block": block,
         }
-        body = review.compose(
+        body = review_render.compose(
             {"result": "y" * 70000 + "\nCOVERAGE: complete"},
             MANIFEST,
             sha=SHA,
             provider="opencode-go",
             findings=findings,
         )
-        self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertIn(
             "Memoria conservada", body, "aviso visible de memoria íntegra no guardada"
         )
-        self.assertNotIn(review.SHA_PREFIX, body, "no confirma el commit revisado")
-        self.assertNotIn(review.COMPLETION_PREFIX, body, "no confirma cobertura")
+        self.assertNotIn(review_sticky.SHA_PREFIX, body, "no confirma el commit revisado")
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no confirma cobertura")
         self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):
@@ -6986,7 +6993,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(make_finding("F1", file="b.py")) + "\nCOVERAGE: complete"
@@ -7030,7 +7037,7 @@ class BlockingFixes(unittest.TestCase):
                 {"findings": [make_finding("F1", state="resolved")], "next": 2}
             ),
         }
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": block_of(make_finding("F1", state="resolved"))
                 + "\nCOVERAGE: complete"
@@ -7046,7 +7053,7 @@ class BlockingFixes(unittest.TestCase):
 
     def test_dismiss_all_applies_once_and_never_to_later_findings(self):
         todo = [{"id": 100, "user": "owner", "body": "ai-review: descartar todo"}]
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             ids, all_open, last = review.collect_dismissals("o/r", "7", "bot", todo, 0)
             self.assertEqual((ids, all_open, last), (set(), True, 100))
             self.assertEqual(
@@ -7070,7 +7077,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
         }
         comments = [
             sticky,
@@ -7086,7 +7093,7 @@ class BlockingFixes(unittest.TestCase):
         manifest = dict(
             MANIFEST, mode="full", reason="no-prev", reviewed=["src/app.py", "b.py"]
         )
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             first = review.build_findings(
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", comments
             )
@@ -7096,7 +7103,7 @@ class BlockingFixes(unittest.TestCase):
             )
             sticky2 = dict(
                 sticky,
-                body=f"{review.MARKER}\n{review.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
+                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
             )
             again = review.build_findings(
                 {
@@ -7122,7 +7129,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(make_finding("F1", state="resolved"))
@@ -7152,7 +7159,7 @@ class BlockingFixes(unittest.TestCase):
             "model_ok": True,
             "block": review.serialize_findings({"findings": [], "next": 1}),
         }
-        body = review.compose(
+        body = review_render.compose(
             {
                 "result": "**Veredicto:** limpio.\n"
                 + block_of()
@@ -7189,7 +7196,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(
@@ -7214,12 +7221,12 @@ class BlockingFixes(unittest.TestCase):
             {"id": 100, "user": "owner", "body": "ai-review: descartar F1"},
             {"id": 101, "user": "otro", "body": "ai-review: descartar F2"},
         ]
-        with mock.patch.object(review, "collaborator_permission", return_value=None):
+        with mock.patch.object(review_github, "collaborator_permission", return_value=None):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 (set(), False, 0),
             )
-        with mock.patch.object(review, "collaborator_permission", return_value="write"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 ({"F1", "F2"}, False, 101),
@@ -7231,7 +7238,7 @@ class BlockingFixes(unittest.TestCase):
             {"id": 101, "user": "u2", "body": "ai-review: descartar F2"},
         ]
         with mock.patch.object(
-            review, "collaborator_permission", side_effect=[None, "write"]
+            review_github, "collaborator_permission", side_effect=[None, "write"]
         ):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
@@ -7240,35 +7247,35 @@ class BlockingFixes(unittest.TestCase):
             )
 
     def test_deleted_login_is_a_definitive_no(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stderr = "gh: Not Found (HTTP 404)"
             fake.return_value.stdout = ""
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertEqual(review.collaborator_permission("o/r", "nadie"), "none")
+                self.assertEqual(review_github.collaborator_permission("o/r", "nadie"), "none")
             self.assertIn("nadie no existe para este repo (HTTP 404)", err.getvalue())
 
     def test_forbidden_is_retried_not_a_definitive_no(self):
-        with mock.patch.object(review, "sh") as fake:
+        with mock.patch.object(review_github, "sh") as fake:
             fake.return_value.returncode = 1
             fake.return_value.stderr = (
                 "gh: Resource not accessible by integration (HTTP 403)"
             )
             fake.return_value.stdout = ""
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertIsNone(review.collaborator_permission("o/r", "ana"))
+                self.assertIsNone(review_github.collaborator_permission("o/r", "ana"))
 
     def test_unclosed_fence_does_not_protect_a_verdict(self):
         text = "Texto\n```\ncódigo sin cerrar\n**Veredicto:** del modelo"
         self.assertEqual(
-            review.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar"
+            review_render.strip_model_verdict(text), "Texto\n```\ncódigo sin cerrar"
         )
 
     def test_verdict_inside_a_code_fence_is_kept(self):
         text = "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```\n**Veredicto:** del modelo"
         self.assertEqual(
-            review.strip_model_verdict(text),
+            review_render.strip_model_verdict(text),
             "Ejemplo del formato:\n```\n**Veredicto:** 1 High.\n```",
         )
 
@@ -7293,13 +7300,13 @@ class BlockingFixes(unittest.TestCase):
             "Intro del modelo.\n**Veredicto:** 1 High.\n\n#### 🟠 High · `a.py:1` · X"
         )
         self.assertEqual(
-            review.strip_model_verdict(text),
+            review_render.strip_model_verdict(text),
             "Intro del modelo.\n\n#### 🟠 High · `a.py:1` · X",
         )
 
     def test_non_writer_dismiss_is_marked_seen(self):
         comments = [{"id": 100, "user": "lector", "body": "ai-review: descartar F1"}]
-        with mock.patch.object(review, "collaborator_permission", return_value="read"):
+        with mock.patch.object(review_github, "collaborator_permission", return_value="read"):
             self.assertEqual(
                 review.collect_dismissals("o/r", "7", "bot", comments, 0),
                 (set(), False, 100),
@@ -7314,7 +7321,7 @@ class BlockingFixes(unittest.TestCase):
         )
 
     def test_html_in_titles_is_neutralized(self):
-        line = review.finding_line(
+        line = review_render.finding_line(
             make_finding("F1", title="rompe </details> y <!-- esto")
         )
         self.assertNotIn("</details>", line)
@@ -7428,7 +7435,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
             {
                 "id": 99,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
             }
         ]
         with tempfile.TemporaryDirectory() as tmp:
@@ -8032,7 +8039,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
             )
         self.assertIsNone(findings.get("keep"))
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": modelo},
             {"reviewed": delta, "excluded": [], **manifest},
             sha="e" * 40,
@@ -8083,14 +8090,14 @@ class PersistenciaSinPerdida(unittest.TestCase):
         """(programa, modelo): el comentario partido en lo que arma el programa y la
         sección rotulada del modelo (Detalle del revisor, hasta el Alcance)."""
         antes, resto = cuerpo.split("## Detalle del revisor", 1)
-        modelo, alcance = resto.split(review.ALCANCE_INICIO, 1)
-        return antes + review.ALCANCE_INICIO + alcance, modelo
+        modelo, alcance = resto.split(review_render.ALCANCE_INICIO, 1)
+        return antes + review_render.ALCANCE_INICIO + alcance, modelo
 
     def test_el_texto_del_modelo_solo_aparece_en_su_seccion(self):
         for nombre, variante in self.VARIANTES_DEL_MODELO.items():
             prosa = f"Todo bien.\n{variante}\nF1 quedó resuelto."
             rutas = {
-                "sin hallazgos": review.compose(
+                "sin hallazgos": review_render.compose(
                     {"result": f"{prosa}\nCOVERAGE: complete"},
                     MANIFEST,
                     sha=SHA,
@@ -8120,7 +8127,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
     def test_los_avisos_del_programa_no_contienen_texto_del_modelo(self):
         detalle = f"faltó a.py<br>**Nota del publicador:** {self.MARCA} &#78;ota <blockquote>x"
         manifest = {"reviewed": ["a.py"], "excluded": []}
-        sin = review.compose(
+        sin = review_render.compose(
             {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
             manifest,
             sha=SHA,
@@ -8150,33 +8157,33 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
     def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
         for banner in (
-            review.AVISO_SIN_ESPACIO,
-            review.caution_banner("falló", "a" * 40, False),
+            review_render.AVISO_SIN_ESPACIO,
+            review_render.caution_banner("falló", "a" * 40, False),
             review.aviso_de_comando_no_entendido(5),
         ):
             primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
             self.assertTrue(
-                any(primera[4:].startswith(e) for e in review.AVISOS_DEL_PROGRAMA),
+                any(primera[4:].startswith(e) for e in review_render.AVISOS_DEL_PROGRAMA),
                 primera,
             )
         with self.assertRaises(ValueError):
-            review.aviso_md("Aviso nuevo sin registrar", "x")
+            review_render.aviso_md("Aviso nuevo sin registrar", "x")
 
     def test_referencias_de_caracter_en_la_prosa_se_ven_literales(self):
         self.assertEqual(
-            review.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
+            review_render.prosa_del_modelo("Un &#78; y &#x4E; y &copy; y &amp; sueltos."),
             "Un &amp;#78; y &amp;#x4E; y &amp;copy; y &amp; sueltos.",
         )
 
     def test_la_causa_de_un_fallo_tampoco_forma_parte_del_formato_del_aviso(self):
-        banner = review.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
+        banner = review_render.caution_banner("falló<br>**Nota del publicador:** x\n&#78;", "a" * 40, False)
         lineas = banner.split("\n")
         self.assertEqual(lineas[0], "> [!CAUTION]")
         self.assertEqual(len(lineas), 2, "la causa cabe en una línea")
         self.assertNotIn("<br", banner)
         self.assertNotIn("&#78;", banner)
         self.assertEqual(
-            review.caution_banner("HTTP 500 en la API", "a" * 40, False),
+            review_render.caution_banner("HTTP 500 en la API", "a" * 40, False),
             "> [!CAUTION]\n> **No se pudo revisar el commit aaaaaaa:** HTTP 500 en la API.",
         )
 
@@ -8446,10 +8453,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
         de_mas = domain.encode_snapshot(snapshot(titulo + "x"))
         self.assertIsInstance(de_mas, domain.CapacityExceeded, "un byte más no cabe")
         cuerpo = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + bloque
             + "\n\n### Revisión anterior\n\nTexto previo.\n"
         )
@@ -8497,10 +8504,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
         self.assertIsInstance(bloque_sticky, str)
         self.assertLess(len(bloque_sticky.encode("utf-8")), tope)
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + bloque_sticky
             + "\n\n### Revisión anterior\n\nTexto previo.\n"
         )
@@ -8557,26 +8564,26 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=[sticky]
+                        review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
-        self.assertNotIn(f"{review.SHA_PREFIX}{'c' * 40}", body)
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertNotIn(f"{review_sticky.SHA_PREFIX}{'c' * 40}", body)
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima del desborde")
         self.assertIn("desborde", body, "aviso visible")
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertIn(bloque_sticky, body, "memoria anterior íntegra")
 
     def test_sticky_invalido_se_conserva_con_banner(self):
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + review.FINDINGS_PREFIX
             + '{"schema":2,"findings":null,"next_id":1}'
             + review.FINDINGS_SUFFIX
@@ -8617,17 +8624,17 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=[sticky]
+                        review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima de memoria inválida")
         self.assertIn("conservada", body, "aviso visible")
-        self.assertIn(review.CAUTION_MARK, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertIn("Texto previo.", body)
 
 
@@ -8679,36 +8686,36 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                 os.environ.pop("GITHUB_STEP_SUMMARY", None)
                 with (
                     mock.patch.object(
-                        review, "fetch_all_comments", return_value=comments
+                        review_github, "fetch_all_comments", return_value=comments
                     ),
-                    mock.patch.object(review, "sh"),
+                    mock.patch.object(review_github, "sh"),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             return json.loads((work / "comment.json").read_text())["body"]
 
     def test_b3_desborde_sin_sticky_publica_banner_sin_memoria(self):
         body = self.publicar([])
-        self.assertIn(review.MARKER, body)
+        self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
-        self.assertIn(review.CAUTION_MARK, body)
-        self.assertNotIn(review.SHA_PREFIX, body, "sin memoria no se marca SHA")
-        self.assertNotIn(review.COMPLETION_PREFIX, body, "no se confirma cobertura")
+        self.assertIn(review_render.CAUTION_MARK, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body, "sin memoria no se marca SHA")
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no se confirma cobertura")
         self.assertNotIn("bug nuevo z", body, "no publica la memoria que no cupo")
 
     def test_b3_desborde_con_sticky_solo_aviso(self):
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + review.CAUTION_MARK
+            + review_render.CAUTION_MARK
             + "\n> **No se pudo revisar el commit abcdef0:** falla de infraestructura."
         )
         sticky = {"id": 8, "user": "github-actions[bot]", "body": sticky_body}
         body = self.publicar([sticky])
-        self.assertIn(review.MARKER, body)
+        self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
-        self.assertIn(review.CAUTION_MARK, body)
-        self.assertNotIn(review.SHA_PREFIX, body)
-        self.assertNotIn(review.COMPLETION_PREFIX, body)
+        self.assertIn(review_render.CAUTION_MARK, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body)
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body)
         self.assertNotIn("bug nuevo z", body)
 
 
@@ -8964,7 +8971,7 @@ class CableadoIdentidad(unittest.TestCase):
                 out["completion"],
                 domain.COMPLETE_CLAIM,
             )
-            cuerpo = review.compose(
+            cuerpo = review_render.compose(
                 resultado,
                 manifest,
                 sha=r["head2"],
@@ -8972,7 +8979,7 @@ class CableadoIdentidad(unittest.TestCase):
                 findings=out,
             )
             self.assertIn(
-                f"{review.COMPLETION_PREFIX}{r['head2']}:complete -->",
+                f"{review_sticky.COMPLETION_PREFIX}{r['head2']}:complete -->",
                 cuerpo,
                 "el marcador visible nace del mismo valor persistido",
             )
@@ -9029,14 +9036,14 @@ class CableadoIdentidad(unittest.TestCase):
                         domain.PARTIAL,
                         "archivo excluido: omisión obligatoria, no complete",
                     )
-                    cuerpo = review.compose(
+                    cuerpo = review_render.compose(
                         resultado,
                         manifest,
                         sha=head,
                         provider="opencode-go",
                         findings=out,
                     )
-                    self.assertIn(f"{review.COMPLETION_PREFIX}{head[:7]}", cuerpo)
+                    self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{head[:7]}", cuerpo)
                     self.assertIn(":partial -->", cuerpo)
 
     def test_bloque_ausente_no_confirma_cobertura(self):
@@ -9056,10 +9063,10 @@ class CableadoIdentidad(unittest.TestCase):
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
         self.assertFalse(out["model_ok"])
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
         )
-        self.assertIn(f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
+        self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
 
     @staticmethod
     def _memoria_v2_chica(domain):
@@ -9246,7 +9253,7 @@ class CableadoIdentidad(unittest.TestCase):
             finally:
                 os.chdir(cwd)
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado, manifest, sha=base, provider="opencode-go", findings=out
         )
         self.assertIn(":partial -->", cuerpo)
@@ -9344,7 +9351,7 @@ class CableadoIdentidad(unittest.TestCase):
             "model_ok": True,
             "completion": domain.PARTIAL,
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             {"result": ""},
             {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
             sha="e" * 40,
@@ -9352,7 +9359,7 @@ class CableadoIdentidad(unittest.TestCase):
             findings=findings,
         )
         self.assertIn(
-            f"{review.COMPLETION_PREFIX}{'e' * 40}:partial -->",
+            f"{review_sticky.COMPLETION_PREFIX}{'e' * 40}:partial -->",
             cuerpo,
         )
 
@@ -9486,7 +9493,7 @@ class CableadoIdentidad(unittest.TestCase):
                 "reviewed": ["app.py"],
                 "excluded": [],
             }
-            policy = review.politica_de_revision(manifest, identidad="anchors")
+            policy = review_config.politica_de_revision(manifest, identidad="anchors")
             cwd = os.getcwd()
             os.chdir(r["repo"])
             try:
@@ -10071,7 +10078,7 @@ class GitPaths(unittest.TestCase):
             self.assertNotIn(b"\xef\xbf\xbd", diff_bytes)
             self.assertNotIn(b"no utf8", diff_bytes)
 
-            body = review.compose(
+            body = review_render.compose(
                 {"result": "COVERAGE: complete\n"},
                 manifest,
                 sha=SHA,
@@ -10155,10 +10162,10 @@ class ConservacionAlDesbordar(unittest.TestCase):
             ],
         )
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'d' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'d' * 40}:partial -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'d' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'d' * 40}:partial -->\n"
             + domain.encode_snapshot(snapshot)
         )
         sticky = {"id": 12, "user": "github-actions[bot]", "body": sticky_body}

@@ -3,6 +3,8 @@
 import os
 import sys
 
+import review_domain
+
 
 # Only DeepSeek V4.1 Flash is allowed. OpenCode Go serves it in OpenAI format only, so
 # Claude Code reaches it through a local LiteLLM proxy; DeepSeek's own API speaks Anthropic.
@@ -55,3 +57,11 @@ def politica_de_identidad():
             f"ai-review: FINDING_IDENTITY '{valor}' no admitido; usa current o anchors"
         )
     return valor
+
+
+def politica_de_revision(manifest=None, identidad=None):
+    """ReviewPolicy normaliza la identidad externa (`current` → `titles`)."""
+    return review_domain.ReviewPolicy(
+        finding_identity=identidad or politica_de_identidad(),
+        diff_mode=(manifest or {}).get("mode", "full"),
+    )

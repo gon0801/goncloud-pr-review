@@ -23,6 +23,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+
+import review_github
+
+import review_render
+
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -199,7 +205,7 @@ class ElCasoDelPr20Publica(unittest.TestCase):
         self.assertLessEqual(
             len(carga.block.encode("utf-8")), domain.StorageBudget().max_bytes
         )
-        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "complete")
 
 
 class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
@@ -268,9 +274,9 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         self.assertEqual(falso.creaciones, [], "jamás crea un sticky sin bloque")
         self.assertEqual(len(falso.patches), 1, "el aviso va al sticky existente")
         cuerpo = falso.leer()[0]["body"]
-        self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
+        self.assertIn(review_render.CAUTION_MARK, cuerpo, "aviso visible")
         self.assertIn("desborde", cuerpo)
-        self.assertIsNotNone(review.reviewed_completion(cuerpo))
+        self.assertIsNotNone(review_sticky.reviewed_completion(cuerpo))
         self.assertIsInstance(domain.read_snapshot(cuerpo), domain.Valid)
 
     def test_sin_evidencia_caben(self):
@@ -529,7 +535,7 @@ class StickiesViejosSeLeenSinPerdida(unittest.TestCase):
             "seen": 4,
         }
         bloque = review.serialize_findings(legacy)
-        carga = domain.read_snapshot(f"{review.MARKER}\n{bloque}")
+        carga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
         self.assertIsInstance(carga, domain.Legacy)
         self.assertEqual(carga.raw["findings"][0]["state"], "resolved")
         self.assertEqual(carga.raw["seen"], 4)
@@ -555,7 +561,7 @@ class StickiesViejosSeLeenSinPerdida(unittest.TestCase):
         )
         encoded = domain.encode_snapshot(v2)
         self.assertIsInstance(encoded, str)
-        carga2 = domain.read_snapshot(f"{review.MARKER}\n{encoded}")
+        carga2 = domain.read_snapshot(f"{review_sticky.MARKER}\n{encoded}")
         self.assertIsInstance(carga2, domain.Valid)
         self.assertEqual(len(carga2.snapshot.findings[0].evidence), 1)
 
@@ -580,9 +586,9 @@ class ElParserDeGleeElStickyNuevo(unittest.TestCase):
         bloque = domain.encode_snapshot(snapshot).block
         return "\n".join(
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{head} -->",
-                f"{review.COMPLETION_PREFIX}{head}:{marcador} -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{head} -->",
+                f"{review_sticky.COMPLETION_PREFIX}{head}:{marcador} -->",
                 bloque,
                 "### Revisión automática",
             ]
@@ -614,9 +620,9 @@ class ElParserDeGleeElStickyNuevo(unittest.TestCase):
         self.assertIsInstance(encoded, domain.EncodedCheckpoint)
         cuerpo = "\n".join(
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{'c' * 40} -->",
-                f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{'c' * 40} -->",
+                f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->",
                 encoded.block,
                 "### Revisión automática",
             ]
@@ -753,11 +759,11 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             libro[f"src/paquete_{i}/modulo/ruta_bien_larga_de_archivo_{i:03d}.py"] = (
                 "a" * 40
             )
-            linea = review.libro_a_linea("c" * 40, libro)
+            linea = review_sticky.libro_a_linea("c" * 40, libro)
             if linea is None:
                 libro.pop(next(reversed(libro)))
                 break
-        linea = review.libro_a_linea("c" * 40, libro)
+        linea = review_sticky.libro_a_linea("c" * 40, libro)
         self.assertIsNotNone(linea)
         self.assertGreater(len(linea.encode("utf-8")), 28000, "libro cerca del tope")
         return libro
@@ -789,7 +795,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
     def test_libro_al_tope_y_estado_grande_publican_sin_libro(self):
         snapshot, block = self._snapshot_grande()
         libro = self._libro_grande()
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -804,9 +810,9 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self.assertIsInstance(
             carga, domain.Valid, f"estado roto: {getattr(carga, 'reason', carga)}"
         )
-        self.assertNotIn(review.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
-        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
-        self.assertEqual(review.reviewed_sha(cuerpo), "c" * 40)
+        self.assertNotIn(review_sticky.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
+        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review_sticky.reviewed_sha(cuerpo), "c" * 40)
         self.assertIn("detalle del revisor", cuerpo)
         self.assertEqual(
             cuerpo.count("## Detalle del revisor"),
@@ -827,7 +833,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             "review_provider": "opencode-go",
             "model_ok": True,
         }
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             resultado,
             self.MANIFEST,
             sha="c" * 40,
@@ -844,19 +850,19 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             domain.Valid,
             f"el estado cabría sin libro y prosa recortada: {carga!r}",
         )
-        self.assertNotIn(review.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
+        self.assertNotIn(review_sticky.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
         self.assertIn(
             "Revisión recortada al presupuesto de capacidad",
             cuerpo,
             "la prosa se recorta, el estado no",
         )
-        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
-        self.assertEqual(review.reviewed_sha(cuerpo), "c" * 40)
+        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review_sticky.reviewed_sha(cuerpo), "c" * 40)
 
     def test_libro_chico_sigue_viajando(self):
         snapshot, block = self._snapshot_grande()
         libro = {"src/chico.py": "a" * 40}
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -868,7 +874,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
-        cabeza, leido = review.libro_de(cuerpo)
+        cabeza, leido = review_sticky.libro_de(cuerpo)
         self.assertEqual(cabeza, "c" * 40)
         self.assertEqual(leido, libro)
 
@@ -878,7 +884,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         snapshot = decision.snapshot
         block = domain.encode_snapshot(snapshot).block
         libro = {f["file"]: "e" * 40 for f in domain.hallazgos_legacy(snapshot)}
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
             {
                 "mode": "full",
@@ -896,14 +902,14 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(len(carga.snapshot.findings), 24)
-        cabeza, leido = review.libro_de(cuerpo)
+        cabeza, leido = review_sticky.libro_de(cuerpo)
         self.assertEqual(cabeza, ronda_extra()["head_sha"])
         self.assertEqual(leido, libro)
         self._sticky_verificado(cuerpo)
 
     def test_ni_sin_libro_cabe_entonces_aviso_y_nunca_corte_a_ciegas(self):
         snapshot, block = self._snapshot_grande()
-        cuerpo = review.compose(
+        cuerpo = review_render.compose(
             self._resultado(),
             self.MANIFEST,
             sha="c" * 40,
@@ -914,11 +920,11 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             ),
             libro=None,
         )
-        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("no cabe", cuerpo)
-        self.assertIsNone(review.reviewed_completion(cuerpo), "sin confirmación")
+        self.assertIsNone(review_sticky.reviewed_completion(cuerpo), "sin confirmación")
         self.assertNotIn(review.FINDINGS_PREFIX, cuerpo, "nunca un bloque partido")
-        self.assertLessEqual(len(cuerpo), review.GITHUB_COMMENT_MAX)
+        self.assertLessEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
 
 
 class ElPasoTresNoBorraMemoria(unittest.TestCase):
@@ -929,7 +935,7 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
 
     def _visible_sin_espacio(self, snapshot):
         def visible(bloque, resto):
-            return review.compose(
+            return review_render.compose(
                 {
                     "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
                     "review_provider": "opencode-go",
@@ -976,7 +982,7 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
             carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
         )
         self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
-        self.assertIn(review.CAUTION_MARK, cuerpo, "aviso visible")
+        self.assertIn(review_render.CAUTION_MARK, cuerpo, "aviso visible")
 
     def test_sin_sticky_previo_no_crea_nada(self):
         snapshot = snapshot_grande()
@@ -1019,10 +1025,10 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
             "id": 55,
             "user": "github-actions[bot]",
             "body": (
-                review.MARKER
+                review_sticky.MARKER
                 + "\n"
-                + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-                + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+                + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+                + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
                 + bloque
             ),
         }
@@ -1068,7 +1074,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
                         "GITHUB_OUTPUT": str(salida),
                     },
                 ),
-                mock.patch.object(review, "fetch_all_comments", return_value=comments),
+                mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
                 mock.patch.object(review, "_repo_actual", return_value=None),
                 mock.patch.object(review, "libro_actualizado", return_value=None),
             ):
@@ -1082,7 +1088,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
 
                     return Hecho()
 
-                with mock.patch.object(review, "sh", falso_sh):
+                with mock.patch.object(review_github, "sh", falso_sh):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             cuerpo = json.loads((work / "comment.json").read_text())["body"]
             revisado = salida.read_text().strip() if salida.exists() else ""
@@ -1098,7 +1104,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
             carga, (domain.Valid, domain.Legacy), "el sticky conserva su memoria"
         )
         self.assertEqual(carga.block, domain.read_snapshot(sticky["body"]).block)
-        self.assertIn(review.CAUTION_MARK, cuerpo)
+        self.assertIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("reviewed=false", revisado)
 
     def test_sin_sticky_previo_no_crea_nada(self):
@@ -1114,7 +1120,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
         self.assertIsInstance(carga, domain.Legacy)
         self.assertEqual(len(carga.raw["findings"]), 3)
         self.assertEqual(carga.snapshot.findings[-1].id, "F3")
-        self.assertNotIn(review.CAUTION_MARK, cuerpo)
+        self.assertNotIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("reviewed=true", revisado)
 
 
@@ -1149,7 +1155,7 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
         self.assertIsInstance(bloque, str)
         self.assertLessEqual(len(bloque.encode("utf-8")), 8000, "cabe hoy")
         self.assertGreater(len(bloque.encode("utf-8")), 7500, "cerca del tope viejo")
-        return review.MARKER + "\n" + bloque
+        return review_sticky.MARKER + "\n" + bloque
 
     def _resultado(self):
         nuevos = [
@@ -1184,7 +1190,7 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
         self.assertLessEqual(
             len(bloque.encode("utf-8")), domain.StorageBudget().max_bytes
         )
-        carga = domain.read_snapshot(f"{review.MARKER}\n{bloque}")
+        carga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
         self.assertIsInstance(carga, domain.Legacy)
         self.assertEqual(len(carga.raw["findings"]), 62)
         self.assertEqual(carga.raw["next"], 63)

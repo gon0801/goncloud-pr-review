@@ -21,11 +21,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
+import review_github
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 A, B, BASE, MAIN = "a" * 40, "e" * 40, "b" * 40, "f" * 40
 BOT = "github-actions[bot]"
-DIGEST = review.digest_de_politica(review.politica_de_revision())
+DIGEST = review.digest_de_politica(review_config.politica_de_revision())
 WORKER_PATH = ".github/workflows/ai-review-worker.yml"
 
 
@@ -70,7 +73,7 @@ class GitHubFalso:
         )
 
     def sticky(self):
-        s = review.sticky_from_comments(self.leer(), BOT)
+        s = review_sticky.sticky_from_comments(self.leer(), BOT)
         return s["body"] if s else None
 
     def estado(self):
@@ -241,8 +244,8 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
         with (
             mock.patch.dict(os.environ, entorno, clear=False),
             mock.patch.object(review, "ComentariosGh", return_value=github),
-            mock.patch.object(review, "sh", side_effect=sh_falso),
-            mock.patch.object(review, "collaborator_permission", side_effect=permisos),
+            mock.patch.object(review_github, "sh", side_effect=sh_falso),
+            mock.patch.object(review_github, "collaborator_permission", side_effect=permisos),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(err),
         ):
