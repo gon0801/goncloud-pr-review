@@ -55,7 +55,7 @@ def dismiss_targets(rest):
 def _lineas_utiles(cuerpo):
     cerca = None
     for linea in (cuerpo or "").splitlines():
-        m = re.match(r"\s*(`{3,}|~{3,})", linea)
+        m = re.match(r" {0,3}(`{3,}|~{3,})", linea)
         if cerca is None:
             if m:
                 cerca = (m.group(1)[0], len(m.group(1)))
