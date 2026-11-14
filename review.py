@@ -2047,7 +2047,7 @@ def partes_de_respuesta(texto, bloque_en_linea_propia=False):
         antes = resto[:inicio].rpartition("\n")[2]
         despues = resto[fin:].partition("\n")[0]
         # Dentro de una frase es una cita del marcador en la prosa, no el bloque.
-        if not bloque_en_linea_propia or not (antes or despues.strip()):
+        if not bloque_en_linea_propia or not (antes.strip() or despues.strip()):
             bloque = resto[inicio:fin]
     return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
