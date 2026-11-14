@@ -2050,70 +2050,128 @@ def prompt_de_reparacion(work, texto):
     )
 
 
-def reparar_bloque(work, result_path, name, key, cmd, deadline):
-    """Paso de reparación tras una revisión entregada: si le falta el bloque o
-    COVERAGE, una sola vuelta con el mismo proveedor pide solo esas dos líneas.
+def partes_de_respuesta(texto, bloque_en_linea_propia=False):
+    lineas = texto.splitlines()
+    leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
+    leidas = {i: c for i, c in leidas.items() if c[0] is not None}
+    cobertura = None
+    if leidas:
+        # Gana la más conservadora: citar el formato no sube a complete una
+        # pasada que se declaró parcial.
+        i = max(leidas, key=lambda i: (leidas[i][0] == "partial", i))
+        cobertura = leidas[i]
+        del lineas[i]
+    resto = "\n".join(lineas)
+    hallado = find_model_findings_block(resto)
+    conservar = politica_de_identidad() == "anchors"
+    bloque = None
+    if hallado and parse_model_findings(resto, conservar_anclas=conservar) is not None:
+        inicio, fin = hallado[:2]
+        antes = resto[:inicio].rpartition("\n")[2]
+        despues = resto[fin:].partition("\n")[0]
+        # Dentro de una frase es una cita del marcador en la prosa, no el bloque.
+        if not bloque_en_linea_propia or not (antes.strip() or despues.strip()):
+            bloque = resto[inicio:fin]
+    return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
-    La prosa original queda como texto visible; del turno de reparación solo se
-    toman el bloque y COVERAGE. Su costo se suma al total aunque falle. Si falla
-    o no queda tiempo, el resultado original queda intacto (parcial con aviso).
-    No aplica a una solicitud de explicación, que no lleva bloque a propósito."""
+
+def reparar_bloque(work, result_path, name, key, cmd, deadline):
+    """Paso de reparación tras una revisión entregada a la que le falta el
+    bloque o COVERAGE como última línea.
+
+    Si el original trae su bloque y se declaró parcial, solo se reordenan. Si
+    no, una sola vuelta con el mismo proveedor pide esas dos líneas: el bloque
+    del original se conserva y la cobertura es la más conservadora de las dos,
+    porque una complete fuera de lugar puede ser una cita. Su costo se suma al
+    total aunque falle. Si falla o no queda tiempo, el resultado original queda
+    intacto (parcial con aviso). No aplica a una solicitud de explicación, que
+    no lleva bloque a propósito."""
     work = Path(work)
     result = json.loads(result_path.read_text())
     texto = result.get("result") or ""
     if ERROR_KEY in result or hallazgo_a_explicar(work) or not falta_bloque(texto):
         return
-    restante = int(deadline - time.monotonic()) - 30
-    if restante < REPAIR_MIN_SECONDS:
+    if not texto.strip():
+        # La CLI no trae "result" cuando se agota el tope de turnos.
         print(
-            f"ai-review: la revisión no entregó su bloque y no queda tiempo para "
-            f"repararlo ({restante} s)",
+            "ai-review: la revisión no devolvió texto; no hay respuesta que reparar",
             file=sys.stderr,
         )
         return
-    reparacion = work / "repair.json"
-    reparacion.unlink(missing_ok=True)
-    cmd_rep = list(cmd)
-    cmd_rep[cmd_rep.index("-p") + 1] = prompt_de_reparacion(work, texto)
-    cmd_rep[cmd_rep.index("--max-turns") + 1] = str(REPAIR_TURNS)
-    print(
-        "ai-review: la revisión no entregó su bloque o su COVERAGE; vuelta de reparación",
-        flush=True,
-    )
-    try:
-        falla = run_with_provider(
-            name,
-            key,
-            cmd_rep,
-            work,
-            reparacion,
-            min(REPAIR_TIMEOUT, restante),
-            deadline,
-            attempts=1,
+    prosa, bloque, cobertura = partes_de_respuesta(texto, bloque_en_linea_propia=True)
+    texto_rep = ""
+    parcial = cobertura is not None and cobertura[0] == "partial"
+    if bloque is not None and parcial:
+        print(
+            "ai-review: la revisión trae su bloque y su COVERAGE fuera de lugar; "
+            "se reordenan sin otra vuelta",
+            flush=True,
         )
-    except SystemExit:  # soft_fail dentro de la reparación: el original manda
-        falla = True
-    rep = json.loads(reparacion.read_text()) if reparacion.exists() else {}
-    for campo in ("total_cost_usd", "num_turns"):
-        if isinstance(rep.get(campo), (int, float)):
-            result[campo] = (result.get(campo) or 0) + rep[campo]
-    # El «costo aprox» visible sale de usage: también suma la reparación.
-    if isinstance(rep.get("usage"), dict):
-        usage = dict(result.get("usage") or {})
-        for campo, valor in rep["usage"].items():
-            if isinstance(valor, (int, float)) and not isinstance(valor, bool):
-                usage[campo] = (usage.get(campo) or 0) + valor
-        result["usage"] = usage
-    texto_rep = (rep.get("result") or "") if falla is None else ""
-    bloque = find_model_findings_block(texto_rep)
-    _, cobertura, detalle = split_coverage(texto_rep)
+    else:
+        restante = int(deadline - time.monotonic()) - 30
+        if restante < REPAIR_MIN_SECONDS:
+            print(
+                f"ai-review: la revisión no entregó su bloque y no queda tiempo para "
+                f"repararlo ({restante} s)",
+                file=sys.stderr,
+            )
+            return
+        reparacion = work / "repair.json"
+        reparacion.unlink(missing_ok=True)
+        cmd_rep = list(cmd)
+        cmd_rep[cmd_rep.index("-p") + 1] = prompt_de_reparacion(work, texto)
+        cmd_rep[cmd_rep.index("--max-turns") + 1] = str(REPAIR_TURNS)
+        print(
+            "ai-review: la revisión no entregó su bloque o su COVERAGE; vuelta de reparación",
+            flush=True,
+        )
+        try:
+            falla = run_with_provider(
+                name,
+                key,
+                cmd_rep,
+                work,
+                reparacion,
+                min(REPAIR_TIMEOUT, restante),
+                deadline,
+                attempts=1,
+            )
+        except SystemExit:  # soft_fail dentro de la reparación: el original manda
+            falla = True
+        rep = json.loads(reparacion.read_text()) if reparacion.exists() else {}
+        for campo in ("total_cost_usd", "num_turns"):
+            if isinstance(rep.get(campo), (int, float)):
+                result[campo] = (result.get(campo) or 0) + rep[campo]
+        # El «costo aprox» visible sale de usage: también suma la reparación.
+        if isinstance(rep.get("usage"), dict):
+            usage = dict(result.get("usage") or {})
+            for campo, valor in rep["usage"].items():
+                if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+                    usage[campo] = (usage.get(campo) or 0) + valor
+            result["usage"] = usage
+        texto_rep = (rep.get("result") or "") if falla is None else ""
+        _, bloque_rep, cobertura_rep = partes_de_respuesta(texto_rep)
+        bloque = bloque or bloque_rep
+        if not parcial:
+            cobertura = cobertura_rep
     reparado = None
     if bloque is not None and cobertura is not None:
+        estado, detalle = cobertura
+        declaraciones = [
+            ln
+            for fuente in (texto, texto_rep)
+            for ln in fuente.splitlines()
+            if ln.startswith(UNREVIEWED_PREFIX)
+        ]
         if result.get("subtype") == "error_max_turns":
-            cobertura = "partial"  # la revisión no terminó, aunque el bloque llegue
-        prosa = strip_model_findings_block(split_coverage(texto)[0])
-        linea = f"COVERAGE: {cobertura}" + (f" | {detalle}" if detalle else "")
-        reparado = f"{prosa}\n\n{texto_rep[bloque[0] : bloque[1]]}\n{linea}"
+            estado = "partial"  # la revisión no terminó, aunque el bloque llegue
+        elif any(unreviewed_de(f"{ln}\nCOVERAGE:") != set() for ln in declaraciones):
+            # Una lista no vacía o ilegible solo puede restringir lo acreditado,
+            # así que cuenta esté donde esté. La declaración no se mueve junto
+            # a COVERAGE: ahí el publicador la tomaría por auténtica.
+            estado = "partial"
+        linea = f"COVERAGE: {estado}" + (f" | {detalle}" if detalle else "")
+        reparado = f"{prosa}\n\n{bloque}\n{linea}"
     # Mismo criterio que el disparo: el bloque reparado tiene que leerse como bloque.
     if reparado is None or falta_bloque(reparado):
         print(
@@ -2186,7 +2244,11 @@ def run_with_provider(
     finally:
         if proxy:
             proxy.terminate()
-            proxy.wait(timeout=10)
+            try:
+                proxy.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
+                proxy.wait()
 
 
 def print_proxy_log(work):

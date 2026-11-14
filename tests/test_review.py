@@ -1296,15 +1296,20 @@ class RunAgent(unittest.TestCase):
         self.assertIn("deepseek", result[review.ERROR_KEY])
         self.assertIn("proxy", result[review.ERROR_KEY])
 
-    def test_max_turns_is_kept_as_partial_result(self):
-        proc, calls, result, _, _ = self.run_agent(
-            {"result": "", "subtype": "error_max_turns", "is_error": True}
-        )
-        self.assertEqual(proc.returncode, 0)
-        # Sin bloque: una vuelta de reparación; si tampoco lo entrega, queda parcial.
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(result["subtype"], "error_max_turns")
-        self.assertEqual(result["block_repair"], "failed")
+    def test_una_respuesta_vacia_no_se_repara(self):
+        # La CLI no trae "result" cuando se agota el tope de turnos.
+        sin_turnos = {"subtype": "error_max_turns", "is_error": True, "num_turns": 61}
+        vacia = {"result": "", "subtype": "success", "num_turns": 41}
+        for respuesta in (sin_turnos, vacia):
+            with self.subTest(subtype=respuesta["subtype"]):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps([respuesta, OK_REPLY]),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(result, respuesta)
 
     SIN_BLOQUE = {
         "result": "**Veredicto:** 1 High.\n\nF1: división por cero en `calc.py:3`.",
@@ -1346,6 +1351,244 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             [f["title"] for f in modelo["findings"]], ["División por cero"]
         )
+
+    def test_la_reparacion_completa_la_respuesta_sin_reemplazarla(self):
+        dos = (
+            '<!-- ai-review:findings={"findings":[{"id":"F-new","file":"calc.py","line":3,'
+            '"severity":"High","title":"División por cero","state":"open"},'
+            '{"id":"F-new","file":"calc.py","line":9,"severity":"Critical",'
+            '"title":"Inyección SQL","state":"open"}]} -->'
+        )
+        ambos = ["División por cero", "Inyección SQL"]
+        reparacion_completa = '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: complete'
+        cita = 'El test usa `<!-- ai-review:findings={"findings":[]} -->` como fixture.'
+        casos = {
+            "bloque citado en una frase": (
+                f"{cita} División por cero en calc.py:3.",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("complete", ""),
+                ["División por cero"],
+            ),
+            "bloque citado y COVERAGE antes de una frase": (
+                f"{cita}\nCOVERAGE: partial | no leí b.py\n\nEspero que sirva.",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("partial", "no leí b.py"),
+                ["División por cero"],
+            ),
+            "bloque con sangría en su propia línea": (
+                f"Dos problemas.\n\n  {dos}\nCOVERAGE: partial | sin b.py"
+                "\n\nEspero que sirva.",
+                reparacion_completa,
+                1,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
+            "parcial sin bloque": (
+                "División por cero en calc.py:3.\n\nCOVERAGE: partial | no leí b.py",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("partial", "no leí b.py"),
+                ["División por cero"],
+            ),
+            "bloque sin COVERAGE": (
+                f"Dos problemas.\n\n{dos}",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin b.py',
+                2,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
+            "frase tras COVERAGE": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                reparacion_completa,
+                2,
+                ("complete", ""),
+                ambos,
+            ),
+            "bloque tras COVERAGE": (
+                f"Dos problemas.\n\nCOVERAGE: complete\n{dos}",
+                reparacion_completa,
+                2,
+                ("complete", ""),
+                ambos,
+            ),
+            "complete fuera de lugar y la reparación parcial": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin b.py',
+                2,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
+            "solo una cita de complete": (
+                f"Dos problemas.\n\n{dos}\n\nEl formato pide terminar con\n"
+                "COVERAGE: complete\ny no lo hice.",
+                '<!-- ai-review:findings={"findings":[]} -->\nCOVERAGE: partial | sin c.py',
+                2,
+                ("partial", "sin c.py"),
+                ambos,
+            ),
+            "complete fuera de lugar y la reparación falla": (
+                f"Dos problemas.\n\n{dos}\nCOVERAGE: complete\n\nEspero que sirva.",
+                "Sigo en prosa.",
+                2,
+                (None, ""),
+                ambos,
+            ),
+        }
+        for caso, (original, reparada, llamadas, cobertura, titulos) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {"result": reparada, "subtype": "success"},
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(result["result"].count("COVERAGE:"), 1)
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
+
+    def test_una_declaracion_de_no_revisado_deja_parcial_la_respuesta_reparada(self):
+        sin_b = '<!-- ai-review:unreviewed=["b.py"] -->'
+        otra = '<!-- ai-review:unreviewed=["x.py"] -->'
+        cita = "<!-- ai-review:unreviewed=[] -->"
+        vacio = '<!-- ai-review:findings={"findings":[]} -->'
+        casos = {
+            "se reordena": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}\nCOVERAGE: partial | sin b.py"
+                "\n\nEspero que sirva.",
+                f"{vacio}\nCOVERAGE: complete",
+                1,
+                ("partial", "sin b.py"),
+            ),
+            "vuelta pagada": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: partial | sin b.py",
+                2,
+                ("partial", "sin b.py"),
+            ),
+            "la reparación dice complete": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
+            "declaración antes de una frase de cierre": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}\n\nEspero que sirva.",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
+            "cita del formato con complete": (
+                f"El formato pide:\n{cita}\nCOVERAGE: complete\n\nUn problema."
+                f"\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
+            "dos declaraciones": (
+                f"El formato:\n{otra}\n\nUn problema.\n\n{self.BLOQUE}\n{sin_b}",
+                f"{vacio}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
+            "la declara el turno de reparación": (
+                f"Un problema.\n\n{self.BLOQUE}",
+                f"{vacio}\n{sin_b}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
+        }
+        for caso, (original, reparada, llamadas, cobertura) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {"result": reparada, "subtype": "success"},
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertIsNone(
+                    review.unreviewed_de(result["result"]),
+                    "una respuesta rearmada no acredita cobertura parcial",
+                )
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual(
+                    [f["title"] for f in modelo["findings"]], ["División por cero"]
+                )
+
+    def test_una_declaracion_citada_no_acredita_archivos_sin_leer(self):
+        original = (
+            "El formato pedido:\n```\n<!-- ai-review:unreviewed=[] -->\n```\n\n"
+            f"Solo leí a.py.\n\n{self.BLOQUE}\nCOVERAGE: partial | no leí b.py"
+            "\n\nEspero que sirva."
+        )
+        proc, calls, result, _, _ = self.run_agent(
+            None,
+            provider="deepseek",
+            FAKE_CLAUDE_REPLIES=json.dumps([{"result": original, "subtype": "success"}]),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            review.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
+        )
+        self.assertIsNone(
+            review.unreviewed_de(result["result"]),
+            "la lista vacía es una cita del formato, no lo que el modelo declaró",
+        )
+
+    def test_una_cita_de_coverage_no_sube_a_complete_una_pasada_parcial(self):
+        sin_b = '<!-- ai-review:unreviewed=["b.py"] -->'
+        parcial = "COVERAGE: partial | no leí b.py"
+        cita = "\n\nEl formato pide una línea como\nCOVERAGE: complete\nal final."
+        casos = {
+            "se reordena": (f"Un problema.\n\n{self.BLOQUE}\n{parcial}{cita}", 1),
+            "vuelta pagada": (f"Un problema en calc.py:3.\n\n{parcial}{cita}", 2),
+            "con lo no revisado": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}\n{parcial}{cita}",
+                1,
+            ),
+        }
+        for caso, (original, llamadas) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {
+                                "result": f"{self.BLOQUE}\nCOVERAGE: complete",
+                                "subtype": "success",
+                            },
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(
+                    review.split_coverage(result["result"])[1:],
+                    ("partial", "no leí b.py"),
+                )
+                self.assertIsNone(review.unreviewed_de(result["result"]))
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual(
+                    [f["title"] for f in modelo["findings"]], ["División por cero"]
+                )
 
     def test_si_la_reparacion_tampoco_trae_bloque_queda_parcial(self):
         prosa = {
