@@ -53,14 +53,23 @@ def dismiss_targets(rest):
 
 
 def _lineas_utiles(cuerpo):
-    en_bloque = False
+    cerca = None
     for linea in (cuerpo or "").splitlines():
-        if linea.lstrip().startswith(("```", "~~~")):
-            en_bloque = not en_bloque
-            continue
-        if en_bloque or linea.lstrip().startswith(">"):
-            continue
-        yield linea
+        m = re.match(r"\s*(`{3,}|~{3,})", linea)
+        if cerca is None:
+            if m:
+                cerca = (m.group(1)[0], len(m.group(1)))
+                continue
+            if linea.lstrip().startswith(">"):
+                continue
+            yield linea
+        elif (
+            m
+            and m.group(1)[0] == cerca[0]
+            and len(m.group(1)) >= cerca[1]
+            and linea.strip() == m.group(1)
+        ):
+            cerca = None
 
 
 def leer_comando(cuerpo):
