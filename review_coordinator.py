@@ -945,9 +945,9 @@ def cmd_reconcile(args):
     for cid, effect in rechazos:
         print(f"ai-review: comando {cid} rechazado ({effect})")
     avisos = tuple(
-        AVISOS_DE_RECHAZO[effect](cid)
+        aviso
         for cid, effect in rechazos
-        if effect in AVISOS_DE_RECHAZO
+        if (aviso := aviso_de_rechazo(cid, effect)) is not None
     )
 
     if event_name not in (
@@ -1297,9 +1297,13 @@ def es_aviso_de_comando(linea):
     """Solo la línea exacta que escribe el programa para un comentario real se
     conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
     m = re.search(r"el comentario (\d{1,19}) ", linea)
-    return bool(m) and any(
-        linea == aviso(int(m.group(1))) for aviso in AVISOS_DE_RECHAZO.values()
-    )
+    if not m:
+        return False
+    cid = int(m.group(1))
+    if any(linea == aviso(cid) for aviso in AVISOS_DE_RECHAZO.values()):
+        return True
+    ids = re.findall(r"\bF\d{1,9}\b", linea)
+    return bool(ids) and linea == aviso_de_hallazgo_inexistente(cid, ids)
 
 
 def aviso_de_comando_no_entendido(cid):
@@ -1311,10 +1315,15 @@ def aviso_de_comando_no_entendido(cid):
     )
 
 
-def aviso_de_hallazgo_inexistente(cid):
+def aviso_de_hallazgo_inexistente(cid, ids):
+    nombrados = (
+        f"el hallazgo {ids[0]}, que no existe"
+        if len(ids) == 1
+        else f"los hallazgos {', '.join(ids)}, que no existen"
+    )
     return (
-        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra un hallazgo "
-        "que no existe; no se aplicó nada."
+        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra "
+        f"{nombrados}; no se aplicó nada."
     )
 
 
@@ -1337,10 +1346,18 @@ def aviso_de_todo_tardio(cid):
 
 AVISOS_DE_RECHAZO = {
     review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
-    review_domain.RECHAZO_HALLAZGO_INEXISTENTE: aviso_de_hallazgo_inexistente,
     review_domain.RECHAZO_COMANDO_EXTRA: aviso_de_comando_extra,
     review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
 }
+
+
+def aviso_de_rechazo(cid, efecto):
+    if efecto in AVISOS_DE_RECHAZO:
+        return AVISOS_DE_RECHAZO[efecto](cid)
+    prefijo = f"{review_domain.RECHAZO_HALLAZGO_INEXISTENTE}: "
+    if efecto.startswith(prefijo):
+        return aviso_de_hallazgo_inexistente(cid, efecto[len(prefijo) :].split(", "))
+    return None
 
 
 def texto_de_explicacion(artifact):

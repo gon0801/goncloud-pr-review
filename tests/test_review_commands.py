@@ -155,8 +155,9 @@ class CommandAdmission(unittest.TestCase):
             ["F1", "F2"],
             "F99 no existe: nada se descarta",
         )
-        self.assertEqual(efectos(snapshot)[5], domain.RECHAZO_HALLAZGO_INEXISTENTE)
-        self.assertEqual(rechazos, ((5, domain.RECHAZO_HALLAZGO_INEXISTENTE),))
+        efecto = f"{domain.RECHAZO_HALLAZGO_INEXISTENTE}: F99"
+        self.assertEqual(efectos(snapshot)[5], efecto)
+        self.assertEqual(rechazos, ((5, efecto),))
 
     def test_editado_antes_de_admision_rechazado(self):
         out = domain.procesar_comandos(

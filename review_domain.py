@@ -2622,8 +2622,10 @@ def procesar_comandos(current, comandos, permisos, target):
             ids, todo = comando["ids"], comando["todo"]
             ids_hallazgos = {f.id for f in snapshot.findings}
             if not todo and not ids <= ids_hallazgos:
-                rechazos.append((cid, RECHAZO_HALLAZGO_INEXISTENTE))
-                snapshot = _consumido(snapshot, cid, RECHAZO_HALLAZGO_INEXISTENTE)
+                faltantes = sorted(ids - ids_hallazgos, key=finding_number)
+                efecto = f"{RECHAZO_HALLAZGO_INEXISTENTE}: {', '.join(faltantes)}"
+                rechazos.append((cid, efecto))
+                snapshot = _consumido(snapshot, cid, efecto)
                 continue
             abiertos_antes = {
                 f.id for f in snapshot.findings if isinstance(f.status, StatusOpen)
@@ -2648,8 +2650,9 @@ def procesar_comandos(current, comandos, permisos, target):
         elif action == "explicar":
             hallazgo = next((f for f in snapshot.findings if f.id == arg), None)
             if hallazgo is None:
-                rechazos.append((cid, RECHAZO_HALLAZGO_INEXISTENTE))
-                snapshot = _consumido(snapshot, cid, RECHAZO_HALLAZGO_INEXISTENTE)
+                efecto = f"{RECHAZO_HALLAZGO_INEXISTENTE}: {arg}"
+                rechazos.append((cid, efecto))
+                snapshot = _consumido(snapshot, cid, efecto)
                 continue
             nueva = WorkRequest(
                 id=snapshot.request_count + 1,
