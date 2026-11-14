@@ -1199,6 +1199,28 @@ class LecturaDeLaRespuesta(unittest.TestCase):
                 self.assertEqual(titulos, ["división por cero"])
                 self.assertEqual(marcador, "complete")
 
+    def test_un_bloque_real_con_sangria_bajo_una_viñeta_se_lee(self):
+        hallazgo = {
+            "id": "F-new",
+            "file": "a.py",
+            "line": 1,
+            "severity": "Critical",
+            "title": "división por cero",
+            "state": "open",
+        }
+        real = (
+            review.FINDINGS_PREFIX
+            + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        )
+        cuerpo, marcador, _ = self.publicar_texto(
+            f"**Veredicto:** un problema.\n\n- Hallazgos:\n\n    {real}\n\n"
+            "COVERAGE: complete"
+        )
+        titulos = [f["title"] for f in bloque_del(cuerpo)["findings"]]
+        self.assertEqual(titulos, ["división por cero"])
+        self.assertEqual(marcador, "complete")
+
     def test_un_fence_final_que_cita_el_formato_no_declara_complete(self):
         cuerpo, marcador, libro = self.publicar_texto(
             f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n"
