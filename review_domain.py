@@ -409,8 +409,9 @@ def find_model_findings_block(text):
     """The MODEL's block: (start, end, data, closed) or None.
 
     The last candidate that stands alone on its line(s) outside a fenced code
-    block: inside a sentence or a fence it is a quote of the format, and a
-    quote after the real block must not replace it. Unlike the sticky's
+    block and is indented less than four columns: inside a sentence, a fence
+    or an indented code block it is a quote of the format, and a quote after
+    the real block must not replace it. Unlike the sticky's
     reader, it tolerates a model that closes the JSON and then drops ` -->`
     or puts it on another line (T16-f11: 7 of 24 incremental runs). The JSON
     must be complete; a truncated one is rejected.

@@ -1385,6 +1385,13 @@ class RunAgent(unittest.TestCase):
                 ("partial", "sin b.py"),
                 ambos,
             ),
+            "bloque real con cuatro columnas bajo una viñeta": (
+                f"- Hallazgos:\n\n    {self.BLOQUE}\n\nCOVERAGE: complete",
+                f"{self.BLOQUE}\nCOVERAGE: complete",
+                2,
+                ("complete", ""),
+                ["División por cero"],
+            ),
             "parcial sin bloque": (
                 "División por cero en calc.py:3.\n\nCOVERAGE: partial | no leí b.py",
                 f"{self.BLOQUE}\nCOVERAGE: complete",
