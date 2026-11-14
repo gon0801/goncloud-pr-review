@@ -549,6 +549,22 @@ class FalloCerrado(unittest.TestCase):
             manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
         self.assertNotEqual(manifest2["mode"], "continuation")
 
+    def test_unreviewed_con_ruta_fuera_del_alcance_no_acredita_nada(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            result1 = {
+                "result": texto_pasada("partial", unreviewed=["./c.py"], hallazgos=[]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {})
+            prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
+            manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
+        self.assertIn("c.py", manifest2["reviewed"])
+
     def test_e_complete_con_excluido_por_budget_es_partial_y_no_lo_anota(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, base, head1 = Escenario().escenario(tmp)
