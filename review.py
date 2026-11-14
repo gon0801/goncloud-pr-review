@@ -1425,11 +1425,15 @@ def cmd_prepare(args):
                 "base: la base previa difiere de la solicitada; "
                 "el alcance se acota por la cobertura válida"
             )
-    changed = (
-        changed_since(repo, prev_sha, head)
-        if mode in ("incremental", "continuation") or reason == "incomplete-prev"
-        else []
-    )
+    # El delta prev_sha..head en todo modo: tras un force-push el coordinador
+    # lo necesita para acreditar resueltos y reaperturas. None si Git ya no
+    # tiene prev_sha.
+    changed = []
+    if prev_sha and prev_sha != head:
+        try:
+            changed = changed_since(repo, prev_sha, head)
+        except subprocess.CalledProcessError:
+            changed = None
     request = review_domain.WorkRequest(
         id=1,
         kind="review",
@@ -1468,7 +1472,9 @@ def cmd_prepare(args):
         "over_budget_bytes": preparacion.over_budget_bytes,
         "mode": mode,
         "prev_sha": prev_sha,
-        "changed_files": [path.label() for path in changed],
+        "changed_files": (
+            None if changed is None else [path.label() for path in changed]
+        ),
         "reason": reason,
         "has_prev_findings": bool((prev.get("state") or {}).get("findings")),
     }
@@ -3447,6 +3453,10 @@ def hechos_con_delta_del_worker(facts, artifact, current):
     desde = manifest.get("prev_sha")
     cambiados = manifest.get("changed_files")
     esperado = current.revision.head_sha if current.revision else None
+    if cambiados is None and _sha_hexa(desde) and desde == esperado:
+        # El worker no pudo diferenciar contra prev_sha: decide el alcance
+        # revisado, como en la ruta directa.
+        cambiados = list(review_domain.rutas_de_cambio(manifest))
     if (
         _sha_hexa(desde)
         and desde == esperado
