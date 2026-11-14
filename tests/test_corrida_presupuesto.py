@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import review  # noqa: E402
+import review_run
 import review_config
 
 MANIFEST = {
@@ -87,16 +87,16 @@ class SegundaCorrida(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, env),
                 mock.patch.object(
-                    review.time, "monotonic", side_effect=lambda: reloj[0]
+                    review_run.time, "monotonic", side_effect=lambda: reloj[0]
                 ),
-                mock.patch.object(review.time, "sleep", side_effect=avanzar),
-                mock.patch.object(review, "start_proxy", side_effect=arrancar_proxy),
-                mock.patch.object(review, "run_in_group", side_effect=lanzar),
+                mock.patch.object(review_run.time, "sleep", side_effect=avanzar),
+                mock.patch.object(review_run, "start_proxy", side_effect=arrancar_proxy),
+                mock.patch.object(review_run, "run_in_group", side_effect=lanzar),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 try:
-                    review.cmd_run(argparse.Namespace(work=str(work)))
+                    review_run.cmd_run(argparse.Namespace(work=str(work)))
                 except SystemExit as exc:
                     salida = exc.code
             result = json.loads((work / "result.json").read_text())

@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_run
 import review_domain
 import review_config
 import review_context  # noqa: E402
@@ -715,16 +716,16 @@ class ReasoningReplayRecovery(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"ATTEMPTS": "2", "RETRY_DELAY": "0"}),
-            mock.patch.object(review, "run_in_group", side_effect=completed) as runner,
-            mock.patch.object(review.time, "monotonic", return_value=0),
-            mock.patch.object(review.time, "sleep"),
+            mock.patch.object(review_run, "run_in_group", side_effect=completed) as runner,
+            mock.patch.object(review_run.time, "monotonic", return_value=0),
+            mock.patch.object(review_run.time, "sleep"),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result_path = Path(tmp) / "result.json"
             falla = None
             try:
-                falla = review.run_agent(
+                falla = review_run.run_agent(
                     cmd, child_env, result_path, provider, 600, remaining
                 )
             except SystemExit as exc:
@@ -749,7 +750,7 @@ class ReasoningReplayRecovery(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(
             falla,
-            review.FallaDelProveedor(
+            review_run.FallaDelProveedor(
                 "reasoning",
                 "opencode-go rechazó el historial de razonamiento de la "
                 "conversación (reasoning_content)",
@@ -1021,7 +1022,7 @@ class RunAgent(unittest.TestCase):
             ["deepseek-v4.1-flash", "deepseek-v4.1-flash"],
         )
         self.assertTrue(all("sk-deepseek-key" not in json.dumps(c) for c in calls))
-        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
@@ -1042,7 +1043,7 @@ class RunAgent(unittest.TestCase):
         # El intento que expira muere antes de loguear su llamada; ningún
         # otro proveedor se despacha.
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        motivo = review_run.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
@@ -1062,7 +1063,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.tiempo("opencode-go", 1).motivo
+        motivo = review_run.FallaDelProveedor.tiempo("opencode-go", 1).motivo
         self.assertEqual(
             result,
             {
@@ -1106,7 +1107,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
-        motivo = review.FallaDelProveedor.razonamiento("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.razonamiento("opencode-go").motivo
         self.assertEqual(
             result,
             {
@@ -1220,7 +1221,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(
             [call["ANTHROPIC_MODEL"] for call in calls], ["deepseek-v4.1-flash"]
         )
-        motivo = review.FallaDelProveedor.saturacion("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.saturacion("opencode-go").motivo
         self.assertEqual(
             result,
             {
@@ -1285,7 +1286,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(calls, [])
-        motivo = review.FallaDelProveedor.proxy("opencode-go").motivo
+        motivo = review_run.FallaDelProveedor.proxy("opencode-go").motivo
         self.assertEqual(
             result,
             {
@@ -2274,7 +2275,7 @@ class TimeBudget(unittest.TestCase):
         captured = {}
 
         def fake_start_proxy(work, provider, key, session):
-            review.time.monotonic()  # the proxy start takes time on the same clock
+            review_run.time.monotonic()  # the proxy start takes time on the same clock
             proxy = mock.Mock()
             proxy.wait.return_value = 0
             return proxy, "http://127.0.0.1:4000", "sk-token"
@@ -2301,12 +2302,12 @@ class TimeBudget(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, env),
                 mock.patch.object(
-                    review.time, "monotonic", side_effect=lambda: next(clock)
+                    review_run.time, "monotonic", side_effect=lambda: next(clock)
                 ),
-                mock.patch.object(review, "start_proxy", side_effect=fake_start_proxy),
-                mock.patch.object(review, "run_agent", side_effect=fake_run_agent),
+                mock.patch.object(review_run, "start_proxy", side_effect=fake_start_proxy),
+                mock.patch.object(review_run, "run_agent", side_effect=fake_run_agent),
             ):
-                review.cmd_run(argparse.Namespace(work=str(work)))
+                review_run.cmd_run(argparse.Namespace(work=str(work)))
         self.assertEqual(captured["deadline"], 1000 + 1320)
 
     def test_timeout_kills_grandchildren_that_hold_the_output(self):
@@ -2317,7 +2318,7 @@ class TimeBudget(unittest.TestCase):
         """)
         start = time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired):
-            review.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
+            review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 1)
         self.assertLess(
             time.monotonic() - start,
             15,
@@ -2331,7 +2332,7 @@ class TimeBudget(unittest.TestCase):
             print('{"result": "ok", "subtype": "success"}', flush=True)
         """)
         start = time.monotonic()
-        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        done = review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
         self.assertLess(time.monotonic() - start, 15)
         self.assertEqual(
             (done.returncode, json.loads(done.stdout)["result"]), (0, "ok")
@@ -2345,7 +2346,7 @@ class TimeBudget(unittest.TestCase):
             print('{"result": "ok", "subtype": "success"}', flush=True)
         """)
         start = time.monotonic()
-        done = review.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
+        done = review_run.run_in_group([sys.executable, "-c", script], dict(os.environ), 2)
         self.assertLess(time.monotonic() - start, 20)
         self.assertIsInstance(done.stdout, str)
         self.assertIsInstance(done.stderr, str)
@@ -2386,22 +2387,22 @@ class TimeBudget(unittest.TestCase):
 
     def test_attempt_time_scales_with_turn_cap(self):
         self.assertEqual(
-            [review.attempt_timeout_for(t) for t in (10, 25, 40, 60)],
+            [review_run.attempt_timeout_for(t) for t in (10, 25, 40, 60)],
             [300, 375, 600, 900],
         )
 
     def test_measured_long_review_fits_its_attempt(self):
         # Orbit run 36208215400: 48 turns took 492 s; the default cap is 60 turns.
         self.assertGreaterEqual(
-            review.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492
+            review_run.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492
         )
 
     def test_worst_case_fits_the_job_timeout(self):
         install_prepare_publish = 180
-        self.assertLess(review.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
+        self.assertLess(review_run.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
         self.assertLessEqual(
-            review.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
-            review.REVIEW_BUDGET_SECONDS - 30,
+            review_run.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
+            review_run.REVIEW_BUDGET_SECONDS - 30,
         )
 
 
@@ -2823,16 +2824,16 @@ class Workflows(unittest.TestCase):
             return eval(expresion, {"__builtins__": {}}, contexto)
 
         self.assertEqual(resuelto("2700"), "2700")
-        self.assertEqual(resuelto(""), str(review.REVIEW_BUDGET_SECONDS))
+        self.assertEqual(resuelto(""), str(review_run.REVIEW_BUDGET_SECONDS))
 
     def test_un_presupuesto_mal_escrito_en_la_variable_se_dice_con_claridad(self):
         # La variable la escribe una persona en la configuración del repo.
         def presupuesto(valor):
             with mock.patch.dict(os.environ, {"REVIEW_BUDGET_SECONDS": valor}):
-                return review.presupuesto_de_revision()
+                return review_run.presupuesto_de_revision()
 
         self.assertEqual(presupuesto("2700"), 2700)
-        self.assertEqual(presupuesto(""), review.REVIEW_BUDGET_SECONDS)
+        self.assertEqual(presupuesto(""), review_run.REVIEW_BUDGET_SECONDS)
         for valor in ("2700s", "45 min", "0", "-5", "1.5"):
             with self.subTest(valor=valor):
                 with self.assertRaises(SystemExit) as salida:
@@ -3015,7 +3016,7 @@ class Workflows(unittest.TestCase):
         self.assertTrue(checkouts, "el worker fija su código a revisión confiable")
         self.assertNotIn("pull_request.head.sha", worker)
         # las herramientas del modelo las fija el runtime compartido del repo
-        runtime = (ROOT / "review.py").read_text()
+        runtime = (ROOT / "review_run.py").read_text()
         self.assertIn('"Read,Grep,Glob"', runtime)
 
     def test_coordinator_exporta_y_worker_recibe_lo_mismo(self):
@@ -3277,7 +3278,7 @@ class Workflows(unittest.TestCase):
                 self.assertEqual(manifest["reviewed"], ["app.py"])
                 with mock.patch.dict(os.environ, env_de("modelo", {}), clear=False):
                     with self.assertRaises(SystemExit):
-                        review.cmd_run(argparse.Namespace(work=work))
+                        review_run.cmd_run(argparse.Namespace(work=work))
                 resultado = json.loads((Path(work) / "result.json").read_text())
                 self.assertIn(
                     review_config.ERROR_KEY, resultado, "sin API_KEY el paso falla blando"
@@ -3331,6 +3332,7 @@ class Workflows(unittest.TestCase):
                 "review_domain.py",
                 "review_context.py",
                 "review_config.py",
+                "review_run.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -5601,7 +5603,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
             manifest = self._prepare(repo, work, base, head)
             previos_md = (work / "prev_findings.md").read_text()
             with mock.patch.dict(os.environ, {"PR_NUMBER": "85", "REPO": "o/r"}):
-                prompt = review.build_prompt(manifest, work, 60)
+                prompt = review_run.build_prompt(manifest, work, 60)
         self.assertEqual(previo["sha"], prev)
         self.assertEqual(previo["completion"], "complete")
         self.assertEqual(
@@ -6478,7 +6480,7 @@ class IncrementalRun(unittest.TestCase):
             changed_files=["b.py", "uv.lock"],
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 20)
         self.assertIn("INCREMENTAL review since ppppppp", prompt)
         self.assertIn("/tmp/w/prev_findings.md", prompt)
         self.assertIn("`b.py`", prompt)
@@ -6486,13 +6488,13 @@ class IncrementalRun(unittest.TestCase):
 
     def test_incremental_prompt_caps_file_list(self):
         files = [
-            f"src/f{i:03d}.py" for i in range(review.INCREMENTAL_PROMPT_MAX_FILES + 10)
+            f"src/f{i:03d}.py" for i in range(review_run.INCREMENTAL_PROMPT_MAX_FILES + 10)
         ]
         manifest = self.manifest(
             mode="incremental", prev_sha="p" * 40, reviewed=files, changed_files=files
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 20)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 20)
         self.assertIn("`src/f000.py`", prompt)
         self.assertNotIn("src/f059.py", prompt)
         self.assertIn("… y 10 más", prompt)
@@ -6526,7 +6528,7 @@ class IncrementalRun(unittest.TestCase):
             )
             manifest = dict(self.manifest(mode="full"), has_prev_findings=True)
             with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "91"}):
-                return review.build_prompt(manifest, work, 60)
+                return review_run.build_prompt(manifest, work, 60)
 
     def test_una_solicitud_de_explicacion_pide_explicar_ese_hallazgo(self):
         """Ronda 3 del piloto (#91): el worker corría una revisión completa para
@@ -6568,7 +6570,7 @@ class IncrementalRun(unittest.TestCase):
         revisiones; el mensaje solo recordaba el formato en incremental."""
         manifest = dict(self.manifest(mode="full"), has_prev_findings=True)
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "97"}):
-            prompt = review.build_prompt(manifest, Path("/tmp/w"), 60)
+            prompt = review_run.build_prompt(manifest, Path("/tmp/w"), 60)
         self.assertIn(
             "Emit the findings block right before COVERAGE with every previous finding "
             '(state "open", or "resolved" if this diff fixed it) and the new ones, as one '
@@ -6579,7 +6581,7 @@ class IncrementalRun(unittest.TestCase):
 
     def test_full_prompt_has_no_incremental_line(self):
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
+            prompt = review_run.build_prompt(self.manifest(mode="full"), Path("/tmp/w"), 60)
         self.assertNotIn("INCREMENTAL", prompt)
 
 
@@ -6901,7 +6903,7 @@ class BlockingFixes(unittest.TestCase):
     def test_full_review_with_previous_findings_hands_them_to_the_model(self):
         manifest = dict(MANIFEST, mode="full", has_prev_findings=True)
         with mock.patch.dict(os.environ, {"PR_NUMBER": "7", "REPO": "o/r"}):
-            prompt = review.build_prompt(manifest, Path("/w"), 60)
+            prompt = review_run.build_prompt(manifest, Path("/w"), 60)
         self.assertIn("/w/prev_findings.md", prompt)
         self.assertIn("same ids", prompt)
 
@@ -7492,7 +7494,7 @@ class PromptFindings(unittest.TestCase):
             MANIFEST, mode="incremental", prev_sha="a" * 40, reviewed=["x.py"]
         )
         with mock.patch.dict(os.environ, {"REPO": "o/r", "PR_NUMBER": "7"}):
-            prompt = review.build_prompt(manifest, Path("/w"), 10)
+            prompt = review_run.build_prompt(manifest, Path("/w"), 10)
         self.assertIn(
             "as one line that starts with `<!-- ai-review:findings=` and ends with ` -->`",
             prompt,

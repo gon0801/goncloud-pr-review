@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-import review  # noqa: E402
+import review_run
 import review_config
 
 MANIFEST = {
@@ -64,13 +64,13 @@ class ParadaDelProxy(unittest.TestCase):
             salida = None
             with (
                 mock.patch.dict(os.environ, env),
-                mock.patch.object(review, "start_proxy", side_effect=arrancar),
-                mock.patch.object(review, "run_agent", side_effect=agente),
+                mock.patch.object(review_run, "start_proxy", side_effect=arrancar),
+                mock.patch.object(review_run, "run_agent", side_effect=agente),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 try:
-                    review.cmd_run(argparse.Namespace(work=str(work)))
+                    review_run.cmd_run(argparse.Namespace(work=str(work)))
                 except SystemExit as exc:
                     salida = exc.code
             result = json.loads((work / "result.json").read_text())
@@ -81,7 +81,7 @@ class ParadaDelProxy(unittest.TestCase):
             result_path.write_text(json.dumps(OK_REPLY))
 
         def falla_suave(cmd, child_env, result_path, *args, **kwargs):
-            review.soft_fail(result_path, "error permanente del proveedor")
+            review_run.soft_fail(result_path, "error permanente del proveedor")
 
         casos = {
             "revisión entregada": (revision_entregada, None, OK_REPLY),

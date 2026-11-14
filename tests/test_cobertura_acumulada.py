@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+import review_run
 import review_domain as domain  # noqa: E402
 
 COVERED = "<!-- ai-review:covered="
@@ -1219,9 +1220,9 @@ class LecturaDeLaRespuesta(unittest.TestCase):
         bajo_viñeta = f"- Hallazgos:\n\n    {real}"
         cierre = "\n\nCOVERAGE: complete"
         self.assertIsNone(review.parse_model_findings(bajo_viñeta + cierre))
-        self.assertTrue(review.falta_bloque(bajo_viñeta + cierre))
+        self.assertTrue(review_run.falta_bloque(bajo_viñeta + cierre))
         con_cita = f"{bajo_viñeta}\n\n    {BLOQUE_VACIO}{cierre}"
-        self.assertTrue(review.falta_bloque(con_cita))
+        self.assertTrue(review_run.falta_bloque(con_cita))
 
     def test_un_fence_final_que_cita_el_formato_no_declara_complete(self):
         cuerpo, marcador, libro = self.publicar_texto(
