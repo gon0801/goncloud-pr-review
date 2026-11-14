@@ -1466,6 +1466,46 @@ class RunAgent(unittest.TestCase):
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
                 )
 
+    def test_una_cita_de_coverage_no_sube_a_complete_una_pasada_parcial(self):
+        sin_b = '<!-- ai-review:unreviewed=["b.py"] -->'
+        parcial = "COVERAGE: partial | no leí b.py"
+        cita = "\n\nEl formato pide una línea como\nCOVERAGE: complete\nal final."
+        casos = {
+            "se reordena": (f"Un problema.\n\n{self.BLOQUE}\n{parcial}{cita}", 1, None),
+            "vuelta pagada": (f"Un problema en calc.py:3.\n\n{parcial}{cita}", 2, None),
+            "con lo no revisado": (
+                f"Un problema.\n\n{self.BLOQUE}\n{sin_b}\n{parcial}{cita}",
+                1,
+                {"b.py"},
+            ),
+        }
+        for caso, (original, llamadas, sin_leer) in casos.items():
+            with self.subTest(caso=caso):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps(
+                        [
+                            {"result": original, "subtype": "success"},
+                            {
+                                "result": f"{self.BLOQUE}\nCOVERAGE: complete",
+                                "subtype": "success",
+                            },
+                        ]
+                    ),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), llamadas)
+                self.assertEqual(
+                    review.split_coverage(result["result"])[1:],
+                    ("partial", "no leí b.py"),
+                )
+                self.assertEqual(review.unreviewed_de(result["result"]), sin_leer)
+                modelo = review.parse_model_findings(result["result"])
+                self.assertEqual(
+                    [f["title"] for f in modelo["findings"]], ["División por cero"]
+                )
+
     def test_si_la_reparacion_tampoco_trae_bloque_queda_parcial(self):
         prosa = {
             "result": "Sigo sin bloque.",
