@@ -1154,5 +1154,50 @@ class ContinuacionTerminal(unittest.TestCase):
             self.assertEqual(paquete["cobertura"], domain.COMPLETE_CLAIM)
 
 
+BLOQUE_VACIO = review.FINDINGS_PREFIX + '{"findings":[]}' + review.FINDINGS_SUFFIX
+
+
+class LecturaDeLaRespuesta(unittest.TestCase):
+    """Lo que publica una respuesta que cita los marcadores del formato: la
+    cita no cambia hallazgos, cobertura ni libro."""
+
+    def publicar_texto(self, texto):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work = Path(tmp, "work")
+            manifest = preparar(repo, work, base, head1, {"sha": None, "state": None})
+            result = {"result": texto, "subtype": "success"}
+            cuerpo = publicar(work, head1, manifest, result, repo=repo)
+        libro = (libro_del(cuerpo) or (None, {}))[1]
+        return cuerpo, review.reviewed_completion(cuerpo), sorted(libro)
+
+    def test_una_cita_del_bloque_tras_el_real_no_vacia_los_hallazgos(self):
+        hallazgo = {
+            "id": "F-new",
+            "file": "a.py",
+            "line": 1,
+            "severity": "Critical",
+            "title": "división por cero",
+            "state": "open",
+        }
+        real = (
+            review.FINDINGS_PREFIX
+            + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
+            + review.FINDINGS_SUFFIX
+        )
+        citas = {
+            "en una frase": f"El bloque tiene la forma `{BLOQUE_VACIO}`.",
+            "sola en un fence": f"Ejemplo del formato:\n```\n{BLOQUE_VACIO}\n```",
+        }
+        for nombre, cita in citas.items():
+            with self.subTest(cita=nombre):
+                cuerpo, marcador, _ = self.publicar_texto(
+                    f"**Veredicto:** un problema.\n{real}\n{cita}\nCOVERAGE: complete"
+                )
+                titulos = [f["title"] for f in bloque_del(cuerpo)["findings"]]
+                self.assertEqual(titulos, ["división por cero"])
+                self.assertEqual(marcador, "complete")
+
+
 if __name__ == "__main__":
     unittest.main()
