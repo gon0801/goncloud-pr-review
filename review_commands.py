@@ -67,7 +67,7 @@ def _lineas_utiles(cuerpo):
             m
             and m.group(1)[0] == cerca[0]
             and len(m.group(1)) >= cerca[1]
-            and linea.strip() == m.group(1)
+            and re.fullmatch(r" {0,3}(`{3,}|~{3,})\s*", linea)
         ):
             cerca = None
 
