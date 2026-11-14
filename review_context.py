@@ -217,19 +217,21 @@ class GitRepository:
             == 0
         )
 
+    def diff(self, *args, check=True):
+        # Una sola política de renombres para todo el alcance: un renombre es
+        # un borrado más un alta, así la ruta vieja también cuenta como cambio.
+        return self.run("diff", "--no-renames", *args, check=check)
+
     def changed_files(self, a, b):
-        out = self.run("diff", "--name-only", "-z", a, b).stdout
+        out = self.diff("--name-only", "-z", a, b).stdout
         return [GitPath(rec) for rec in out.split(b"\0") if rec]
 
-    def numstat(self, base, head, renames=False):
-        extra = [] if renames else ["--no-renames"]
-        return self.run("diff", "--numstat", "-z", *extra, base, head).stdout
+    def numstat(self, base, head):
+        return self.diff("--numstat", "-z", base, head).stdout
 
     def diff_bytes(self, base, head, path):
         raw = path.raw if isinstance(path, GitPath) else path.encode("utf-8")
-        return self.run(
-            "diff", "--no-color", "--no-renames", "-U10", base, head, b"--", raw
-        ).stdout
+        return self.diff("--no-color", "-U10", base, head, b"--", raw).stdout
 
     def blob_at(self, rev, path):
         raw = path.raw if isinstance(path, GitPath) else path.encode("utf-8")
@@ -631,7 +633,7 @@ def files_matching_base(repo, paths, base, head):
     same = set()
     for path in paths:
         if (
-            repo.run("diff", "--quiet", base, head, "--", path, check=False).returncode
+            repo.diff("--quiet", base, head, "--", path, check=False).returncode
             == 0
         ):
             same.add(path)
@@ -645,7 +647,7 @@ def delta_real(repo, desde, head):
         # consultarlo evita que un delta re-run dependa del repositorio local.
         return (), (), True
     try:
-        proc = repo.run("diff", "--name-only", "-z", desde, head, check=False)
+        proc = repo.diff("--name-only", "-z", desde, head, check=False)
     except Exception:
         return (), ("delta real no calculable",), False
     if proc.returncode != 0:
@@ -677,51 +679,19 @@ def blobs_de_head(repo, rutas):
     return blobs
 
 
-def delta_real_con_renombres(repo, previous_head, head):
-    """Delta previous_head..head con detección de renombres (D0).
+def delta_desde_previo(repo, previous_head, head):
+    """Delta real previous_head..head: (rutas, omisiones, calculado).
 
-    Devuelve (rutas, renombres, omisiones, calculado): las rutas usan la
-    nueva para renombres (vieja, nueva en ese orden dentro del registro -z)
-    y la vieja para borrados; sin previous_head verificable o sin relación
-    de ancestro el delta no es calculable y queda vacío.
+    Sin previous_head verificable o sin relación de ancestro el delta no es
+    calculable y queda vacío.
     """
     if not previous_head:
-        return (), (), (), False
+        return (), (), False
     if not repo.cat_file_exists(f"{previous_head}^{{commit}}"):
-        return (), (), (), False
+        return (), (), False
     if not repo.is_ancestor(previous_head, head):
-        return (), (), (), False
-    proc = repo.run(
-        "diff", "--name-status", "-z", "-M", previous_head, head, check=False
-    )
-    if proc.returncode != 0:
-        return (), (), ("delta real no calculable",), False
-    rutas, renombres, ilegibles = [], [], 0
-    registros = proc.stdout.split(b"\0")
-    i = 0
-    while i < len(registros) and registros[i]:
-        letra = registros[i][:1]
-        i += 1
-        if letra in (b"R", b"C"):
-            vieja, nueva = registros[i], registros[i + 1]
-            i += 2
-            try:
-                par = (nueva.decode("utf-8"), vieja.decode("utf-8"))
-            except UnicodeDecodeError:
-                ilegibles += 1
-                continue
-            renombres.append(par)
-            rutas.append(par[0])
-            continue
-        try:
-            rutas.append(registros[i].decode("utf-8"))
-        except UnicodeDecodeError:
-            ilegibles += 1
-        i += 1
-    omisiones = ()
-    if ilegibles:
-        omisiones = (f"ruta no representable en el delta: {ilegibles}",)
-    return tuple(rutas), tuple(renombres), omisiones, True
+        return (), (), False
+    return delta_real(repo, previous_head, head)
 
 
 def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
@@ -912,7 +882,7 @@ def prepare_review(
     modo, motivo, previous_head = decidir_modo(
         repo, current, head, base, digest, cobertura_previa
     )
-    delta_rutas, renombres, omis_delta, delta_calculado = delta_real_con_renombres(
+    delta_rutas, omis_delta, delta_calculado = delta_desde_previo(
         repo, previous_head, head
     )
 
@@ -1107,7 +1077,6 @@ def prepare_review(
         changed_paths=tuple(delta_rutas),
         delta_calculado=delta_calculado,
         reverted_paths=revertidas,
-        renames=tuple(renombres),
         omissions=tuple(hechos_omisiones),
         historical_paths=tuple(historicas),
     )
