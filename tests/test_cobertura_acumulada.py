@@ -1188,6 +1188,7 @@ class LecturaDeLaRespuesta(unittest.TestCase):
         citas = {
             "en una frase": f"El bloque tiene la forma `{BLOQUE_VACIO}`.",
             "sola en un fence": f"Ejemplo del formato:\n```\n{BLOQUE_VACIO}\n```",
+            "en un bloque indentado": f"Ejemplo del formato:\n\n    {BLOQUE_VACIO}\n",
         }
         for nombre, cita in citas.items():
             with self.subTest(cita=nombre):
