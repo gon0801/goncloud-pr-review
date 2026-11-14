@@ -6,6 +6,11 @@ on:
         description: ID de la solicitud persistida
         required: true
         type: string
+      kind:
+        description: Clase de la solicitud (review o explain); decide el grupo
+        required: false
+        default: ""
+        type: string
       pr_number:
         description: PR de la solicitud
         required: true
@@ -32,13 +37,17 @@ permissions:
   contents: read
   pull-requests: read
 
-# La recuperación la decide el coordinador re-autorizando, no este grupo.
+# Las revisiones de un PR comparten grupo: la nueva cancela a la que sigue
+# corriendo, cuya solicitud el coordinador ya podó. Cada explicación tiene el
+# suyo, porque una cancelada quedaría pendiente sin que nada la re-despache.
+# Sin kind (coordinador fijado antes de esta entrada) queda el grupo por solicitud.
 concurrency:
-  group: ai-review-worker-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.request_id }}
-  cancel-in-progress: false
+  group: ai-review-worker-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.kind == 'review' && 'review' || inputs.request_id }}
+  cancel-in-progress: true
 
-# El display_title de este run es la entrada del resultado en el grupo del PR.
-run-name: ${{ inputs.pr_number }}
+# El coordinador atribuye cada run a su solicitud por este título, también un
+# run que terminó sin subir artifact.
+run-name: PR ${{ inputs.pr_number }} solicitud ${{ inputs.request_id }}
 
 jobs:
   execute:
@@ -58,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gon0801/goncloud-pr-review
-          ref: 9d116a47a26df0e3c538373fd599fbff5933ccc5
+          ref: 0f2d9cb09ae64f335d1f8d39516150f4fbcfae71
           path: ai-review-code
           persist-credentials: false
       - name: validar entradas
@@ -79,9 +88,13 @@ jobs:
         env:
           HEAD_SHA: ${{ inputs.head_sha }}
           BASE_SHA: ${{ inputs.base_sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch --no-tags origin "+${HEAD_SHA}:refs/ai-review/head"
-          git fetch --no-tags origin "${BASE_SHA}"
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags origin "+${HEAD_SHA}:refs/ai-review/head"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags origin "${BASE_SHA}"
+          unset auth GITHUB_TOKEN
+          git config --local --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
           git worktree add --detach pr refs/ai-review/head
       # En pr: el plan de la solicitud lee HEAD_SHA y BASE_SHA con git. El código
       # que corre sigue siendo el del checkout confiable ($GITHUB_WORKSPACE).
@@ -148,10 +161,11 @@ jobs:
 
   # Un run despachado con GITHUB_TOKEN no dispara workflow_run al terminar, así
   # que el worker avisa al publicador con workflow_dispatch. Job aparte para que
-  # el paso que corre el modelo no tenga actions: write.
+  # el paso que corre el modelo no tenga actions: write. Un run cancelado no
+  # avisa: no subió resultado y su solicitud ya no está pendiente.
   avisar:
     needs: execute
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       actions: write

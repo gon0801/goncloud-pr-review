@@ -4,9 +4,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
-  workflow_run:
-    workflows: [ai-review-worker]
-    types: [completed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -14,7 +11,7 @@ on:
         required: true
         type: string
       worker_run_id:
-        description: Run del worker cuyo resultado se publica (vacío = recuperación)
+        description: Run del worker que avisa (vacío = recuperación)
         required: false
         default: ""
         type: string
@@ -24,25 +21,28 @@ on:
         default: "1"
         type: string
 
-# Un solo escritor por repositorio y PR: los cuatro eventos resuelven el
-# mismo grupo y nunca se cancela al escritor activo.
 permissions:
   contents: read
   pull-requests: write
   actions: write
 
-concurrency:
-  group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
-  cancel-in-progress: false
-
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    # El coordinador corre código confiable: un workflow_run sólo se atiende
-    # si es un dispatch nuestro sobre el propio repo (anti pwn-request).
+    # Un solo escritor por repositorio y PR: los tres eventos resuelven el
+    # mismo grupo y nunca se cancela al escritor activo. Va en el job y no en
+    # el workflow para que un run que el `if:` descarta no entre al grupo ni
+    # reemplace al run pendiente de otro evento: cada run converge el PR
+    # completo, así que basta con que el último pendiente corra.
+    concurrency:
+      group: ai-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
+      cancel-in-progress: false
+    # El coordinador corre código confiable: nunca un push de fork ni de un
+    # borrador. Un comentario solo cuenta en un PR y si nombra el comando: el
+    # script lo acepta tras espacios, y uno filtrado aquí se aplicaría tarde.
     if: >-
       (github.event_name != 'pull_request_target' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository))
-      && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_repository.full_name == github.repository))
+      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, 'ai-review:')))
     steps:
       - name: checkout del código confiable
         uses: actions/checkout@v4
@@ -52,12 +52,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gon0801/goncloud-pr-review
-          ref: 9d116a47a26df0e3c538373fd599fbff5933ccc5
+          ref: 0f2d9cb09ae64f335d1f8d39516150f4fbcfae71
           path: ai-review-code
           persist-credentials: false
       - name: preparar entorno
         env:
-          EV_PR: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number || github.event.workflow_run.display_title }}
+          EV_PR: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
           EV_HEAD: ${{ github.event.pull_request.head.sha }}
           EV_BASE: ${{ github.event.pull_request.base.sha }}
           EV_PATH: ${{ github.event_path }}
@@ -87,29 +87,12 @@ jobs:
             printf 'WORKER_REF=%s\n' "$EV_DEFAULT_BRANCH"
           } >> "${GITHUB_ENV}"
           mkdir -p "${RUNNER_TEMP}/ai-review"
-      # Un run despachado con GITHUB_TOKEN no dispara workflow_run al terminar:
-      # el worker avisa con workflow_dispatch (worker_run_id), que sí se permite.
-      - name: bajar el resultado del worker
-        if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.worker_run_id != '')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WORKER_RUN_ID: ${{ github.event.workflow_run.id || inputs.worker_run_id }}
-          WORKER_ATTEMPT: ${{ github.event.workflow_run.run_attempt || inputs.worker_attempt }}
-        run: |
-          for valor in "$WORKER_RUN_ID" "$WORKER_ATTEMPT"; do
-            [[ "$valor" =~ ^[0-9]+$ ]] || { echo "ai-review: run o attempt del worker inválido" >&2; exit 1; }
-          done
-          gh run download "$WORKER_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "${RUNNER_TEMP}/ai-review/descarga"
-          encontrados=$(find "${RUNNER_TEMP}/ai-review/descarga" -path "*attempt-${WORKER_ATTEMPT}*" -name result.json)
-          total=$(printf '%s' "$encontrados" | grep -c .)
-          if [ "$total" -ne 1 ]; then
-            echo "ai-review: se esperaba un result.json del attempt ${WORKER_ATTEMPT}, hubo ${total}" >&2
-            exit 1
-          fi
-          cp "$encontrados" "${RUNNER_TEMP}/ai-review/result.json"
-      - name: reconciliar (admitir, comandos, resultados, recuperar)
+      # El script cosecha los resultados del worker (gh run download, que lee
+      # GH_TOKEN): un aviso perdido lo recoge el siguiente evento.
+      - name: reconciliar (comandos, resultados, admisión)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORKER_RUN_ID: ${{ inputs.worker_run_id }}
           WORKER_ATTEMPT: ${{ inputs.worker_attempt }}
         run: |
