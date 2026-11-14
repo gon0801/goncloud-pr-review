@@ -523,6 +523,30 @@ class CosechaDeResultados(unittest.TestCase):
             solicitud.motivo, "el worker terminó sin resultado (run 900, sin conclusión)"
         )
 
+    def test_un_reintento_manual_exitoso_con_aviso_perdido_se_cosecha(self):
+        # "Re-run jobs" sobre el worker que falló: mismo run, attempt 2.
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        github.comentar(20, "ai-review: explicar F1")
+        correr(github, "issue_comment")
+        github.comentar(21, "ai-review: revisar")
+        correr(github, "issue_comment")
+        github.worker(2, run_id=900)
+        correr(github, "workflow_dispatch", aviso=(900, 1))
+        estado = {r.id: r.state for r in github.estado().pending_requests}
+        self.assertEqual(estado[2], "failed_retryable")
+        escrituras = github.escrituras
+        codigo, despachos, _ = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos, github.escrituras), (0, [], escrituras))
+
+        github.corridas = [c for c in github.corridas if c["id"] != 900]
+        github.worker(2, dict(resultado(2, A, ["Fuga 1"]), attempt=2), intento=2)
+        codigo, despachos, _ = correr(github, "issue_comment")
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(
+            [r.kind for r in github.estado().pending_requests], ["explain"]
+        )
+        self.assertNotIn("No se pudo revisar", github.visible())
+
     def test_el_run_avisado_ya_termino_aunque_su_job_de_aviso_siga_en_curso(self):
         sin_aviso = GitHubFalso()
         correr(sin_aviso, "pull_request_target")
