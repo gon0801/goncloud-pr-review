@@ -1093,10 +1093,14 @@ def compose_with_findings(
     parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
+        cambiados = manifest.get("changed_files")
+        delta = (
+            "delta no verificable"
+            if cambiados is None
+            else f"{len(cambiados)} archivo(s) cambiaron"
+        )
         scope.insert(
-            0,
-            f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
-            f"({len(manifest.get('changed_files') or [])} archivo(s) cambiaron)",
+            0, f"- Modo: incremental desde {manifest['prev_sha'][:7]} ({delta})"
         )
     parts += [
         ALCANCE_INICIO,
