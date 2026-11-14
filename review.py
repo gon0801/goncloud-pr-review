@@ -3809,14 +3809,15 @@ def artefacto_del_run(repo, run, request_id, work):
 
 
 def cosechar(estado, repo, pr, worker_ref, work, avisado):
-    """Lo que el worker ya dejó para las solicitudes pendientes y la del run
-    avisado. De cada una cuenta su run más nuevo y confiable: con artifact del
-    attempt vigente, o terminado sin él (el avisado ya terminó su execute
-    aunque su job de aviso siga en curso); si sigue en curso, espera. Una
-    pendiente sin ningún run perdió su despacho.
+    """Lo que el worker ya dejó para las solicitudes vivas. De cada una cuenta
+    su run más nuevo y confiable: con artifact del attempt vigente, o
+    terminado sin él (el avisado ya terminó su execute aunque su job de aviso
+    siga en curso); si sigue en curso, espera. Una pendiente sin ningún run
+    perdió su despacho. De una fallida solo cuenta un artifact: lo deja un
+    "Re-run jobs" del worker, y el fallo ya está registrado.
     Devuelve (entregas, sin_corrida, hubo_rechazo)."""
     vivas = {r.id: r for r in estado.pending_requests if r.state != "finished"}
-    if avisado is None and not any(r.state == "pending" for r in vivas.values()):
+    if avisado is None and not vivas:
         return [], [], False
     corridas, rechazo, rid_avisado = corridas_por_solicitud(repo, pr), False, None
     for rid, runs in corridas.items():
@@ -3840,10 +3841,10 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
         )
     confianza, entregas, sin_corrida = {}, [], []
     for solicitud in vivas.values():
-        if solicitud.state != "pending" and solicitud.id != rid_avisado:
-            continue
+        fallida = solicitud.state == "failed_retryable" and solicitud.id != rid_avisado
         if solicitud.id not in corridas:
-            sin_corrida.append(solicitud)
+            if not fallida:
+                sin_corrida.append(solicitud)
             continue
         for run in corridas[solicitud.id]:
             forma = forma_del_run(run)
@@ -3893,7 +3894,7 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
                         solicitud, meta, conclusion, artifact, autenticado
                     )
                 )
-            elif terminado:
+            elif terminado and not fallida:
                 entregas.append(Entrega(solicitud, meta, conclusion))
             break
     return entregas, sin_corrida, rechazo
