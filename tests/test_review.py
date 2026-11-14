@@ -1357,7 +1357,6 @@ class RunAgent(unittest.TestCase):
             result["result"],
             f"{self.SIN_BLOQUE['result']}\n\n{self.BLOQUE}\nCOVERAGE: complete",
         )
-        self.assertEqual(result["block_repair"], "ok")
         self.assertAlmostEqual(result["total_cost_usd"], 0.23)
         self.assertEqual(result["num_turns"], 31)
         modelo = review.parse_model_findings(result["result"])
@@ -1624,7 +1623,6 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
-        self.assertEqual(result["block_repair"], "failed")
         self.assertAlmostEqual(result["total_cost_usd"], 0.22)
 
     def test_la_reparacion_suma_usage_y_respeta_el_tope_de_turnos(self):
@@ -1647,8 +1645,8 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["usage"], {"input_tokens": 1050, "output_tokens": 210})
+        self.assertIn(self.BLOQUE, result["result"])
         self.assertEqual(review.split_coverage(result["result"])[1], "partial")
-        self.assertEqual(result["block_repair"], "ok")
 
     def test_un_bloque_reparado_ilegible_no_cuenta(self):
         """#113 ai-review F2: aceptar con el mismo criterio que dispara."""
@@ -1665,7 +1663,6 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
-        self.assertEqual(result["block_repair"], "failed")
 
     def test_sin_tiempo_no_se_intenta_la_reparacion(self):
         proc, calls, result, _, _ = self.run_agent(

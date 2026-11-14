@@ -2320,10 +2320,8 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             "ai-review: la reparación tampoco entregó el bloque y COVERAGE; queda parcial",
             file=sys.stderr,
         )
-        result["block_repair"] = "failed"
     else:
         result["result"] = reparado
-        result["block_repair"] = "ok"
     result_path.write_text(json.dumps(result))
 
 
