@@ -224,11 +224,10 @@ def reviewed_completion(body):
 
 def _cierre(text):
     """La declaración final del modelo: (prosa, estado, detalle, línea
-    unreviewed o None). La posición la autentica, así que una cita de los
-    marcadores en la prosa no declara nada: COVERAGE es la última línea no
-    vacía (una que solo trae ``` o ** también cierra la respuesta, y una cita
-    dentro de un fence final no pasa por la declaración) y unreviewed, la
-    última no vacía antes de ella."""
+    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
+    la última línea no vacía (una de solo ``` o ** también cierra, así que
+    una cita dentro de un fence final no declara) y unreviewed, la última no
+    vacía antes de ella."""
     lines = (text or "").rstrip().splitlines()
     line = lines[-1].strip().strip("`*") if lines else ""
     if line.upper().startswith("COVERAGE:"):
