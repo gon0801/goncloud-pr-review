@@ -3459,9 +3459,6 @@ def hechos_con_delta_del_worker(facts, artifact, current):
     desde = manifest.get("prev_sha")
     cambiados = manifest.get("changed_files")
     esperado = current.revision.head_sha if current.revision else None
-    worker_sin_delta = cambiados is None
-    if worker_sin_delta and _sha_hexa(desde) and desde == esperado:
-        cambiados = list(review_domain.rutas_de_cambio(manifest))
     if (
         _sha_hexa(desde)
         and desde == esperado
