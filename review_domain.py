@@ -2557,6 +2557,7 @@ def _consumido(current, cid, efecto=None, recibo=True):
 ACCION_NO_ENTENDIDA = "no-entendida"
 RECHAZO_NO_ENTENDIDO = "comando no entendido"
 RECHAZO_HALLAZGO_INEXISTENTE = "hallazgo inexistente"
+RECHAZO_COMANDO_EXTRA = "comando extra no aplicado"
 RECHAZO_TODO_TARDIO = (
     "descartar todo anterior a hallazgos nuevos; hay que repetir el comando"
 )
@@ -2686,4 +2687,6 @@ def procesar_comandos(current, comandos, permisos, target):
             work = [w for w in work if w.kind != "review"]
             snapshot = _consumido(snapshot, cid, f"solicitud de revisión {nueva.id}")
             work.append(nueva)
+        if comando.get("extra"):
+            rechazos.append((cid, RECHAZO_COMANDO_EXTRA))
     return snapshot, tuple(work), tuple(rechazos)

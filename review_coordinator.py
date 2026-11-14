@@ -1020,6 +1020,9 @@ def cmd_reconcile(args):
         for terminada in terminadas:
             print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
 
+    if sticky is None and admision is None:
+        avisos = ()
+
     if estado == current and not trabajo:
         print("ai-review: nada cambió; el sticky queda como está")
         if rechazo:
@@ -1301,9 +1304,25 @@ def es_aviso_de_comando(linea):
 
 def aviso_de_comando_no_entendido(cid):
     return (
-        f"{AVISO_COMANDO_PREFIX}el comentario {cid} empieza con `ai-review:` pero no "
-        "es un comando que entienda; usa `ai-review: descartar F3`, "
+        f"{AVISO_COMANDO_PREFIX}el comentario {cid} menciona `ai-review:` pero no es un "
+        "comando que entienda; cada comando va al inicio de una línea: "
+        "`ai-review: descartar F3`, `ai-review: descartar F1, F2`, "
         "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
+    )
+
+
+def aviso_de_hallazgo_inexistente(cid):
+    return (
+        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra un hallazgo "
+        "que no existe; no se aplicó nada."
+    )
+
+
+def aviso_de_comando_extra(cid):
+    return (
+        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} trae más de un "
+        "comando; solo se aplicó el primero. Escribe cada comando en su propio "
+        "comentario."
     )
 
 
@@ -1318,6 +1337,8 @@ def aviso_de_todo_tardio(cid):
 
 AVISOS_DE_RECHAZO = {
     review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
+    review_domain.RECHAZO_HALLAZGO_INEXISTENTE: aviso_de_hallazgo_inexistente,
+    review_domain.RECHAZO_COMANDO_EXTRA: aviso_de_comando_extra,
     review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
 }
 
