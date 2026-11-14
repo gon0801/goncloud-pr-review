@@ -1198,6 +1198,15 @@ class LecturaDeLaRespuesta(unittest.TestCase):
                 self.assertEqual(titulos, ["división por cero"])
                 self.assertEqual(marcador, "complete")
 
+    def test_un_fence_final_que_cita_el_formato_no_declara_complete(self):
+        cuerpo, marcador, libro = self.publicar_texto(
+            f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n"
+            f'{UNREVIEWED}["b.py"] -->\nCOVERAGE: partial | no leí b.py\n\n'
+            "El formato:\n```\nCOVERAGE: complete\n```"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertNotIn("b.py", libro)
+
 
 if __name__ == "__main__":
     unittest.main()
