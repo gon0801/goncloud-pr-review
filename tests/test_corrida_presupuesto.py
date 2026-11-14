@@ -36,8 +36,9 @@ PAGO = review.PROVIDERS["deepseek"]["model"]
 
 
 class SegundaCorrida(unittest.TestCase):
-    """El respaldo de pago o el reintento solo arranca si el presupuesto cubre
-    el tiempo límite completo que pide el tope de turnos."""
+    """El respaldo de pago o el reintento solo arranca si al presupuesto le
+    quedan, tras el margen de 30 s, 600 s o el límite del intento si es menor.
+    Arranca con lo que quede, aunque no cubra el límite que pide el tope."""
 
     def correr(self, turnos, respuestas, fallback_key="sk-deepseek-key"):
         """Corre `cmd_run` con reloj virtual. `respuestas` son pares (segundos
@@ -100,68 +101,93 @@ class SegundaCorrida(unittest.TestCase):
             result = json.loads((work / "result.json").read_text())
         return salida, result, corridas
 
-    def test_sin_tiempo_para_la_revision_completa_no_se_paga_el_respaldo(self):
-        # 80 turnos piden 1200 s; la cuota se agota a los 900 s y quedan 390.
-        salida, result, corridas = self.correr(80, [(900, CUOTA), (300, OK_REPLY)])
-        self.assertEqual(corridas, [(SUSCRIPCION, 1200)], "ninguna corrida de pago")
+    def test_con_tope_alto_y_la_cuota_al_inicio_el_respaldo_arranca(self):
+        # 120 y 150 turnos piden 1800 y 2250 s, más que todo el presupuesto.
+        for turnos in (120, 150):
+            with self.subTest(turnos=turnos):
+                salida, result, corridas = self.correr(
+                    turnos, [(5, CUOTA), (300, OK_REPLY)]
+                )
+                self.assertEqual(corridas, [(SUSCRIPCION, 1290), (PAGO, 1285)])
+                self.assertIsNone(salida)
+                self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
+
+    def test_con_343_s_el_respaldo_no_arranca_y_no_se_paga(self):
+        salida, result, corridas = self.correr(150, [(947, CUOTA), (300, OK_REPLY)])
+        self.assertEqual(corridas, [(SUSCRIPCION, 1290)], "ninguna corrida de pago")
         self.assertEqual(salida, 0)
         self.assertEqual(
             result,
             {
                 review.ERROR_KEY: "opencode-go agotó su cuota; no queda tiempo para "
-                "una revisión completa con deepseek (quedan 390 s de los 1200 s "
-                "que necesita)"
+                "probar deepseek (quedan 343 s, se necesitan al menos 600 s)"
             },
         )
 
-    def test_el_respaldo_de_pago_arranca_con_su_limite_completo(self):
-        # 1320 - 30 de margen - 1200 de límite: la cuota puede llegar hasta el s 90.
-        for llega in (5, 90):
-            with self.subTest(cuota_a_los=llega):
-                salida, result, corridas = self.correr(
-                    80, [(llega, CUOTA), (300, OK_REPLY)]
-                )
-                self.assertEqual(corridas, [(SUSCRIPCION, 1200), (PAGO, 1200)])
-                self.assertIsNone(salida)
-                self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
-        salida, _, corridas = self.correr(80, [(91, CUOTA), (300, OK_REPLY)])
-        self.assertEqual(corridas, [(SUSCRIPCION, 1200)], "a los 91 s ya no cabe")
+    def test_el_respaldo_arranca_con_600_s_justos(self):
+        # 1320 - 690 - 30 de margen = 600.
+        salida, result, corridas = self.correr(150, [(690, CUOTA), (300, OK_REPLY)])
+        self.assertEqual(corridas, [(SUSCRIPCION, 1290), (PAGO, 600)])
+        self.assertIsNone(salida)
+        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
+        salida, _, corridas = self.correr(150, [(691, CUOTA), (300, OK_REPLY)])
+        self.assertEqual(corridas, [(SUSCRIPCION, 1290)], "con 599 s ya no arranca")
         self.assertEqual(salida, 0)
 
-    def test_el_reintento_no_arranca_sin_tiempo_y_conserva_la_causa(self):
-        # Falla a los 840 s; tras 30 s de espera quedan 420 de los 1200 s.
+    def test_un_intento_de_menos_de_600_s_se_reintenta_con_su_propio_limite(self):
+        # 30 turnos piden 450 s. La cuota llega a los 400 s y el respaldo de pago
+        # falla con un error transitorio; tras 30 s de espera quedan 460 s.
+        salida, result, corridas = self.correr(
+            30, [(400, CUOTA), (400, TRANSITORIO), (300, OK_REPLY)]
+        )
+        self.assertEqual(corridas, [(SUSCRIPCION, 450), (PAGO, 450), (PAGO, 450)])
+        self.assertIsNone(salida)
+        self.assertEqual(result, dict(OK_REPLY, review_provider="deepseek"))
+        salida, result, corridas = self.correr(
+            30, [(400, CUOTA), (411, TRANSITORIO), (300, OK_REPLY)]
+        )
+        self.assertEqual(corridas, [(SUSCRIPCION, 450), (PAGO, 450)])
+        self.assertEqual(salida, 0)
+        self.assertEqual(
+            result,
+            {
+                review.ERROR_KEY: "opencode-go agotó su cuota; deepseek falló con un "
+                "error transitorio; no queda tiempo para reintentar (quedan 449 s, "
+                "se necesitan al menos 450 s)"
+            },
+        )
+
+    def test_el_reintento_sigue_la_misma_regla_y_conserva_la_causa(self):
+        # Falla a los 660 s; tras 30 s de espera quedan 630, 600 tras el margen.
+        salida, result, corridas = self.correr(
+            150, [(660, TRANSITORIO), (300, OK_REPLY)]
+        )
+        self.assertEqual(corridas, [(SUSCRIPCION, 1290), (SUSCRIPCION, 600)])
+        self.assertIsNone(salida)
+        self.assertEqual(result, OK_REPLY)
+        nota = (
+            "no queda tiempo para reintentar (quedan 599 s, se necesitan al menos "
+            "600 s)"
+        )
         for fallback_key, motivo in (
             (
                 "sk-deepseek-key",
-                (
-                    "opencode-go falló con un error transitorio; no queda tiempo "
-                    "para un reintento completo (quedan 420 s de los 1200 s que "
-                    "necesita); la suscripción es la única vía y no se cambia a "
-                    "la API de pago"
-                ),
+                f"opencode-go falló con un error transitorio; {nota}; la suscripción "
+                "es la única vía y no se cambia a la API de pago",
             ),
             (
                 "",
-                (
-                    "la revisión falló con un error transitorio (proveedor no "
-                    "disponible por ahora); no queda tiempo para un reintento "
-                    "completo (quedan 420 s de los 1200 s que necesita)"
-                ),
+                "la revisión falló con un error transitorio (proveedor no disponible "
+                f"por ahora); {nota}",
             ),
         ):
             with self.subTest(respaldo=bool(fallback_key)):
                 salida, result, corridas = self.correr(
-                    80, [(840, TRANSITORIO), (700, OK_REPLY)], fallback_key
+                    150, [(661, TRANSITORIO), (300, OK_REPLY)], fallback_key
                 )
-                self.assertEqual(corridas, [(SUSCRIPCION, 1200)])
+                self.assertEqual(corridas, [(SUSCRIPCION, 1290)])
                 self.assertEqual(salida, 0)
                 self.assertEqual(result, {review.ERROR_KEY: motivo})
-
-    def test_el_reintento_arranca_con_su_limite_completo(self):
-        salida, result, corridas = self.correr(80, [(60, TRANSITORIO), (300, OK_REPLY)])
-        self.assertEqual(corridas, [(SUSCRIPCION, 1200), (SUSCRIPCION, 1200)])
-        self.assertIsNone(salida)
-        self.assertEqual(result, OK_REPLY)
 
 
 if __name__ == "__main__":

@@ -756,8 +756,8 @@ class ReasoningReplayRecovery(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             falla.sin_respaldo,
-            f"{self.warning}; no queda tiempo para un reintento completo "
-            "(quedan 290 s de los 600 s que necesita)",
+            f"{self.warning}; no queda tiempo para reintentar "
+            "(quedan 290 s, se necesitan al menos 600 s)",
         )
 
     def test_other_bad_requests_and_auth_errors_are_not_retried(self):
@@ -881,19 +881,19 @@ class RunAgent(unittest.TestCase):
         self.assertNotIn("intento 2/2", proc.stdout)
         self.assertIn("excedió el tiempo límite de 1 s", result[review.ERROR_KEY])
 
-    def test_retry_runs_only_if_it_still_gets_its_full_attempt_time(self):
+    def test_retry_runs_only_if_it_still_gets_600_seconds(self):
         overloaded = {"result": "overloaded", "is_error": True, "api_error_status": 529}
         _, calls, _, _, _ = self.run_agent(
-            overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="945"
+            overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="645"
         )
         self.assertEqual(
-            len(calls), 2, "945 s cubren un reintento de 900 s más el margen de 30"
+            len(calls), 2, "645 s dejan >= 600 s para el reintento tras el margen"
         )
         _, calls, _, _, _ = self.run_agent(
-            overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="920"
+            overloaded, provider="deepseek", REVIEW_BUDGET_SECONDS="620"
         )
         self.assertEqual(
-            len(calls), 1, "920 s de presupuesto no alcanzan un reintento de 900 s"
+            len(calls), 1, "620 s de presupuesto no dejan 600 s para el reintento"
         )
 
     def test_retry_is_skipped_when_the_budget_cannot_fit_it(self):
@@ -912,8 +912,8 @@ class RunAgent(unittest.TestCase):
         self.assertRegex(
             result[review.ERROR_KEY],
             r"^la revisión falló con un error transitorio \(proveedor no disponible "
-            r"por ahora\); no queda tiempo para un reintento completo \(quedan \d+ s "
-            r"de los 900 s que necesita\)$",
+            r"por ahora\); no queda tiempo para reintentar \(quedan \d+ s, se "
+            r"necesitan al menos 600 s\)$",
         )
 
     def test_deepseek_api_gets_the_key_directly_and_github_token_is_withheld(self):
@@ -998,8 +998,8 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(list(result), [review.ERROR_KEY])
         self.assertRegex(
             result[review.ERROR_KEY],
-            rf"^{re.escape(ReasoningReplayRecovery.warning)}; no queda tiempo para un "
-            r"reintento completo \(quedan \d+ s de los 900 s que necesita\)$",
+            rf"^{re.escape(ReasoningReplayRecovery.warning)}; no queda tiempo para "
+            r"reintentar \(quedan \d+ s, se necesitan al menos 600 s\)$",
         )
 
     def test_persistent_opencode_replay_error_stays_on_the_subscription(self):
