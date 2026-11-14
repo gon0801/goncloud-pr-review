@@ -367,7 +367,13 @@ def libro_fusionado(previo, manifest, result, repo, model_ok):
             cubiertos = revisados
         elif cobertura == "partial":
             sin = unreviewed_de(texto)
-            cubiertos = [] if sin is None else [p for p in revisados if p not in sin]
+            excluidos = {e["path"] for e in manifest.get("excluded") or []}
+            reconocibles = set(revisados) | excluidos
+            declaracion_verificable = sin is not None and sin <= reconocibles
+            if declaracion_verificable:
+                cubiertos = [p for p in revisados if p not in sin]
+            else:
+                cubiertos = []
         else:
             cubiertos = []
     else:

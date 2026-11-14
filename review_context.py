@@ -192,13 +192,18 @@ class ContextRef:
 
 @dataclasses.dataclass(frozen=True)
 class GitRepository:
-    """Ventana a Git: todo comando corre con cwd explícito en root."""
+    """Ventana a Git: todo comando corre con cwd explícito en root.
+
+    Con `attr_source`, git lee .gitattributes de ese árbol y no del worktree.
+    """
 
     root: Path
+    attr_source: str = ""
 
     def run(self, *args, check=True):
+        atributos = [f"--attr-source={self.attr_source}"] if self.attr_source else []
         return subprocess.run(
-            ["git", *args], cwd=self.root, check=check, capture_output=True
+            ["git", *atributos, *args], cwd=self.root, check=check, capture_output=True
         )
 
     def merge_base(self, a, b):
@@ -212,18 +217,20 @@ class GitRepository:
             == 0
         )
 
+    def diff_sin_renombres(self, *args, check=True):
+        return self.run("diff", "--no-renames", *args, check=check)
+
     def changed_files(self, a, b):
-        out = self.run("diff", "--name-only", "-z", a, b).stdout
+        out = self.diff_sin_renombres("--name-only", "-z", a, b).stdout
         return [GitPath(rec) for rec in out.split(b"\0") if rec]
 
-    def numstat(self, base, head, renames=False):
-        extra = [] if renames else ["--no-renames"]
-        return self.run("diff", "--numstat", "-z", *extra, base, head).stdout
+    def numstat(self, base, head):
+        return self.diff_sin_renombres("--numstat", "-z", base, head).stdout
 
     def diff_bytes(self, base, head, path):
         raw = path.raw if isinstance(path, GitPath) else path.encode("utf-8")
-        return self.run(
-            "diff", "--no-color", "--no-renames", "-U10", base, head, b"--", raw
+        return self.diff_sin_renombres(
+            "--no-color", "-U10", base, head, b"--", raw
         ).stdout
 
     def blob_at(self, rev, path):
@@ -626,7 +633,9 @@ def files_matching_base(repo, paths, base, head):
     same = set()
     for path in paths:
         if (
-            repo.run("diff", "--quiet", base, head, "--", path, check=False).returncode
+            repo.diff_sin_renombres(
+                "--quiet", base, head, "--", path, check=False
+            ).returncode
             == 0
         ):
             same.add(path)
@@ -655,7 +664,7 @@ def delta_real(repo, desde, head):
         # consultarlo evita que un delta re-run dependa del repositorio local.
         return (), (), True
     try:
-        proc = repo.run("diff", "--name-only", "-z", desde, head, check=False)
+        proc = repo.diff_sin_renombres("--name-only", "-z", desde, head, check=False)
     except Exception:
         return (), ("delta real no calculable",), False
     if proc.returncode != 0:
@@ -687,51 +696,14 @@ def blobs_de_head(repo, rutas):
     return blobs
 
 
-def delta_real_con_renombres(repo, previous_head, head):
-    """Delta previous_head..head con detección de renombres (D0).
-
-    Devuelve (rutas, renombres, omisiones, calculado): las rutas usan la
-    nueva para renombres (vieja, nueva en ese orden dentro del registro -z)
-    y la vieja para borrados; sin previous_head verificable o sin relación
-    de ancestro el delta no es calculable y queda vacío.
-    """
+def delta_desde_previo(repo, previous_head, head):
     if not previous_head:
-        return (), (), (), False
+        return (), (), False
     if not repo.cat_file_exists(f"{previous_head}^{{commit}}"):
-        return (), (), (), False
+        return (), (), False
     if not repo.is_ancestor(previous_head, head):
-        return (), (), (), False
-    proc = repo.run(
-        "diff", "--name-status", "-z", "-M", previous_head, head, check=False
-    )
-    if proc.returncode != 0:
-        return (), (), ("delta real no calculable",), False
-    rutas, renombres, ilegibles = [], [], 0
-    registros = proc.stdout.split(b"\0")
-    i = 0
-    while i < len(registros) and registros[i]:
-        letra = registros[i][:1]
-        i += 1
-        if letra in (b"R", b"C"):
-            vieja, nueva = registros[i], registros[i + 1]
-            i += 2
-            try:
-                par = (nueva.decode("utf-8"), vieja.decode("utf-8"))
-            except UnicodeDecodeError:
-                ilegibles += 1
-                continue
-            renombres.append(par)
-            rutas.append(par[0])
-            continue
-        try:
-            rutas.append(registros[i].decode("utf-8"))
-        except UnicodeDecodeError:
-            ilegibles += 1
-        i += 1
-    omisiones = ()
-    if ilegibles:
-        omisiones = (f"ruta no representable en el delta: {ilegibles}",)
-    return tuple(rutas), tuple(renombres), omisiones, True
+        return (), (), False
+    return delta_real(repo, previous_head, head)
 
 
 def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
@@ -913,28 +885,23 @@ def prepare_review(
     target = request.target or {}
     head = target.get("head_sha", "")
     base = target.get("base_sha", "")
+    # Un `-diff` en el .gitattributes del propio PR sacaría del diff cualquier archivo.
+    repo = dataclasses.replace(repo, attr_source=base)
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
 
     modo, motivo, previous_head = decidir_modo(
         repo, current, head, base, digest, cobertura_previa
     )
-    delta_rutas, renombres, omis_delta, delta_calculado = delta_real_con_renombres(
+    delta_rutas, omis_delta, delta_calculado = delta_desde_previo(
         repo, previous_head, head
     )
 
-    blobs, revertidas = {}, ()
-    if delta_calculado:
-        revertidas = tuple(
-            ruta
-            for ruta in delta_rutas
-            if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
-        )
-        for nueva, vieja in renombres:
-            for revision, ruta in ((previous_head, vieja), (head, nueva)):
-                sha = repo.blob_at(revision, ruta)
-                if sha:
-                    blobs[(ruta, sha)] = tuple(repo.cat_file_text(sha).splitlines())
+    revertidas = tuple(
+        ruta
+        for ruta in delta_rutas
+        if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
+    )
 
     historicas, ilegibles_alcance = [], 0
     for path in repo.changed_files(merge_base, head):
@@ -970,22 +937,28 @@ def prepare_review(
             hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
     previa = cobertura_previa or {}
-    revision_previa = current.revision if current is not None else None
-    base_movida = bool(
-        revision_previa
-        and revision_previa.base_sha
-        and revision_previa.base_sha != base
-        and previous_head
-    )
+    base_movida = False
     if modo in ("incremental", "continuation"):
+        merge_base_previo = repo.merge_base(
+            current.revision.base_sha or base, previous_head
+        )
+        base_movida = merge_base_previo != merge_base
+        alcance_previo = {
+            path.label()
+            for path in repo.changed_files(merge_base_previo, previous_head)
+        }
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
         # contenido ya lo revisó la pasada que lo acreditó. Sin libro no hay
         # acreditación fina que conservar y el alcance es solo el delta.
+        # Del delta entra lo que el PR cambia en head o cambiaba en
+        # previous_head: así entra una reversión del PR y queda fuera lo que
+        # trae un merge de la base sin que el PR lo haya tocado.
         # Mover la base puede meter en una ruta acreditada un tramo que antes
         # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
-        candidatas = list(delta_rutas)
+        alcance_pr = set(historicas) | alcance_previo
+        candidatas = [ruta for ruta in delta_rutas if ruta in alcance_pr]
         if previa:
             vistas = set(candidatas)
             for ruta in historicas:
@@ -1002,19 +975,15 @@ def prepare_review(
                     if ruta in candidatas or ruta not in previa:
                         continue
                     if repo.diff_bytes(
-                        revision_previa.base_sha, previous_head, ruta
+                        merge_base_previo, previous_head, ruta
                     ) != repo.diff_bytes(merge_base, head, ruta):
                         candidatas.append(ruta)
         elif base_movida:
-            viejas = {
-                path.text
-                for path in repo.changed_files(revision_previa.base_sha, previous_head)
-            }
             for ruta in historicas:
                 if ruta in candidatas:
                     continue
-                if ruta not in viejas or repo.diff_bytes(
-                    revision_previa.base_sha, previous_head, ruta
+                if ruta not in alcance_previo or repo.diff_bytes(
+                    merge_base_previo, previous_head, ruta
                 ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)
         rutas_plan = list(candidatas)
@@ -1045,7 +1014,7 @@ def prepare_review(
         # pasada anterior no vio, el origen es la base actual del PR.
         acreditado = modo != "full" and ruta in delta_set and ruta in previa
         if acreditado and base_movida and repo.diff_bytes(
-            revision_previa.base_sha, previous_head, ruta
+            merge_base_previo, previous_head, ruta
         ) != repo.diff_bytes(merge_base, previous_head, ruta):
             acreditado = False
         origen = previous_head if acreditado else merge_base
@@ -1117,8 +1086,6 @@ def prepare_review(
         changed_paths=tuple(delta_rutas),
         delta_calculado=delta_calculado,
         reverted_paths=revertidas,
-        renames=tuple(renombres),
-        blobs=blobs,
         omissions=tuple(hechos_omisiones),
         historical_paths=tuple(historicas),
     )

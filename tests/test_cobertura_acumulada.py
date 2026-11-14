@@ -472,6 +472,84 @@ class Continuacion(unittest.TestCase):
         por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
         self.assertEqual(por_id["F1"]["state"], "resolved")
 
+    def test_renombre_cuenta_la_ruta_vieja_como_cambio_del_push(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            # Fija el default de git del runner: un diff.renames=false global
+            # en la máquina ocultaría el caso.
+            git(repo, "config", "diff.renames", "true")
+            cuerpo_util = lineas(16, "ayudante")
+            (repo / "util.py").write_text(cuerpo_util)
+            base = commit(repo, "base")
+            (repo / "util.py").write_text(cuerpo_util + "f = eval(x)\n")
+            head1 = commit(repo, "pasada-1")
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            f1 = {
+                "id": "F-new",
+                "file": "util.py",
+                "line": 17,
+                "files": [],
+                "severity": "High",
+                "title": "eval sobre entrada del usuario",
+                "state": "open",
+            }
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=[f1]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            git(repo, "mv", "util.py", "helpers.py")
+            (repo / "helpers.py").write_text(cuerpo_util + "f = int(x)\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+            work2 = Path(tmp, "work2")
+            manifest2 = preparar(repo, work2, base, head2, prev)
+            self.assertEqual(manifest2["mode"], "incremental")
+            self.assertIn("util.py", manifest2["reviewed"])
+            result2 = {
+                "result": texto_pasada(
+                    "complete", hallazgos=[dict(f1, id="F1", state="resolved")]
+                ),
+                "subtype": "success",
+            }
+            cuerpo2 = publicar(
+                work2, head2, manifest2, result2, body=cuerpo1, repo=repo
+            )
+        por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
+        self.assertEqual(por_id["F1"]["state"], "resolved")
+
+    def test_revertir_o_borrar_lo_que_el_pr_cambiaba_entra_al_alcance(self):
+        for claim, unreviewed, modo in (
+            ("complete", None, "incremental"),
+            ("partial", ["b.py"], "continuation"),
+        ):
+            with self.subTest(modo=modo), tempfile.TemporaryDirectory() as tmp:
+                repo, base, _ = Escenario().escenario(tmp)
+                (repo / "nuevo.py").write_text("n2\n")
+                head1 = commit(repo, "pasada-1 con archivo nuevo")
+                work1 = Path(tmp, "work1")
+                manifest1 = preparar(
+                    repo, work1, base, head1, {"sha": None, "state": None}
+                )
+                result1 = {
+                    "result": texto_pasada(claim, unreviewed=unreviewed, hallazgos=[]),
+                    "subtype": "success",
+                }
+                cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+                (repo / "a.py").write_text("a1\n")
+                (repo / "nuevo.py").unlink()
+                head2 = commit(repo, "pasada-2")
+                prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+                work2 = Path(tmp, "work2")
+                manifest2 = preparar(repo, work2, base, head2, prev)
+                parche = (work2 / "diff.patch").read_text().splitlines()
+                self.assertEqual(manifest2["mode"], modo)
+                self.assertIn("a.py", manifest2["reviewed"])
+                self.assertIn("nuevo.py", manifest2["reviewed"])
+                self.assertIn("-a2", parche)
+                self.assertIn("-n2", parche)
+
 
 class FalloCerrado(unittest.TestCase):
     def test_d_parcial_sin_bloque_unreviewed_no_avanza(self):
@@ -548,6 +626,52 @@ class FalloCerrado(unittest.TestCase):
             prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
             manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
         self.assertNotEqual(manifest2["mode"], "continuation")
+
+    def test_unreviewed_con_ruta_fuera_del_alcance_no_acredita_nada(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, base, head1 = Escenario().escenario(tmp)
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            result1 = {
+                "result": texto_pasada("partial", unreviewed=["./c.py"], hallazgos=[]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            _, libro = libro_del(cuerpo1)
+            self.assertEqual(libro, {})
+            prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
+            manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
+        self.assertIn("c.py", manifest2["reviewed"])
+
+    def test_unreviewed_que_nombra_un_excluido_acredita_lo_demas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            for i in range(3):
+                (repo / f"grande{i}.py").write_text(lineas(200, f"g{i}_"))
+            head1 = commit(repo, "pasada-1")
+            work1 = Path(tmp, "work1")
+            with mock.patch.dict(os.environ, {"MAX_DIFF_BYTES_TEST": "6000"}):
+                manifest1 = preparar(
+                    repo, work1, base, head1, {"sha": None, "state": None}
+                )
+                self.assertIn(
+                    {"path": "grande2.py", "reason": "budget"}, manifest1["excluded"]
+                )
+                result1 = {
+                    "result": texto_pasada(
+                        "partial", unreviewed=["grande1.py", "grande2.py"], hallazgos=[]
+                    ),
+                    "subtype": "success",
+                }
+                cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+                prev, _ = pasar_gate(Path(tmp, "gate"), head1, cuerpo1, attempt="2")
+                manifest2 = preparar(repo, Path(tmp, "work2"), base, head1, prev)
+        _, libro = libro_del(cuerpo1)
+        self.assertEqual(sorted(libro), ["grande0.py"])
+        self.assertEqual(manifest2["mode"], "continuation")
+        self.assertEqual(sorted(manifest2["reviewed"]), ["grande1.py", "grande2.py"])
 
     def test_e_complete_con_excluido_por_budget_es_partial_y_no_lo_anota(self):
         with tempfile.TemporaryDirectory() as tmp:

