@@ -349,7 +349,7 @@ class DeltaNuloEnElManifest(unittest.TestCase):
     def test_un_delta_nulo_no_deja_resolver_nada(self):
         self.assertEqual(domain.rutas_de_cambio(self.MANIFEST), ())
 
-    def test_un_delta_nulo_no_tumba_el_comentario(self):
+    def test_un_delta_nulo_se_publica_como_no_verificable(self):
         hallazgo = {
             "id": "F1",
             "file": "a.py",
@@ -371,7 +371,7 @@ class DeltaNuloEnElManifest(unittest.TestCase):
                 "model_ok": True,
             },
         )
-        self.assertIn("incremental desde aaaaaaa (0 archivo(s) cambiaron)", cuerpo)
+        self.assertIn("incremental desde aaaaaaa (delta no verificable)", cuerpo)
 
 
 if __name__ == "__main__":
