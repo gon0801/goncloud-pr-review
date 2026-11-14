@@ -21,6 +21,7 @@ import review_domain
 from review_domain import (
     DISMISSED,
     FINDING_FILES_MAX,
+    FINDING_ID_DIGITS,
     FINDING_ID_RE,
     FINDINGS_MAX_COUNT,
     FINDINGS_PREFIX,
@@ -69,6 +70,7 @@ from review_context import (
     digest_de_politica,
     excluded_by,
     files_matching_base,
+    files_reverted,
     grep_files,
     is_ancestor,
     looks_like_test,
@@ -547,13 +549,16 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
 
 
 DISMISS_TARGETS_RE = re.compile(
-    r"(?:\s*(?:[,;]|\b[yeo]\b|F\d+\b|"
+    r"(?:\s*(?:[,;]|\b[yeo]\b|F"
+    + FINDING_ID_DIGITS
+    + r"\b|"
     + DISMISS_ALL_WORD
     + r"\b(?:\s+lo\s+dem[áa]s\b)?))*",
     re.IGNORECASE,
 )
 DISMISS_FIRST_TOKEN_RE = re.compile(
-    r"\s*(?:F\d+\b|" + DISMISS_ALL_WORD + r"\b)", re.IGNORECASE
+    r"\s*(?:F" + FINDING_ID_DIGITS + r"\b|" + DISMISS_ALL_WORD + r"\b)",
+    re.IGNORECASE,
 )
 
 
@@ -567,7 +572,10 @@ def dismiss_targets(rest):
         return set(), False
     end = DISMISS_TARGETS_RE.match(rest).end()
     lead, tail = rest[:end], rest[end:]
-    ids = {f"F{int(n)}" for n in re.findall(r"\bF(\d+)", lead, re.IGNORECASE)}
+    ids = {
+        f"F{int(n)}"
+        for n in re.findall(rf"\bF({FINDING_ID_DIGITS})", lead, re.IGNORECASE)
+    }
     todo = bool(re.search(r"\btodo\b", lead, re.IGNORECASE)) and not re.match(
         r"\s*\w", tail
     )
@@ -577,7 +585,9 @@ def dismiss_targets(rest):
 def parse_comando_reconcile(body):
     """Dict con acción y argumento del comentario-comando ai-review:, o None."""
     texto = (body or "").strip()
-    m = re.match(r"ai-review:\s*explicar\s+(F\d+)\b", texto, re.IGNORECASE)
+    m = re.match(
+        rf"ai-review:\s*explicar\s+(F{FINDING_ID_DIGITS})\b", texto, re.IGNORECASE
+    )
     if m:
         return {"action": "explicar", "arg": f"F{int(m.group(1)[1:])}"}
     if re.fullmatch(r"ai-review:\s*revisar\s*", texto, re.IGNORECASE):
@@ -1083,10 +1093,14 @@ def compose_with_findings(
     parts += [review, ""]
     scope = scope_lines(result, manifest, provider)
     if manifest.get("mode") == "incremental" and manifest.get("prev_sha"):
+        cambiados = manifest.get("changed_files")
+        delta = (
+            "delta no verificable"
+            if cambiados is None
+            else f"{len(cambiados)} archivo(s) cambiaron"
+        )
         scope.insert(
-            0,
-            f"- Modo: incremental desde {manifest['prev_sha'][:7]} "
-            f"({len(manifest.get('changed_files', []))} archivo(s) cambiaron)",
+            0, f"- Modo: incremental desde {manifest['prev_sha'][:7]} ({delta})"
         )
     parts += [
         ALCANCE_INICIO,
@@ -1424,11 +1438,12 @@ def cmd_prepare(args):
                 "base: la base previa difiere de la solicitada; "
                 "el alcance se acota por la cobertura válida"
             )
-    changed = (
-        changed_since(repo, prev_sha, head)
-        if mode in ("incremental", "continuation") or reason == "incomplete-prev"
-        else []
-    )
+    changed = []
+    if prev_sha and prev_sha != head:
+        try:
+            changed = changed_since(repo, prev_sha, head)
+        except subprocess.CalledProcessError:
+            changed = None
     request = review_domain.WorkRequest(
         id=1,
         kind="review",
@@ -1467,7 +1482,9 @@ def cmd_prepare(args):
         "over_budget_bytes": preparacion.over_budget_bytes,
         "mode": mode,
         "prev_sha": prev_sha,
-        "changed_files": [path.label() for path in changed],
+        "changed_files": (
+            None if changed is None else [path.label() for path in changed]
+        ),
         "reason": reason,
         "has_prev_findings": bool((prev.get("state") or {}).get("findings")),
     }
@@ -2566,8 +2583,12 @@ def actualizar_memoria_valida(
         candidatos = sorted(abiertas & cambiadas)
         if candidatos:
             try:
-                revertidas = files_matching_base(
-                    _repo_actual(), candidatos, manifest["base"], head
+                revertidas = files_reverted(
+                    _repo_actual(),
+                    candidatos,
+                    manifest["base"],
+                    manifest.get("prev_sha"),
+                    head,
                 )
             except Exception:
                 revertidas = set()
@@ -2698,7 +2719,9 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     base, head = manifest.get("base"), manifest.get("head")
     try:
         reverted = (
-            files_matching_base(_repo_actual(), candidates, base, head)
+            files_reverted(
+                _repo_actual(), candidates, base, manifest.get("prev_sha"), head
+            )
             if candidates and base and head
             else set()
         )

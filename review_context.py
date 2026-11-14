@@ -633,6 +633,21 @@ def files_matching_base(repo, paths, base, head):
     return same
 
 
+def files_reverted(repo, paths, base, previous, head):
+    """Files the PR changed at `previous` and no longer changes at `head`."""
+    if not previous:
+        return set()
+    changed_before = [
+        path
+        for path in paths
+        if repo.run(
+            "diff", "--quiet", f"{base}...{previous}", "--", path, check=False
+        ).returncode
+        == 1
+    ]
+    return files_matching_base(repo, changed_before, base, head)
+
+
 def delta_real(repo, desde, head):
     """Delta real desde..head: (rutas decodificables, omisiones, calculado)."""
     if desde == head:
