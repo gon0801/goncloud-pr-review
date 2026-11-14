@@ -2607,6 +2607,8 @@ def procesar_comandos(current, comandos, permisos, target):
             rechazos.append((cid, "editado antes de la admisión; comenta de nuevo"))
             snapshot = _consumido(snapshot, cid, rechazos[-1][1])
             continue
+        if comando.get("extra"):
+            rechazos.append((cid, RECHAZO_COMANDO_EXTRA))
         action, arg = comando["action"], comando["arg"]
         if action == ACCION_NO_ENTENDIDA:
             rechazos.append((cid, RECHAZO_NO_ENTENDIDO))
@@ -2687,6 +2689,4 @@ def procesar_comandos(current, comandos, permisos, target):
             work = [w for w in work if w.kind != "review"]
             snapshot = _consumido(snapshot, cid, f"solicitud de revisión {nueva.id}")
             work.append(nueva)
-        if comando.get("extra"):
-            rechazos.append((cid, RECHAZO_COMANDO_EXTRA))
     return snapshot, tuple(work), tuple(rechazos)

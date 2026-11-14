@@ -1321,7 +1321,7 @@ def aviso_de_hallazgo_inexistente(cid):
 def aviso_de_comando_extra(cid):
     return (
         f"{aviso_md('Comando no aplicado', '')}el comentario {cid} trae más de un "
-        "comando; solo se aplicó el primero. Escribe cada comando en su propio "
+        "comando; solo se lee el primero. Escribe cada comando en su propio "
         "comentario."
     )
 
