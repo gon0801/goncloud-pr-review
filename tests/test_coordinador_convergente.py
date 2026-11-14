@@ -146,7 +146,9 @@ def resultado(rid, head, titulos=(), run_id=900):
         "base_sha": BASE,
         "policy_digest": DIGEST,
         "finding_identity": "current",
-        "result": f"Revisión.\n<!-- ai-review:findings={bloque} -->\nCOVERAGE: complete",
+        "result": (
+            f"Revisión.\n<!-- ai-review:findings={bloque} -->\nCOVERAGE: complete"
+        ),
         "observaciones": [],
         "cobertura": domain.COMPLETE_CLAIM,
         "model_ok": True,
@@ -285,7 +287,9 @@ class ComandosEnCualquierEvento(unittest.TestCase):
         rid = github.estado().pending_requests[0].id
         github.head = B
         github.worker(rid, resultado(rid, B, ["Fuga 1", "Inyección SQL nueva"]))
-        codigo, _, _ = correr(github, "workflow_dispatch", permiso=sin_respuesta, aviso=(900, 1))
+        codigo, _, _ = correr(
+            github, "workflow_dispatch", permiso=sin_respuesta, aviso=(900, 1)
+        )
         self.assertEqual(codigo, 0)
         self.assertEqual(estados(github), {"F1": "StatusOpen", "F2": "StatusOpen"})
 
@@ -301,6 +305,78 @@ class ComandosEnCualquierEvento(unittest.TestCase):
         github.comentar(31, "ai-review: descartar F2")
         correr(github, "issue_comment")
         self.assertIn(aviso, github.sticky(), "el aviso sobrevive al re-render")
+
+
+def revisiones(despachos):
+    return [(d["kind"], d["head_sha"]) for d in despachos]
+
+
+class AdmisionDelHeadVivo(unittest.TestCase):
+    def test_un_push_perdido_lo_admite_el_siguiente_comentario(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))], head=B)
+        github.comentar(20, "ai-review: descartar F1")
+        codigo, despachos, _ = correr(github, "issue_comment")
+        self.assertEqual(codigo, 0)
+        self.assertEqual(revisiones(despachos), [("review", B)])
+        _, otra_vez, _ = correr(github, "issue_comment")
+        self.assertEqual(otra_vez, [], "la solicitud de B ya está pendiente")
+
+    def test_repetir_un_push_o_reabrir_un_head_revisado_no_despacha_otra_vez(self):
+        github = GitHubFalso()
+        _, primero, _ = correr(github, "pull_request_target")
+        _, repetido, _ = correr(github, "pull_request_target")
+        self.assertEqual(revisiones(primero + repetido), [("review", A)])
+        ya_revisado = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        _, reabierto, _ = correr(ya_revisado, "pull_request_target")
+        self.assertEqual(reabierto, [])
+        self.assertEqual(ya_revisado.escrituras, 0)
+
+    def test_un_comentario_no_admite_borradores_cerrados_ni_forks(self):
+        casos = {
+            "borrador": GitHubFalso(draft=True),
+            "cerrado": GitHubFalso(abierto=False),
+            "fork": GitHubFalso(),
+        }
+        casos["fork"].repo_del_head = "otro/r"
+        for nombre, github in casos.items():
+            with self.subTest(pr=nombre):
+                github.comentar(20, "ai-review: descartar F1")
+                codigo, despachos, _ = correr(github, "issue_comment")
+                self.assertEqual((codigo, despachos, github.creados), (0, [], 0))
+
+    def test_revisar_reemplaza_la_revision_pendiente(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.comentar(20, "ai-review: revisar")
+        _, despachos, _ = correr(github, "issue_comment")
+        pendientes = github.estado().pending_requests
+        self.assertEqual([(r.id, r.origin) for r in pendientes], [(2, "comando")])
+        self.assertEqual([d["request_id"] for d in despachos], ["2"])
+
+    def test_un_resultado_vencido_no_se_acredita_y_se_admite_el_head_vivo(self):
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.head = B
+        github.worker(1, resultado(1, A, ["Fuga vieja"]))
+        codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(900, 1))
+        self.assertEqual(codigo, 0)
+        self.assertIsNone(github.estado().revision)
+        self.assertEqual(revisiones(despachos), [("review", B)])
+
+    def test_una_explicacion_vencida_no_vuelve_a_despachar_la_revision(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1)]))])
+        github.comentar(20, "ai-review: explicar F1")
+        correr(github, "issue_comment")
+        correr(github, "pull_request_target", head=B)
+        github.head = B
+        explicacion = resultado(1, A, run_id=901)
+        github.worker(1, dict(explicacion, kind="explain", finding_id="F1"), run_id=901)
+        codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(901, 1))
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(
+            [(r.kind, r.state) for r in github.estado().pending_requests],
+            [("review", "pending")],
+        )
 
 
 if __name__ == "__main__":
