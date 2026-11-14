@@ -3724,8 +3724,6 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
 
 
 def evento_de_entrega(entrega, facts, estado):
-    """El evento del dominio que deja una entrega, con los hechos con los que
-    se acepta."""
     run_id, attempt = entrega.meta["run_id"], entrega.meta["attempt"]
     if entrega.artifact is None:
         motivo = (
@@ -3763,7 +3761,7 @@ def evento_de_entrega(entrega, facts, estado):
 
 
 def forma_del_run(datos):
-    """Un run (API o payload de workflow_run) en la forma que autentica el
+    """Un run de la lista de runs del worker en la forma que autentica el
     coordinador. Con run-name, "name" trae el título del run; el workflow sale
     del path, que el título no puede imitar."""
     ruta = datos.get("path") or ""
@@ -3832,9 +3830,9 @@ def _ultimo_comentario(adaptador):
 
 
 def cmd_reconcile(args):
-    """Un run converge el PR sin importar qué evento lo despertó: primero los
-    comandos sin procesar (el cursor los hace idempotentes), después lo que
-    trae el evento y al final una sola escritura."""
+    """Un run converge el PR sin importar qué evento lo despertó: los comandos
+    sin procesar (el cursor los hace idempotentes), los resultados que el
+    worker ya dejó, la admisión del head y al final una sola escritura."""
     repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
