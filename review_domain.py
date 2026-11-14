@@ -455,8 +455,9 @@ _FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
 
 
 def _tramos_cercados(text):
-    """(inicio, fin) de cada bloque de código cercado; uno sin cerrar llega al
-    final, como lo muestra GitHub."""
+    """(inicio, fin) de cada bloque de código cercado. Uno sin cerrar no
+    cuenta: dejaría dentro el bloque real que va después, también el que
+    rearma la reparación tras la prosa."""
     tramos, abierto, pos = [], None, 0
     for linea in text.split("\n"):
         valla = _FENCE_RE.match(linea)
@@ -468,8 +469,6 @@ def _tramos_cercados(text):
             tramos.append((abierto[0], pos + len(linea)))
             abierto = None
         pos += len(linea) + 1
-    if abierto is not None:
-        tramos.append((abierto[0], len(text)))
     return tramos
 
 
