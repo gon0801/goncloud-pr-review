@@ -2233,16 +2233,6 @@ class RequestReview:
 
 
 @dataclass(frozen=True)
-class AuthorizedCommand:
-    """Comando ya autorizado (permiso verificado en el adaptador, T09)."""
-
-    origin: Origin
-    target: ReviewTarget
-    action: str
-    finding_id: str | None = None
-
-
-@dataclass(frozen=True)
 class ReportReady:
     """Resultado de un worker: sólo satisface una solicitud no finalizada."""
 
@@ -2288,15 +2278,10 @@ def _podar(current):
 
 def _solicitud_nueva(evento, current):
     rid = current.request_count + 1
-    kind = (
-        "explain"
-        if isinstance(evento, AuthorizedCommand) and evento.action == "explicar"
-        else "review"
-    )
     return WorkRequest(
         id=rid,
-        kind=kind,
-        finding_id=getattr(evento, "finding_id", None),
+        kind="review",
+        finding_id=None,
         origin=evento.origin.kind,
         basis_generation=current.generation,
         state="pending",
@@ -2346,18 +2331,6 @@ def _reconcile_revision(current, evento):
     snapshot = replace(
         current,
         pending_requests=[*_podar(current), nueva],
-        request_count=current.request_count + 1,
-    )
-    return Commit(snapshot=snapshot, work_after_commit=(nueva,))
-
-
-def _reconcile_comando(current, evento):
-    if evento.action != "explicar":
-        return _reconcile_revision(current, evento)
-    nueva = _solicitud_nueva(evento, current)
-    snapshot = replace(
-        current,
-        pending_requests=[*current.pending_requests, nueva],
         request_count=current.request_count + 1,
     )
     return Commit(snapshot=snapshot, work_after_commit=(nueva,))
@@ -2476,15 +2449,13 @@ def reconcile(current, event, facts, policy):
     """Decisión persistible para cualquier evento del coordinador (U0).
 
     RequestReview agrupa las automáticas repetidas y siempre crea las
-    explícitas; AuthorizedCommand crea una solicitud nueva; ReportReady sólo
-    satisface una solicitud no finalizada y vigente (acepta sobre el snapshot
-    actual con la aceptación del dominio y compacta la solicitud); ReportFailed
+    explícitas; ReportReady sólo satisface una solicitud no finalizada y
+    vigente (acepta sobre el snapshot actual con la aceptación del dominio y
+    compacta la solicitud); ReportFailed
     marca reintento o cierra con motivo. El dominio nunca despacha trabajo.
     """
     if isinstance(event, RequestReview):
         return _reconcile_revision(current, event)
-    if isinstance(event, AuthorizedCommand):
-        return _reconcile_comando(current, event)
     if isinstance(event, ReportReady):
         return _reconcile_resultado(current, event, facts, policy)
     if isinstance(event, ReportFailed):
