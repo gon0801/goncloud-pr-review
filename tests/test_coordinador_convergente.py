@@ -547,6 +547,20 @@ class CosechaDeResultados(unittest.TestCase):
         )
         self.assertNotIn("No se pudo revisar", github.visible())
 
+    def test_una_revision_fallida_sin_run_en_la_lista_no_se_vuelve_a_despachar(self):
+        # Su run salió de la lista: más de 100 runs nuevos, o el run-name viejo
+        # de antes de actualizar las plantillas. Despacharla gastaría una
+        # corrida del modelo en cada evento.
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.worker(1)
+        correr(github, "workflow_dispatch", aviso=(900, 1))
+        github.corridas = []
+        escrituras = github.escrituras
+        for _ in range(3):
+            codigo, despachos, _ = correr(github, "issue_comment")
+            self.assertEqual((codigo, despachos, github.escrituras), (0, [], escrituras))
+
     def test_el_run_avisado_ya_termino_aunque_su_job_de_aviso_siga_en_curso(self):
         sin_aviso = GitHubFalso()
         correr(sin_aviso, "pull_request_target")

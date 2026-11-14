@@ -52,12 +52,13 @@ cambió durante la instalación reintenta sobre la punta nueva sin forzar.
 
 En el modo coordinado, un push nuevo cancela la revisión que el worker seguía
 corriendo para el head anterior del mismo PR; las explicaciones
-(`ai-review: explicar F1`) no se cancelan. No relances a mano ("Re-run")
-ningún run viejo del worker de revisión, cancelado o terminado: entra al grupo
-del PR, cancela la revisión que esté corriendo y el siguiente evento del PR la
-marca como fallida. Para repetir la revisión del mismo commit, comenta
-`ai-review: revisar`; reabrir el PR o marcarlo listo no re-revisa un commit ya
-revisado.
+(`ai-review: explicar F1`) no se cancelan. No relances a mano ("Re-run") un
+run viejo del worker de una revisión ya reemplazada: entra al grupo del PR,
+cancela la revisión que esté corriendo y el siguiente evento del PR la marca
+como fallida. Relanzar el run que falló de la revisión más reciente sí sirve:
+si sale bien, su resultado se publica aunque su aviso se pierda. Para repetir
+la revisión del mismo commit, comenta `ai-review: revisar`; reabrir el PR o
+marcarlo listo no re-revisa un commit ya revisado.
 
 Cada run del coordinador deja el PR completo al día, sin importar qué lo
 despertó (un push, un comentario `ai-review:` o el aviso del worker): aplica

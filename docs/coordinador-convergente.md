@@ -48,6 +48,8 @@ Datos:
   repetido (reabrir, marcar listo, "Re-run jobs" del coordinador),
   `ai-review: revisar` y la recuperación manual. Un comentario o el aviso del
   worker no la reintentan: el aviso de un worker que falla haría un ciclo.
+  Un "Re-run jobs" del worker que falló no crea solicitud: si sale bien, la
+  cosecha recoge su artifact aunque el aviso se pierda.
 - `Entrega(solicitud, meta, conclusion, artifact, autenticado)`: lo que dejó
   el run más nuevo y confiable de cada solicitud, leído de la lista de runs del
   worker. `artifact` y `autenticado` quedan vacíos si el run terminó sin subir
@@ -61,12 +63,14 @@ Orden de un run del coordinador (`cmd_reconcile`):
    con abierto, borrador y repo del head.
 2. Comandos: `procesar_comandos` sobre todos los comentarios sin procesar
    (el cursor lo hace idempotente), en cualquier evento.
-3. Cosecha: para cada solicitud `pending` (y la del run avisado) busca su
+3. Cosecha: para cada solicitud viva, pendiente o fallida, busca su
    corrida. Con artifact del attempt vigente lo baja, lo autentica igual que
    hoy y lo acepta. Terminada sin artifact (o el run avisado, cuyo `avisar`
    corre después de `execute`): `ReportFailed` reintentable con motivo, que se
-   ve como el aviso de fallo de siempre. En curso: espera. Sin corrida: se
-   despacha otra vez. Un
+   ve como el aviso de fallo de siempre. De una fallida solo cuenta un
+   artifact: volver a reportar su fallo pintaría el aviso encima de la
+   revisión que la reemplaza. En curso: espera. Sin corrida: una pendiente se
+   despacha otra vez y una fallida no. Un
    run no confiable (otro workflow, otra rama, SHA fuera de main) o un
    artifact que no autentica no cambia el estado y deja el run del
    coordinador en rojo, como hoy.

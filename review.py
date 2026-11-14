@@ -3813,8 +3813,10 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
     su run más nuevo y confiable: con artifact del attempt vigente, o
     terminado sin él (el avisado ya terminó su execute aunque su job de aviso
     siga en curso); si sigue en curso, espera. Una pendiente sin ningún run
-    perdió su despacho. De una fallida solo cuenta un artifact: lo deja un
-    "Re-run jobs" del worker, y el fallo ya está registrado.
+    perdió su despacho; una fallida sin run no se despacha, porque reintentar
+    es cosa de un push, de `revisar` o de la recuperación. De una fallida
+    solo cuenta un artifact, el de un "Re-run jobs" exitoso del worker:
+    volver a reportar su fallo pintaría el aviso encima de la revisión nueva.
     Devuelve (entregas, sin_corrida, hubo_rechazo)."""
     vivas = {r.id: r for r in estado.pending_requests if r.state != "finished"}
     if avisado is None and not vivas:
@@ -4447,7 +4449,8 @@ AVISO_EN_CURSO_PREFIX = aviso_md("Revisión en curso", "")
 AVISO_SIN_REVISION_PREFIX = aviso_md("Sin revisión publicada", "")
 LINEA_SIN_REVISION = (
     f"{AVISO_SIN_REVISION_PREFIX}este PR no tiene una revisión pendiente ni "
-    "publicada; el próximo push o `ai-review: revisar` pide una."
+    "publicada; la pide `ai-review: revisar`, o un push cuando el PR está "
+    "abierto y listo para revisión."
 )
 
 
