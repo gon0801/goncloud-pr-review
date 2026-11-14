@@ -2070,6 +2070,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         )
         return
     prosa, bloque, cobertura = partes_de_respuesta(texto)
+    texto_rep = ""
     if bloque is not None and cobertura is not None:
         print(
             "ai-review: la revisión trae su bloque y su COVERAGE fuera de lugar; "
@@ -2126,7 +2127,10 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     if bloque is not None and cobertura is not None:
         estado, detalle = cobertura
         declaraciones = [
-            ln for ln in texto.splitlines() if ln.startswith(UNREVIEWED_PREFIX)
+            ln
+            for fuente in (texto, texto_rep)
+            for ln in fuente.splitlines()
+            if ln.startswith(UNREVIEWED_PREFIX)
         ]
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
