@@ -3001,11 +3001,14 @@ def _resto_de(cuerpo):
     ).strip()
 
 
-def encadenar(primero, segundo):
-    """Dos re-renders en orden: segundo parte del cuerpo que armó primero."""
+def encadenar(*pasos):
+    """Re-renders en orden: cada uno parte del cuerpo que armó el anterior."""
 
     def armar(bloque, resto):
-        return segundo(bloque, _resto_de(primero(bloque, resto)))
+        cuerpo = pasos[0](bloque, resto)
+        for paso in pasos[1:]:
+            cuerpo = paso(bloque, _resto_de(cuerpo))
+        return cuerpo
 
     return armar
 
@@ -3975,7 +3978,7 @@ def cmd_reconcile(args):
     por_despachar = {w.id for w in trabajo}
     trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
     previo = estado
-    revision_entregada = explicacion = None
+    revision_entregada, explicaciones = None, []
     for entrega in entregas:
         evento, hechos = evento_de_entrega(entrega, facts, estado)
         decision = review_domain.reconcile(estado, evento, hechos, policy)
@@ -3992,7 +3995,9 @@ def cmd_reconcile(args):
                     solicitud.target.get("head_sha") or head,
                 )
             elif artifact is not None and ERROR_KEY not in artifact:
-                explicacion = (solicitud.finding_id, texto_de_explicacion(artifact))
+                explicaciones.append(
+                    (solicitud.finding_id, texto_de_explicacion(artifact))
+                )
         estado = decision.snapshot
         trabajo = (*trabajo, *decision.work_after_commit)
     estado = review_domain.marcar_hallazgos_nuevos(
@@ -4021,11 +4026,14 @@ def cmd_reconcile(args):
             sys.exit(1)
         return
 
-    visible = estado_visible(estado, explicacion, avisos)
+    # Varias explicaciones pueden llegar en la misma cosecha: una por re-render.
+    pasos = [estado_visible(estado, e) for e in explicaciones[:-1]]
+    pasos.append(estado_visible(estado, (explicaciones or [None])[-1], avisos))
     if revision_entregada is not None:
         artifact, previos, cabeza = revision_entregada
         revision = revision_visible(artifact, estado, previos, cabeza)
-        visible = encadenar(revision, visible) if avisos or explicacion else revision
+        pasos = [revision, *pasos] if avisos or explicaciones else [revision]
+    visible = encadenar(*pasos)
     resultado = publish_checkpoint(
         review_domain.Commit(snapshot=estado, work_after_commit=trabajo),
         sticky or None,
