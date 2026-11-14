@@ -70,7 +70,6 @@ def preparar(repo, work, base, head, previo):
 
 
 def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
-    """cmd_publish del modo directo con el repo bajo revisión como checkout."""
     (work / "result.json").write_text(json.dumps({"result": texto}))
     comentarios = (
         [{"id": 1, "user": BOT, "body": cuerpo_previo}] if cuerpo_previo else []
@@ -165,7 +164,6 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
 
 
 def coordinador_revisa(repo, work, actual, base, head, texto):
-    """Push al coordinador, prepare del worker y aceptación del resultado."""
     policy = review.politica_de_revision()
     digest = review.digest_de_politica(policy)
     facts = domain.RepositoryFacts(

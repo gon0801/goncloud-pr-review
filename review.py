@@ -1434,9 +1434,6 @@ def cmd_prepare(args):
                 "base: la base previa difiere de la solicitada; "
                 "el alcance se acota por la cobertura válida"
             )
-    # El delta prev_sha..head en todo modo: tras un force-push el coordinador
-    # lo necesita para acreditar resueltos y reaperturas. None si Git ya no
-    # tiene prev_sha.
     changed = []
     if prev_sha and prev_sha != head:
         try:
@@ -3462,9 +3459,8 @@ def hechos_con_delta_del_worker(facts, artifact, current):
     desde = manifest.get("prev_sha")
     cambiados = manifest.get("changed_files")
     esperado = current.revision.head_sha if current.revision else None
-    if cambiados is None and _sha_hexa(desde) and desde == esperado:
-        # El worker no pudo diferenciar contra prev_sha: decide el alcance
-        # revisado, como en la ruta directa.
+    worker_sin_delta = cambiados is None
+    if worker_sin_delta and _sha_hexa(desde) and desde == esperado:
         cambiados = list(review_domain.rutas_de_cambio(manifest))
     if (
         _sha_hexa(desde)

@@ -634,11 +634,7 @@ def files_matching_base(repo, paths, base, head):
 
 
 def files_reverted(repo, paths, base, previous, head):
-    """Files the PR changed at `previous` and no longer changes at `head`.
-
-    A file the PR never touched also matches the base at head once a merge
-    brings in the base branch's version of it; that is not a revert.
-    """
+    """Files the PR changed at `previous` and no longer changes at `head`."""
     if not previous:
         return set()
     changed_before = [

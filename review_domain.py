@@ -212,8 +212,6 @@ class Receipt:
     effect: str
 
 
-# Nadie relee los recibos para decidir: la idempotencia de comandos la da
-# command_cursor. Sin tope, cualquiera que comente llenaba el presupuesto.
 RECIBOS_MAX = 20
 
 
