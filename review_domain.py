@@ -451,7 +451,9 @@ def leer_cierre(texto) -> Cierre:
     dentro de un fence final no declara) y unreviewed, la última no vacía
     antes de ella. Vale solo la línea unreviewed en columna 0, única con el
     prefijo en todo el texto y con JSON de lista de rutas: cualquier desvío
-    (imitaciones incluidas) anula la declaración."""
+    (imitaciones incluidas) anula la declaración. Una declaración fuera de
+    lugar dice que el modelo no leyó algo: no es complete y, sin autenticación,
+    no acredita archivos."""
     lines = (texto or "").rstrip().splitlines()
     line = lines[-1].strip().strip("`*") if lines else ""
     if line.upper().startswith("COVERAGE:"):
@@ -463,12 +465,16 @@ def leer_cierre(texto) -> Cierre:
             rutas = rutas_declaradas(declaracion) if declaracion else None
             if declaracion and rutas != set():
                 status = "partial"  # declaró archivos sin leer: no es complete
-            prosa = "\n".join(lines[:-1]).rstrip()
-            unica = sum(
+            declaraciones = sum(
                 ln.startswith(UNREVIEWED_PREFIX) for ln in (texto or "").splitlines()
-            ) == 1
+            )
+            if status == "complete" and declaraciones > bool(declaracion):
+                status = "partial"
+            prosa = "\n".join(lines[:-1]).rstrip()
             sin_revisar = (
-                frozenset(rutas) if declaracion and unica and rutas is not None else None
+                frozenset(rutas)
+                if declaracion and declaraciones == 1 and rutas is not None
+                else None
             )
             return Cierre(prosa, status, detail.strip(), sin_revisar)
     return Cierre((texto or "").rstrip(), None, "", None)
