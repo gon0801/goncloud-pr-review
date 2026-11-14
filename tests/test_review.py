@@ -1377,6 +1377,14 @@ class RunAgent(unittest.TestCase):
                 ("partial", "no leí b.py"),
                 ["División por cero"],
             ),
+            "bloque con sangría en su propia línea": (
+                f"Dos problemas.\n\n  {dos}\nCOVERAGE: partial | sin b.py"
+                "\n\nEspero que sirva.",
+                reparacion_completa,
+                1,
+                ("partial", "sin b.py"),
+                ambos,
+            ),
             "parcial sin bloque": (
                 "División por cero en calc.py:3.\n\nCOVERAGE: partial | no leí b.py",
                 f"{self.BLOQUE}\nCOVERAGE: complete",
