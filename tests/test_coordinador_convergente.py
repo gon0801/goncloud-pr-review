@@ -522,6 +522,25 @@ class CosechaDeResultados(unittest.TestCase):
         self.assertEqual(github.estado().pending_requests, [])
         self.assertIn("La fuga sale de no cerrar el archivo.", github.visible())
 
+    def test_dos_explicaciones_cosechadas_en_el_mismo_run_se_publican_las_dos(self):
+        github = GitHubFalso([sticky_con(revisado(A, [hallazgo(1), hallazgo(2)]))])
+        github.comentar(20, "ai-review: explicar F1")
+        github.comentar(21, "ai-review: explicar F2")
+        correr(github, "issue_comment")
+        for rid, texto in ((1, "No se cierra el archivo."), (2, "Falta el timeout.")):
+            explicacion = dict(
+                resultado(rid, A, run_id=900 + rid),
+                kind="explain",
+                finding_id=f"F{rid}",
+                result=f"{texto}\nCOVERAGE: complete",
+            )
+            github.worker(rid, explicacion, run_id=900 + rid)
+        codigo, despachos, _ = correr(github, "pull_request_target")
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(github.estado().pending_requests, [])
+        self.assertIn("No se cierra el archivo.", github.visible())
+        self.assertIn("Falta el timeout.", github.visible())
+
     def test_corridas_ajenas_no_se_cosechan(self):
         github = GitHubFalso()
         correr(github, "pull_request_target")
