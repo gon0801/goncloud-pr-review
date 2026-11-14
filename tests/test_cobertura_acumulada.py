@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+
+import review_sticky
 import review_run
 import review_domain as domain  # noqa: E402
 
@@ -714,9 +716,9 @@ class FalloCerrado(unittest.TestCase):
             head1 = commit(repo, "pasada-siguiente")
             bloque = review.serialize_findings({"findings": [], "next": 1})
             cabecera = (
-                f"{review.MARKER}\n"
-                f"{review.SHA_PREFIX}{prev} -->\n"
-                f"{review.COMPLETION_PREFIX}{prev}:partial -->\n"
+                f"{review_sticky.MARKER}\n"
+                f"{review_sticky.SHA_PREFIX}{prev} -->\n"
+                f"{review_sticky.COMPLETION_PREFIX}{prev}:partial -->\n"
             )
             cuerpo_sin_libro = cabecera + bloque + "\n### Revisión"
             libro_otro = json.dumps({"a.py": "0" * 40}, separators=(",", ":"))
@@ -732,7 +734,7 @@ class FalloCerrado(unittest.TestCase):
             )
             for i, cuerpo in enumerate((cuerpo_sin_libro, cuerpo_libro_ajeno)):
                 with self.subTest(caso=i):
-                    self.assertEqual(review.libro_de(cuerpo), (None, None))
+                    self.assertEqual(review_sticky.libro_de(cuerpo), (None, None))
                     gate = pasar_gate(Path(tmp, f"gate{i}"), head1, cuerpo)[0]
                     self.assertIsNone(gate.get("covered"))
                     manifest = preparar(repo, Path(tmp, f"work{i}"), base, head1, gate)
@@ -753,32 +755,32 @@ class FormatoDelLibro(unittest.TestCase):
             "ñandú/cómo-->.py": "2" * 40,
             "con\nsalto.py": "3" * 40,
         }
-        linea = review.libro_a_linea("a" * 40, libro)
+        linea = review_sticky.libro_a_linea("a" * 40, libro)
         self.assertTrue(linea.startswith(COVERED))
         self.assertTrue(linea.endswith(" -->"))
         self.assertEqual(linea.count("-->"), 1, "solo el cierre del comentario")
         self.assertEqual(linea.count("<!--"), 1)
-        cabeza, leido = review.libro_de_linea(linea)
+        cabeza, leido = review_sticky.libro_de_linea(linea)
         self.assertEqual(cabeza, "a" * 40)
         self.assertEqual(leido, libro)
 
     def test_j_el_libro_no_rompe_los_marcadores_del_sticky(self):
         libro = {"a-->b.py": "1" * 40, "ñ.py": "2" * 40}
-        linea = review.libro_a_linea("a" * 40, libro)
+        linea = review_sticky.libro_a_linea("a" * 40, libro)
         cuerpo = "\n".join(
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{'a' * 40} -->",
-                f"{review.COMPLETION_PREFIX}{'a' * 40}:partial -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{'a' * 40} -->",
+                f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:partial -->",
                 linea,
                 review.serialize_findings({"findings": [], "next": 1}),
                 "### Revisión automática",
                 "texto\nCOVERAGE: partial",
             ]
         )
-        self.assertEqual(review.reviewed_completion(cuerpo), "partial")
-        self.assertEqual(review.reviewed_sha(cuerpo), "a" * 40)
-        self.assertEqual(review.libro_de(cuerpo), ("a" * 40, libro))
+        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "partial")
+        self.assertEqual(review_sticky.reviewed_sha(cuerpo), "a" * 40)
+        self.assertEqual(review_sticky.libro_de(cuerpo), ("a" * 40, libro))
 
     def test_libro_de_rechaza_entradas_invalidas(self):
         sha = "a" * 40
@@ -792,18 +794,18 @@ class FormatoDelLibro(unittest.TestCase):
             with self.subTest(linea=linea[:40]):
                 cuerpo = "\n".join(
                     [
-                        review.MARKER,
-                        f"{review.SHA_PREFIX}{sha} -->",
-                        f"{review.COMPLETION_PREFIX}{sha}:partial -->",
+                        review_sticky.MARKER,
+                        f"{review_sticky.SHA_PREFIX}{sha} -->",
+                        f"{review_sticky.COMPLETION_PREFIX}{sha}:partial -->",
                         linea,
                         "### Revisión",
                     ]
                 )
-                self.assertEqual(review.libro_de(cuerpo), (None, None))
+                self.assertEqual(review_sticky.libro_de(cuerpo), (None, None))
 
     def test_libro_con_mas_entradas_que_el_tope_no_hay_libro(self):
         libro = {f"r{i}.py": "1" * 40 for i in range(401)}
-        self.assertIsNone(review.libro_a_linea("a" * 40, libro))
+        self.assertIsNone(review_sticky.libro_a_linea("a" * 40, libro))
 
 
 class Unreviewed(unittest.TestCase):
@@ -811,15 +813,15 @@ class Unreviewed(unittest.TestCase):
         texto = (
             "prosa\n" + UNREVIEWED + '["c.py", "d/x.py"] -->\nCOVERAGE: partial | algo'
         )
-        self.assertEqual(review.unreviewed_de(texto), {"c.py", "d/x.py"})
+        self.assertEqual(review_sticky.unreviewed_de(texto), {"c.py", "d/x.py"})
 
     def test_falta_o_mal_formado_da_none(self):
-        self.assertIsNone(review.unreviewed_de("prosa\nCOVERAGE: partial"))
+        self.assertIsNone(review_sticky.unreviewed_de("prosa\nCOVERAGE: partial"))
         self.assertIsNone(
-            review.unreviewed_de("x\n" + UNREVIEWED + '["c" -->\nCOVERAGE: partial')
+            review_sticky.unreviewed_de("x\n" + UNREVIEWED + '["c" -->\nCOVERAGE: partial')
         )
         self.assertIsNone(
-            review.unreviewed_de(UNREVIEWED + '{"a": 1} -->\nCOVERAGE: partial')
+            review_sticky.unreviewed_de(UNREVIEWED + '{"a": 1} -->\nCOVERAGE: partial')
         )
 
     def test_imitacion_en_prosa_no_gana_al_bloque_real(self):
@@ -830,7 +832,7 @@ class Unreviewed(unittest.TestCase):
             + UNREVIEWED
             + '["real.py"] -->\nCOVERAGE: partial'
         )
-        self.assertEqual(review.unreviewed_de(texto), {"real.py"})
+        self.assertEqual(review_sticky.unreviewed_de(texto), {"real.py"})
 
     def test_f2_imitacion_en_bloque_de_codigo_anula_la_declaracion(self):
         """F2: con más de un bloque en línea propia no hay declaración
@@ -847,11 +849,11 @@ class Unreviewed(unittest.TestCase):
             + UNREVIEWED
             + "[] -->\n```\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review.unreviewed_de(texto))
+        self.assertIsNone(review_sticky.unreviewed_de(texto))
         texto_dos = (
             "v\n" + real + "\n" + UNREVIEWED + "[] -->\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review.unreviewed_de(texto_dos))
+        self.assertIsNone(review_sticky.unreviewed_de(texto_dos))
 
     def test_f2_bloque_fuera_de_posicion_no_declara(self):
         bloque = UNREVIEWED + '["c.py"] -->'
@@ -860,8 +862,8 @@ class Unreviewed(unittest.TestCase):
             + bloque
             + "\nprosa que se interpone\nCOVERAGE: partial | faltó c.py"
         )
-        self.assertIsNone(review.unreviewed_de(texto))
-        self.assertIsNone(review.unreviewed_de("solo prosa\n" + bloque))
+        self.assertIsNone(review_sticky.unreviewed_de(texto))
+        self.assertIsNone(review_sticky.unreviewed_de("solo prosa\n" + bloque))
 
 
 class PresupuestoContinuacion(unittest.TestCase):
@@ -1057,9 +1059,9 @@ def bloque_v3(completion=domain.PARTIAL):
 
 def sticky_v3(head, completion, libro, bloque):
     cabecera = (
-        f"{review.MARKER}\n"
-        f"{review.SHA_PREFIX}{head} -->\n"
-        f"{review.COMPLETION_PREFIX}{head}:{completion} -->\n"
+        f"{review_sticky.MARKER}\n"
+        f"{review_sticky.SHA_PREFIX}{head} -->\n"
+        f"{review_sticky.COMPLETION_PREFIX}{head}:{completion} -->\n"
     )
     linea_libro = ""
     if libro is not None:
@@ -1170,7 +1172,7 @@ class LecturaDeLaRespuesta(unittest.TestCase):
             result = {"result": texto, "subtype": "success"}
             cuerpo = publicar(work, head1, manifest, result, repo=repo)
         libro = (libro_del(cuerpo) or (None, {}))[1]
-        return cuerpo, review.reviewed_completion(cuerpo), sorted(libro)
+        return cuerpo, review_sticky.reviewed_completion(cuerpo), sorted(libro)
 
     def test_una_cita_del_bloque_tras_el_real_no_vacia_los_hallazgos(self):
         hallazgo = {

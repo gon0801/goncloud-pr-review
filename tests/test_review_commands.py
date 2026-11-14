@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_config
 import review_domain as domain  # noqa: E402
 
@@ -481,7 +482,7 @@ class CoordinadorComandos(unittest.TestCase):
             command_cursor=0,
         )
         falso = self._falso(
-            f"{review.MARKER}\n{domain.encode_snapshot(estado)}",
+            f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}",
             [(5, "ai-review: descartar F1")],
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,7 +511,7 @@ class CoordinadorComandos(unittest.TestCase):
 
             # edited/deleted no admite comandos
             falso2 = self._falso(
-                f"{review.MARKER}\n{domain.encode_snapshot(estado)}",
+                f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}",
                 [(5, "ai-review: descartar F1")],
             )
             payload_path2 = Path(tmp, "event2.json")
@@ -550,7 +551,7 @@ class CoordinadorComandos(unittest.TestCase):
             command_cursor=0,
         )
         falso = self._falso(
-            f"{review.MARKER}\n{domain.encode_snapshot(estado)}",
+            f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}",
             [(5, "ai-review: descartar F1")],
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -581,7 +582,7 @@ class CoordinadorComandos(unittest.TestCase):
 
     def test_id_de_miles_de_digitos_no_tumba_los_comandos_siguientes(self):
         falso = self._falso(
-            f"{review.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
+            f"{review_sticky.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
             [
                 (5, "ai-review: descartar F" + "9" * 4301),
                 (6, "ai-review: descartar F1"),
@@ -623,7 +624,7 @@ class CoordinadorComandos(unittest.TestCase):
     def test_cientos_de_comentarios_ajenos_no_llenan_la_memoria(self):
         ajenos = [(cid, f"ai-review: hola {cid}") for cid in range(5, 605)]
         falso = self._falso(
-            f"{review.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
+            f"{review_sticky.MARKER}\n{domain.encode_snapshot(snapshot_base())}",
             [*ajenos, (605, "ai-review: descartar F1")],
         )
         for comentario in falso.comentarios[1:-1]:
@@ -929,7 +930,7 @@ class CoordinadorComandos(unittest.TestCase):
         estados = [domain.replace(snapshot_base(), command_cursor=n) for n in range(4)]
         falso = self._falso(self._visible_previo(estados[0]), [])
 
-        completion_previa = review.reviewed_completion(falso.leer()[0]["body"])
+        completion_previa = review_sticky.reviewed_completion(falso.leer()[0]["body"])
         self.assertIsNotNone(completion_previa)
 
         def publicar(snapshot, visible):
@@ -939,7 +940,7 @@ class CoordinadorComandos(unittest.TestCase):
             )
             # #92 F1: ningún re-render deja la cabecera ilegible para el worker.
             self.assertEqual(
-                review.reviewed_completion(falso.leer()[0]["body"]), completion_previa
+                review_sticky.reviewed_completion(falso.leer()[0]["body"]), completion_previa
             )
 
         publicar(
@@ -969,15 +970,15 @@ class CoordinadorComandos(unittest.TestCase):
             bloque, resto
         )
         self.assertEqual(
-            review.reviewed_completion(con_explicacion),
-            review.reviewed_completion(previo),
+            review_sticky.reviewed_completion(con_explicacion),
+            review_sticky.reviewed_completion(previo),
         )
         sin_forma = review.estado_visible(estado)(
             bloque,
-            f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n\ntexto libre",
+            f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n\ntexto libre",
         )
-        self.assertEqual(review.reviewed_completion(sin_forma), "complete")
+        self.assertEqual(review_sticky.reviewed_completion(sin_forma), "complete")
         self.assertTrue(sin_forma.endswith("texto libre"))
 
     def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
@@ -1017,8 +1018,8 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertNotIn("<!--", detalle)
         self.assertIn("&lt;!-- ai-review:sha=" + "9" * 40 + " -->", detalle)
         self.assertEqual(
-            review.reviewed_completion(cuerpo),
-            review.reviewed_completion(self._visible_previo(estado)),
+            review_sticky.reviewed_completion(cuerpo),
+            review_sticky.reviewed_completion(self._visible_previo(estado)),
         )
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
@@ -1116,7 +1117,7 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn(review.ALCANCE_INICIO, cuerpo)
         self.assertTrue(cuerpo.rstrip().endswith("</details>"))
         self.assertEqual(
-            review.reviewed_completion(cuerpo), review.reviewed_completion(nuevo)
+            review_sticky.reviewed_completion(cuerpo), review_sticky.reviewed_completion(nuevo)
         )
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
@@ -1246,7 +1247,7 @@ class CoordinadorComandos(unittest.TestCase):
             command_cursor=0,
         )
         falso = self._falso(
-            f"{review.MARKER}\n{domain.encode_snapshot(estado)}",
+            f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}",
             [(5, "ai-review: descartar F1")],
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -1280,7 +1281,7 @@ class EndurecimientoFrontera(unittest.TestCase):
     def test_sticky_del_bot_no_se_ejecuta_como_comando(self):
         cuerpo = (
             "ai-review: descartar todo\n"
-            f"{review.MARKER}\n"
+            f"{review_sticky.MARKER}\n"
             "La prosa del modelo cita: ai-review: descartar F1\n"
         )
         estado = snapshot_base()

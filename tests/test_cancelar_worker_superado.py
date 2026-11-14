@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 WORKER = (ROOT / "templates" / "ai-review-worker.yml").read_text()
@@ -120,7 +121,7 @@ class GitHubFalso:
         )
 
     def sticky(self):
-        return review.sticky_from_comments(self.leer(), BOT)["body"]
+        return review_sticky.sticky_from_comments(self.leer(), BOT)["body"]
 
 
 def reconciliar(github, evento, head, artifact=None):

@@ -23,6 +23,23 @@ from review_config import (
 )
 import review_domain
 import review_run
+from review_sticky import (
+    COMPLETION_PREFIX,
+    COVERED_PREFIX,
+    MARKER,
+    SHA_PREFIX,
+    cobertura_declarada,
+    continuacion_terminal,
+    libro_a_linea,
+    libro_de,
+    libro_fusionado,
+    modelo_utilizable,
+    prev_de_memoria,
+    recortes_de_continuacion,
+    reviewed_sha,
+    sha_hexa,
+    sticky_from_comments,
+)
 from review_domain import (
     DISMISSED,
     FINDING_FILES_MAX,
@@ -32,12 +49,9 @@ from review_domain import (
     FINDINGS_PREFIX,
     FINDINGS_SUFFIX,
     FINDINGS_TITLE_MAX,
-    LIBRO_MAX_ENTRADAS,
     OPEN,
     RESOLVED,
     SEVERITIES,
-    UNREVIEWED_PREFIX,
-    cierre_de_respuesta,
     derive_next,
     find_findings_block,
     find_model_findings_block,
@@ -45,7 +59,6 @@ from review_domain import (
     normalize_severity,
     one_line,
     parse_model_findings,
-    rutas_declaradas,
     same_issue,
     sanitize_finding,
     split_coverage,
@@ -64,7 +77,6 @@ from review_context import (
     INCREMENTAL_SMALL_BYTES,
     INCREMENTAL_SMALL_FILES,
     LARGE_DIFF_MAX_TURNS,
-    LIBRO_BORRADO,
     SearchComplete,
     SearchFailed,
     SearchTruncated,
@@ -147,12 +159,6 @@ __all__ = [
     "trim_utf8",
     "unique_paths",
 ]
-
-MARKER = "<!-- ai-review:sticky -->"
-SHA_PREFIX = "<!-- ai-review:sha="
-COMPLETION_PREFIX = "<!-- ai-review:completion="
-COVERED_PREFIX = "<!-- ai-review:covered="
-LIBRO_MAX_BYTES = 30000
 COMMENT_LIMIT = 50000
 GITHUB_COMMENT_MAX = 65000
 
@@ -177,163 +183,6 @@ DISMISS_ALL_WORD = "todo"
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 CLAUDE_CODE_VERSION = "2.1.282"
 LITELLM_VERSION = "1.102.1"
-
-
-def reviewed_sha(body):
-    start = body.find(SHA_PREFIX)
-    if start < 0:
-        return None
-    end = body.find(" -->", start)
-    return body[start + len(SHA_PREFIX) : end] if end > 0 else None
-
-
-def reviewed_completion(body):
-    lines = body.splitlines()
-    if len(lines) < 3 or lines[0] != MARKER or body.count(COMPLETION_PREFIX) != 1:
-        return None
-    match = re.fullmatch(
-        r"<!-- ai-review:completion=([0-9a-f]{40}):(complete|partial) -->", lines[2]
-    )
-    if not match or lines[1] != f"{SHA_PREFIX}{match[1]} -->":
-        return None
-    return match[2]
-
-
-def libro_a_linea(head_sha, libro):
-    """El libro de cobertura como línea oculta del sticky; None si no cabe."""
-    if len(libro) > LIBRO_MAX_ENTRADAS:
-        return None
-    # Las flechas del comentario viajan como secuencias \uXXXX dentro del JSON:
-    # json.loads las decodifica al leer y una ruta con `-->` no rompe el comentario.
-    cuerpo = (
-        json.dumps(libro, ensure_ascii=True, separators=(",", ":"))
-        .replace("-->", "\\u002d\\u002d\\u003e")
-        .replace("<!--", "\\u003c\\u0021\\u002d\\u002d")
-    )
-    linea = f"{COVERED_PREFIX}{head_sha}:{cuerpo} -->"
-    return linea if len(linea.encode("utf-8")) <= LIBRO_MAX_BYTES else None
-
-
-def libro_de_linea(linea):
-    if not linea.startswith(COVERED_PREFIX):
-        return None, None
-    resto = linea[len(COVERED_PREFIX) :]
-    cabeza, sep, resto = resto.partition(":")
-    if not sep or not re.fullmatch(r"[0-9a-f]{40}", cabeza):
-        return None, None
-    fin = resto.rfind(" -->")
-    if fin < 0:
-        return None, None
-    try:
-        libro = json.loads(resto[:fin])
-    except json.JSONDecodeError:
-        return None, None
-    if not isinstance(libro, dict) or len(libro) > LIBRO_MAX_ENTRADAS:
-        return None, None
-    for ruta, blob in libro.items():
-        if not isinstance(ruta, str) or not ruta:
-            return None, None
-        if not isinstance(blob, str) or not (
-            re.fullmatch(r"[0-9a-f]{40}", blob) or blob == LIBRO_BORRADO
-        ):
-            return None, None
-    return cabeza, libro
-
-
-def libro_de(body):
-    """El libro del sticky: la primera línea covered= válida y del head de la
-    cabecera; cualquier desvío es (None, None), nunca un libro ajeno."""
-    for linea in (body or "").splitlines():
-        if linea.startswith(COVERED_PREFIX):
-            cabeza, libro = libro_de_linea(linea)
-            if libro is not None and cabeza == reviewed_sha(body):
-                return cabeza, libro
-            return None, None
-    return None, None
-
-
-def unreviewed_de(texto):
-    """Lo que el modelo declaró no revisar; None si falta o no se lee.
-
-    Vale solo la línea de cierre_de_respuesta (columna 0), única con el prefijo en todo
-    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
-    incluidas) anula la declaración."""
-    declaracion = cierre_de_respuesta(texto)[3]
-    lineas = (texto or "").splitlines()
-    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
-    return rutas_declaradas(declaracion) if declaracion and unica else None
-
-
-def modelo_utilizable(modelo):
-    """La forma la decide el transporte del dominio, sin descartar el bloque."""
-    return modelo is not None and not modelo.get("rechazadas_forma") and not any(
-        isinstance(
-            review_domain.observation_de_entrada(entrada),
-            review_domain.ObservationRejected,
-        )
-        for entrada in modelo.get("findings", [])
-    )
-
-
-def pasada_acredita(result, model_ok):
-    """Una pasada acredita cobertura solo si su resultado es utilizable
-    entero: COVERAGE declarada, runtime terminado y hallazgos del modelo
-    válidos; si no, no agrega nada al libro."""
-    if ERROR_KEY in (result or {}):
-        return False
-    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
-    return (
-        cobertura is not None
-        and (result or {}).get("subtype") != "error_max_turns"
-        and bool(model_ok)
-        and modelo_utilizable(
-            parse_model_findings(
-                (result or {}).get("result") or "", conservar_anclas=True
-            )
-        )
-    )
-
-
-def libro_fusionado(previo, manifest, result, repo, model_ok):
-    """El libro tras una pasada: lo cubierto ahora con su blob en head (o el
-    centinela del borrado), más lo cubierto antes que sigue intacto; el resto
-    queda fuera."""
-    head = manifest["head"]
-    # Sin head verificable nada es reclamable: ni blobs (un None de blob_at
-    # puede ser un head que no resuelve, no un borrado) ni centinelas.
-    if not repo.cat_file_exists(f"{head}^{{commit}}"):
-        return {}
-    texto = (result or {}).get("result") or ""
-    if pasada_acredita(result, model_ok):
-        _, cobertura, _ = split_coverage(texto)
-        revisados = manifest.get("reviewed") or []
-        if cobertura == "complete":
-            cubiertos = revisados
-        elif cobertura == "partial":
-            sin = unreviewed_de(texto)
-            excluidos = {e["path"] for e in manifest.get("excluded") or []}
-            reconocibles = set(revisados) | excluidos
-            declaracion_verificable = sin is not None and sin <= reconocibles
-            if declaracion_verificable:
-                cubiertos = [p for p in revisados if p not in sin]
-            else:
-                cubiertos = []
-        else:
-            cubiertos = []
-    else:
-        cubiertos = []
-    cubierto = set(cubiertos)
-    fused = {}
-    for p, b in (previo or {}).items():
-        if p in cubierto:
-            continue
-        blob = repo.blob_at(head, p)
-        if (blob is None and b == LIBRO_BORRADO) or blob == b:
-            fused[p] = b
-    for p in cubiertos:
-        blob = repo.blob_at(head, p)
-        fused[p] = blob if blob else LIBRO_BORRADO
-    return fused
 
 
 def libro_actualizado(sticky, manifest, result, repo, model_ok):
@@ -1193,33 +1042,6 @@ def fetch_all_comments(repo, pr):
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
-def sticky_from_comments(comments, login):
-    """Latest sticky among fetched comments. A missing user only happens with test
-    doubles (the real API always sends user.login); those still count as sticky."""
-    found = [
-        c
-        for c in comments or []
-        if MARKER in (c.get("body") or "") and c.get("user", login) == login
-    ]
-    return found[-1] if found else None
-
-
-def prev_de_memoria(body):
-    """El prev.json que lee prepare, desde el cuerpo del sticky. Lo escriben gate
-    (ruta directa) y execute-request (worker): sin él el modelo revisa sin los
-    hallazgos previos. También entiende la memoria v2/v3 del coordinador."""
-    if body is None:
-        return {"sha": None, "state": None, "completion": None}
-    load = review_domain.read_snapshot(body)
-    return {
-        "sha": reviewed_sha(body),
-        "state": review_domain.estado_legado_de_memoria(body),
-        "completion": reviewed_completion(body),
-        "covered": libro_de(body)[1],
-        "snapshot": load.block if isinstance(load, review_domain.Valid) else None,
-    }
-
-
 def _snapshot_previo(prev):
     """El snapshot v2/v3 auténtico del sticky cuando prev.json lo transporta:
     revisión (base, head, política), hallazgos y generación tal como quedaron
@@ -1335,7 +1157,7 @@ def cmd_prepare(args):
             previo_snapshot,
             completion=review_domain.parse_coverage(prev.get("completion")),
         )
-    elif prev_sha and _sha_hexa(prev_sha) and prev.get("state"):
+    elif prev_sha and sha_hexa(prev_sha) and prev.get("state"):
         current = review_domain.snapshot_a_v3(
             review_domain.Snapshot(
                 schema=2,
@@ -1611,11 +1433,6 @@ def politica_de_revision(manifest=None, identidad=None):
     )
 
 
-def _sha_hexa(valor):
-    valor = valor or ""
-    return len(valor) == 40 and all(c in "0123456789abcdef" for c in valor.lower())
-
-
 def hechos_de_repo(
     manifest, reverted_files, renames=(), blobs=None, policy_digest="", omissions=()
 ):
@@ -1629,10 +1446,10 @@ def hechos_de_repo(
     base, head = manifest.get("base"), manifest.get("head")
     omissions = tuple(omissions or ())
     desde = base
-    if _sha_hexa(manifest.get("prev_sha")):
+    if sha_hexa(manifest.get("prev_sha")):
         desde = manifest["prev_sha"]
     calculado = False
-    if _sha_hexa(desde) and _sha_hexa(head):
+    if sha_hexa(desde) and sha_hexa(head):
         delta, omis_delta, calculado = delta_real(
             GitRepository(Path.cwd()), desde, head
         )
@@ -1699,35 +1516,6 @@ def anclas_locadas(snapshot):
     return vistas
 
 
-def cobertura_declarada(texto, modelo):
-    """Cobertura respaldada por el bloque del modelo; sin bloque, UNKNOWN."""
-    _, cobertura, _ = split_coverage(texto)
-    mapeada = {
-        "complete": review_domain.COMPLETE_CLAIM,
-        "partial": review_domain.PARTIAL,
-    }.get(cobertura, review_domain.UNKNOWN)
-    return review_domain.UNKNOWN if modelo is None else mapeada
-
-
-def recortes_de_continuacion(manifest):
-    """Las entradas de excluded que degradan: presupuesto o encoding."""
-    return [
-        e
-        for e in ((manifest or {}).get("excluded") or [])
-        if e.get("reason") in ("budget", "encoding")
-    ]
-
-
-def continuacion_terminal(manifest):
-    """Continuación sin nada por leer: solo presupuesto y encoding degradan."""
-    manifest = manifest or {}
-    return (
-        manifest.get("mode") == "continuation"
-        and not manifest.get("reviewed")
-        and not recortes_de_continuacion(manifest)
-    )
-
-
 def actualizar_memoria_valida(
     load, result, manifest, repo, pr, login, comments, policy=None
 ):
@@ -1784,7 +1572,7 @@ def actualizar_memoria_valida(
     head = manifest.get("head")
     revision = None
     digest = digest_de_politica(policy)
-    if _sha_hexa(head) and _sha_hexa(manifest.get("base")):
+    if sha_hexa(head) and sha_hexa(manifest.get("base")):
         # El digest viaja en la revisión persistida: la siguiente preparación
         # compara contra él para decidir si la cobertura previa sigue válida.
         # La base persistida es la SOLICITADA (el tip de BASE_SHA): el
@@ -2784,7 +2572,7 @@ def sha_de_confianza(repo, worker_ref, sha_del_run, cache):
         cache["punta"] = json.loads(
             sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
         ).get("sha")
-    if not _sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
+    if not sha_hexa(sha_del_run) or sha_del_run == cache["punta"]:
         return cache["punta"]
     if sha_del_run not in cache:
         comparacion = json.loads(
@@ -2989,7 +2777,7 @@ def hechos_con_delta_del_worker(facts, artifact, current):
     cambiados = manifest.get("changed_files")
     esperado = current.revision.head_sha if current.revision else None
     if (
-        _sha_hexa(desde)
+        sha_hexa(desde)
         and desde == esperado
         and isinstance(cambiados, list)
         and all(isinstance(ruta, str) and ruta for ruta in cambiados)
@@ -3447,7 +3235,7 @@ def linea_en_curso(snapshot):
     if pendiente is None:
         return None
     head = pendiente.target.get("head_sha", "")
-    commit = f"el commit `{head[:7]}`" if _sha_hexa(head) else "el PR"
+    commit = f"el commit `{head[:7]}`" if sha_hexa(head) else "el PR"
     return (
         f"{AVISO_EN_CURSO_PREFIX}el revisor está revisando {commit}; este "
         "comentario se actualiza cuando termine."

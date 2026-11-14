@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
+
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -64,7 +66,7 @@ def armar(body, ronda):
     previos = {f.id for f in domain.read_snapshot(body).snapshot.findings}
     snapshot = aceptar_ronda(body, ronda)
     lineas = body.split("\n")
-    resto = "\n".join(lineas[1:]) if lineas and lineas[0] == review.MARKER else body
+    resto = "\n".join(lineas[1:]) if lineas and lineas[0] == review_sticky.MARKER else body
     resto = review.strip_findings_block(resto, last=False).strip()
     visible = review.revision_visible(
         dict(ronda, review_provider="opencode-go", model_ok=True),

@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_run
 import review_domain
 import review_config
@@ -95,8 +96,8 @@ class Compose(unittest.TestCase):
             sha=SHA,
             provider="opencode-go",
         )
-        self.assertTrue(body.startswith(review.MARKER))
-        self.assertEqual(review.reviewed_sha(body), SHA)
+        self.assertTrue(body.startswith(review_sticky.MARKER))
+        self.assertEqual(review_sticky.reviewed_sha(body), SHA)
         self.assertIn(
             "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · 0123456",
             body,
@@ -423,7 +424,7 @@ class GitHubGlue(unittest.TestCase):
             return calls, output, posted
 
     def sticky(self, sha):
-        return {"id": 99, "body": f"{review.MARKER}\n{review.SHA_PREFIX}{sha} -->\nold"}
+        return {"id": 99, "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{sha} -->\nold"}
 
     def test_gate_skips_same_sha(self):
         _, output, _ = self.run_cmd("gate", [self.sticky(SHA)])
@@ -441,13 +442,13 @@ class GitHubGlue(unittest.TestCase):
         forged = {
             "id": 7,
             "user": "mallory",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\nfake",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\nfake",
         }
         _, output, _ = self.run_cmd("gate", [forged])
         self.assertEqual(output, "skip=false\n")
 
     def test_gate_sticky_without_sha_marker_does_not_skip(self):
-        sticky = {"id": 5, "body": f"{review.MARKER}\nold review, no sha marker"}
+        sticky = {"id": 5, "body": f"{review_sticky.MARKER}\nold review, no sha marker"}
         _, output, _ = self.run_cmd("gate", [sticky])
         self.assertEqual(output, "skip=false\n")
 
@@ -536,10 +537,10 @@ class GitHubGlue(unittest.TestCase):
         self,
     ):
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{old_sha} -->", body)
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{old_sha} -->", body)
         self.assertNotIn(SHA, body)
         self.assertIn("> [!CAUTION]", body)
         self.assertIn("No se pudo revisar el commit", body)
@@ -549,7 +550,7 @@ class GitHubGlue(unittest.TestCase):
 
     def test_publish_with_error_twice_replaces_banner_instead_of_stacking(self):
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
         first = self.run_cmd_with_error(
             [{"id": 99, "body": old_body}], reason="el proxy LiteLLM no arrancó"
         )
@@ -566,14 +567,14 @@ class GitHubGlue(unittest.TestCase):
     def test_publish_with_error_and_no_sticky_creates_marker_without_sha(self):
         posted = self.run_cmd_with_error([])
         body = posted["body"]
-        self.assertIn(review.MARKER, body)
-        self.assertNotIn(review.SHA_PREFIX, body)
+        self.assertIn(review_sticky.MARKER, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body)
         self.assertIn("> [!CAUTION]", body)
 
     def test_publish_with_error_and_notice_only_sticky_does_not_claim_a_previous_review(
         self,
     ):
-        old_body = f"{review.MARKER}\n> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falla vieja."
+        old_body = f"{review_sticky.MARKER}\n> [!CAUTION]\n> **No se pudo revisar el commit abc1234:** falla vieja."
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
         self.assertIn("> [!CAUTION]", body)
@@ -583,7 +584,7 @@ class GitHubGlue(unittest.TestCase):
     def test_publish_error_path_redacts_secrets(self):
         secret = "sk-" + "b2" * 16
         old_sha = "f" * 40
-        old_body = f"{review.MARKER}\n{review.SHA_PREFIX}{old_sha} -->\n### vieja"
+        old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### vieja"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             bindir = tmp / "bin"
@@ -1544,7 +1545,7 @@ class RunAgent(unittest.TestCase):
                 self.assertEqual(len(calls), llamadas)
                 self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertIsNone(
-                    review.unreviewed_de(result["result"]),
+                    review_sticky.unreviewed_de(result["result"]),
                     "una respuesta rearmada no acredita cobertura parcial",
                 )
                 modelo = review.parse_model_findings(result["result"])
@@ -1569,7 +1570,7 @@ class RunAgent(unittest.TestCase):
             review_domain.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
         )
         self.assertIsNone(
-            review.unreviewed_de(result["result"]),
+            review_sticky.unreviewed_de(result["result"]),
             "la lista vacía es una cita del formato, no lo que el modelo declaró",
         )
 
@@ -1606,7 +1607,7 @@ class RunAgent(unittest.TestCase):
                     review_domain.split_coverage(result["result"])[1:],
                     ("partial", "no leí b.py"),
                 )
-                self.assertIsNone(review.unreviewed_de(result["result"]))
+                self.assertIsNone(review_sticky.unreviewed_de(result["result"]))
                 modelo = review.parse_model_findings(result["result"])
                 self.assertEqual(
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
@@ -3188,7 +3189,7 @@ class Workflows(unittest.TestCase):
 
         pasos = self._pasos()
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         with self._repo_minimo() as (repo, base, head):
@@ -3333,6 +3334,7 @@ class Workflows(unittest.TestCase):
                 "review_context.py",
                 "review_config.py",
                 "review_run.py",
+                "review_sticky.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
@@ -3683,7 +3685,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         with tempfile.TemporaryDirectory() as work:
@@ -3954,7 +3956,7 @@ class Workflows(unittest.TestCase):
     def _reconciliar(self, estado, tmp, evento, **entorno):
         import review_domain as domain
 
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
         falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
         falso.patches = []
@@ -4251,10 +4253,10 @@ class Workflows(unittest.TestCase):
             )
         cuerpo = patches[-1][1]
         lineas = cuerpo.split("\n")
-        self.assertEqual(lineas[0], review.MARKER)
-        self.assertEqual(lineas[1], f"{review.SHA_PREFIX}{'c' * 40} -->")
+        self.assertEqual(lineas[0], review_sticky.MARKER)
+        self.assertEqual(lineas[1], f"{review_sticky.SHA_PREFIX}{'c' * 40} -->")
         self.assertEqual(
-            lineas[2], f"{review.COMPLETION_PREFIX}{'c' * 40}:complete -->"
+            lineas[2], f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:complete -->"
         )
         self.assertIn(
             "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · ccccccc",
@@ -4311,7 +4313,7 @@ class Workflows(unittest.TestCase):
                 lineas = cuerpo.split("\n")
                 self.assertEqual(
                     lineas[2],
-                    f"{review.COMPLETION_PREFIX}{'c' * 40}:{marcador} -->",
+                    f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:{marcador} -->",
                 )
                 if aviso is None:
                     self.assertNotIn("quedaron fuera", cuerpo)
@@ -4346,7 +4348,7 @@ class Workflows(unittest.TestCase):
             )
         self.assertEqual(despachados, [2], "se pide revisar el head vivo")
         cuerpo = patches[-1][1]
-        self.assertNotIn(review.SHA_PREFIX, cuerpo)
+        self.assertNotIn(review_sticky.SHA_PREFIX, cuerpo)
         self.assertNotIn("Texto de un head viejo.", cuerpo)
 
     def test_el_error_del_worker_avisa_en_visible_sin_marcar_revisado(self):
@@ -4371,7 +4373,7 @@ class Workflows(unittest.TestCase):
             ),
             lineas[3],
         )
-        self.assertNotIn(review.SHA_PREFIX, cuerpo)
+        self.assertNotIn(review_sticky.SHA_PREFIX, cuerpo)
 
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
         import review_domain as domain
@@ -4525,7 +4527,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
         falso = mock.Mock()
         falso.leer = lambda: comentarios
@@ -5287,9 +5289,9 @@ class VerdictSections(unittest.TestCase):
             },
         )
         lines = body.split("\n")
-        self.assertEqual(lines[0], review.MARKER)
-        self.assertTrue(lines[1].startswith(review.SHA_PREFIX))
-        self.assertTrue(lines[2].startswith(review.COMPLETION_PREFIX))
+        self.assertEqual(lines[0], review_sticky.MARKER)
+        self.assertTrue(lines[1].startswith(review_sticky.SHA_PREFIX))
+        self.assertTrue(lines[2].startswith(review_sticky.COMPLETION_PREFIX))
         self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
         self.assertLessEqual(len(body), review.GITHUB_COMMENT_MAX)
         self.assertIn("recortada por el límite", body)
@@ -5723,10 +5725,10 @@ class ReviewContinuity(unittest.TestCase):
             libro_previo = {"app.py": git(repo, "rev-parse", f"{prev}:app.py")}
             cuerpo_previo = "\n".join(
                 [
-                    review.MARKER,
-                    f"{review.SHA_PREFIX}{prev} -->",
-                    f"{review.COMPLETION_PREFIX}{prev}:partial -->",
-                    review.libro_a_linea(prev, libro_previo),
+                    review_sticky.MARKER,
+                    f"{review_sticky.SHA_PREFIX}{prev} -->",
+                    f"{review_sticky.COMPLETION_PREFIX}{prev}:partial -->",
+                    review_sticky.libro_a_linea(prev, libro_previo),
                     block_of(anterior),
                 ]
             )
@@ -5810,8 +5812,8 @@ class ReviewContinuity(unittest.TestCase):
                                 cuerpo = review.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
                                     domain.encode_snapshot(decision.snapshot).block, cuerpo_previo
                                 )
-                        self.assertEqual(review.reviewed_completion(cuerpo), "partial")
-                        self.assertEqual(review.libro_de(cuerpo)[1], libro_previo)
+                        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "partial")
+                        self.assertEqual(review_sticky.libro_de(cuerpo)[1], libro_previo)
                         findings = domain.estado_legado_de_memoria(cuerpo)["findings"]
                         self.assertEqual([(f["id"], f["title"], f["state"]) for f in findings], [
                             ("F1", "Hallazgo previo", "open"),
@@ -5850,7 +5852,7 @@ class ReviewContinuity(unittest.TestCase):
             command_cursor=7,
         )
         cuerpo = (
-            f"{review.MARKER}\n{review.SHA_PREFIX}{'c' * 40} -->\n"
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'c' * 40} -->\n"
             f"{domain.encode_snapshot(estado)}\n### Revisión"
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -5892,7 +5894,7 @@ class ReviewContinuity(unittest.TestCase):
             repo, work, base, prev, head = fixture.make_repo(tmp)
             dismissed = make_finding(file="app.py", state="dismissed")
             old = (
-                f"{review.MARKER}\n{review.SHA_PREFIX}{base} -->\n{block_of(dismissed)}"
+                f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{base} -->\n{block_of(dismissed)}"
             )
             manifest = {
                 "base": base,
@@ -6132,7 +6134,7 @@ class ReviewContinuity(unittest.TestCase):
         fixture = IncrementalPrepare()
         with tempfile.TemporaryDirectory() as tmp:
             repo, work, base, prev, head = fixture.make_repo(tmp)
-            header = f"{review.MARKER}\n{review.SHA_PREFIX}{prev} -->\n"
+            header = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{prev} -->\n"
             complete = f"<!-- ai-review:completion={prev}:complete -->"
             statuses = [
                 "",
@@ -6221,7 +6223,7 @@ class ReviewContinuity(unittest.TestCase):
                 findings=[],
                 command_cursor=0,
             )
-            semilla = f"{review.MARKER}\n{domain.encode_snapshot(vacio)}"
+            semilla = f"{review_sticky.MARKER}\n{domain.encode_snapshot(vacio)}"
             antes = os.getcwd()
             os.chdir(repo)
             try:
@@ -6341,7 +6343,7 @@ class GatePrev(unittest.TestCase):
         block = block_of(make_finding("F1"), next=2)
         sticky = {
             "id": 9,
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
         }
         output, prev = self.run_gate([sticky])
         self.assertEqual(output, "skip=false\n")
@@ -6354,7 +6356,7 @@ class GatePrev(unittest.TestCase):
             {
                 "id": 9,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
             },
             {"id": 10, "user": "owner", "body": "ai-review: descartar F1"},
         ]
@@ -6396,7 +6398,7 @@ class GatePrev(unittest.TestCase):
             {
                 "id": 9,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{block}\ntext",
             },
             {"id": 10, "user": "owner", "body": "ai-review: descartar todo"},
         ]
@@ -6588,27 +6590,27 @@ class IncrementalRun(unittest.TestCase):
 class StickyComments(unittest.TestCase):
     def test_latest_bot_sticky_wins(self):
         comments = [
-            {"id": 1, "user": "github-actions[bot]", "body": f"{review.MARKER}\nold"},
-            {"id": 2, "user": "ana", "body": f"{review.MARKER}\nplantado"},
-            {"id": 3, "user": "github-actions[bot]", "body": f"{review.MARKER}\nnew"},
+            {"id": 1, "user": "github-actions[bot]", "body": f"{review_sticky.MARKER}\nold"},
+            {"id": 2, "user": "ana", "body": f"{review_sticky.MARKER}\nplantado"},
+            {"id": 3, "user": "github-actions[bot]", "body": f"{review_sticky.MARKER}\nnew"},
         ]
         self.assertEqual(
-            review.sticky_from_comments(comments, "github-actions[bot]")["id"], 3
+            review_sticky.sticky_from_comments(comments, "github-actions[bot]")["id"], 3
         )
 
     def test_no_sticky_returns_none(self):
         self.assertIsNone(
-            review.sticky_from_comments(
+            review_sticky.sticky_from_comments(
                 [{"id": 1, "user": "ana", "body": "hola"}], "bot"
             )
         )
-        self.assertIsNone(review.sticky_from_comments([], "bot"))
+        self.assertIsNone(review_sticky.sticky_from_comments([], "bot"))
 
     def test_summary_skips_hidden_markers(self):
         body = "\n".join(
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{SHA} -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{SHA} -->",
                 block_of(make_finding()),
                 "### Título",
                 "",
@@ -6638,7 +6640,7 @@ class PublishFindings(unittest.TestCase):
             {
                 "id": 99,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
             },
             {"id": 100, "user": "owner", "body": "ai-review: descartar F1, gracias"},
         ]
@@ -6973,8 +6975,8 @@ class BlockingFixes(unittest.TestCase):
         self.assertIn(
             "Memoria conservada", body, "aviso visible de memoria íntegra no guardada"
         )
-        self.assertNotIn(review.SHA_PREFIX, body, "no confirma el commit revisado")
-        self.assertNotIn(review.COMPLETION_PREFIX, body, "no confirma cobertura")
+        self.assertNotIn(review_sticky.SHA_PREFIX, body, "no confirma el commit revisado")
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no confirma cobertura")
         self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):
@@ -6986,7 +6988,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(make_finding("F1", file="b.py")) + "\nCOVERAGE: complete"
@@ -7070,7 +7072,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
         }
         comments = [
             sticky,
@@ -7096,7 +7098,7 @@ class BlockingFixes(unittest.TestCase):
             )
             sticky2 = dict(
                 sticky,
-                body=f"{review.MARKER}\n{review.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
+                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
             )
             again = review.build_findings(
                 {
@@ -7122,7 +7124,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(make_finding("F1", state="resolved"))
@@ -7189,7 +7191,7 @@ class BlockingFixes(unittest.TestCase):
         sticky = {
             "id": 9,
             "user": "github-actions[bot]",
-            "body": f"{review.MARKER}\n{review.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
+            "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{SHA} -->\n{prev_block}\nold",
         }
         result = {
             "result": block_of(
@@ -7428,7 +7430,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
             {
                 "id": 99,
                 "user": "github-actions[bot]",
-                "body": f"{review.MARKER}\n{review.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
+                "body": f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'f' * 40} -->\n{prev_block}\nold",
             }
         ]
         with tempfile.TemporaryDirectory() as tmp:
@@ -8446,10 +8448,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
         de_mas = domain.encode_snapshot(snapshot(titulo + "x"))
         self.assertIsInstance(de_mas, domain.CapacityExceeded, "un byte más no cabe")
         cuerpo = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + bloque
             + "\n\n### Revisión anterior\n\nTexto previo.\n"
         )
@@ -8497,10 +8499,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
         self.assertIsInstance(bloque_sticky, str)
         self.assertLess(len(bloque_sticky.encode("utf-8")), tope)
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + bloque_sticky
             + "\n\n### Revisión anterior\n\nTexto previo.\n"
         )
@@ -8563,8 +8565,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
-        self.assertNotIn(f"{review.SHA_PREFIX}{'c' * 40}", body)
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertNotIn(f"{review_sticky.SHA_PREFIX}{'c' * 40}", body)
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima del desborde")
         self.assertIn("desborde", body, "aviso visible")
@@ -8573,10 +8575,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
     def test_sticky_invalido_se_conserva_con_banner(self):
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + review.FINDINGS_PREFIX
             + '{"schema":2,"findings":null,"next_id":1}'
             + review.FINDINGS_SUFFIX
@@ -8623,7 +8625,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima de memoria inválida")
         self.assertIn("conservada", body, "aviso visible")
@@ -8688,27 +8690,27 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
 
     def test_b3_desborde_sin_sticky_publica_banner_sin_memoria(self):
         body = self.publicar([])
-        self.assertIn(review.MARKER, body)
+        self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
         self.assertIn(review.CAUTION_MARK, body)
-        self.assertNotIn(review.SHA_PREFIX, body, "sin memoria no se marca SHA")
-        self.assertNotIn(review.COMPLETION_PREFIX, body, "no se confirma cobertura")
+        self.assertNotIn(review_sticky.SHA_PREFIX, body, "sin memoria no se marca SHA")
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no se confirma cobertura")
         self.assertNotIn("bug nuevo z", body, "no publica la memoria que no cupo")
 
     def test_b3_desborde_con_sticky_solo_aviso(self):
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
             + review.CAUTION_MARK
             + "\n> **No se pudo revisar el commit abcdef0:** falla de infraestructura."
         )
         sticky = {"id": 8, "user": "github-actions[bot]", "body": sticky_body}
         body = self.publicar([sticky])
-        self.assertIn(review.MARKER, body)
+        self.assertIn(review_sticky.MARKER, body)
         self.assertIn("conservada", body)
         self.assertIn(review.CAUTION_MARK, body)
-        self.assertNotIn(review.SHA_PREFIX, body)
-        self.assertNotIn(review.COMPLETION_PREFIX, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body)
+        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body)
         self.assertNotIn("bug nuevo z", body)
 
 
@@ -8972,7 +8974,7 @@ class CableadoIdentidad(unittest.TestCase):
                 findings=out,
             )
             self.assertIn(
-                f"{review.COMPLETION_PREFIX}{r['head2']}:complete -->",
+                f"{review_sticky.COMPLETION_PREFIX}{r['head2']}:complete -->",
                 cuerpo,
                 "el marcador visible nace del mismo valor persistido",
             )
@@ -9036,7 +9038,7 @@ class CableadoIdentidad(unittest.TestCase):
                         provider="opencode-go",
                         findings=out,
                     )
-                    self.assertIn(f"{review.COMPLETION_PREFIX}{head[:7]}", cuerpo)
+                    self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{head[:7]}", cuerpo)
                     self.assertIn(":partial -->", cuerpo)
 
     def test_bloque_ausente_no_confirma_cobertura(self):
@@ -9059,7 +9061,7 @@ class CableadoIdentidad(unittest.TestCase):
         cuerpo = review.compose(
             resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
         )
-        self.assertIn(f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
+        self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
 
     @staticmethod
     def _memoria_v2_chica(domain):
@@ -9352,7 +9354,7 @@ class CableadoIdentidad(unittest.TestCase):
             findings=findings,
         )
         self.assertIn(
-            f"{review.COMPLETION_PREFIX}{'e' * 40}:partial -->",
+            f"{review_sticky.COMPLETION_PREFIX}{'e' * 40}:partial -->",
             cuerpo,
         )
 
@@ -10155,10 +10157,10 @@ class ConservacionAlDesbordar(unittest.TestCase):
             ],
         )
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'d' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'d' * 40}:partial -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'d' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'d' * 40}:partial -->\n"
             + domain.encode_snapshot(snapshot)
         )
         sticky = {"id": 12, "user": "github-actions[bot]", "body": sticky_body}

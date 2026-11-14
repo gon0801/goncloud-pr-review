@@ -994,6 +994,7 @@ class CompatibleRollback(InstaladorTest):
         sys.path.insert(0, str(ROOT))
         import review
         import review_domain as domain
+        import review_sticky
 
         lineas = tuple(f"línea {i}" for i in range(1, 31))
         digest = hashlib.sha256("\n".join(lineas[9:11]).encode()).hexdigest()
@@ -1047,7 +1048,7 @@ class CompatibleRollback(InstaladorTest):
             ],
             request_count=2,
         )
-        cuerpo = f"{review.MARKER}\n{domain.encode_snapshot(estado)}"
+        cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         load = domain.read_snapshot(cuerpo)
         self.assertIsInstance(load, domain.Valid)
         comentarios = [
@@ -1076,7 +1077,7 @@ class CompatibleRollback(InstaladorTest):
             "keep", salida, f"la actualización del retorno no fue Keep: {salida}"
         )
         bloque = salida["block"]
-        recarga = domain.read_snapshot(f"{review.MARKER}\n{bloque}")
+        recarga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
         self.assertIsInstance(recarga, domain.Valid)
         final = recarga.snapshot
         self.assertEqual(final.schema, 3)

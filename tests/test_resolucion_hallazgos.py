@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 BOT = "github-actions[bot]"
@@ -150,7 +151,7 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
             c2 = git(repo, "rev-parse", "HEAD")
 
             work2 = Path(tmp, "work2")
-            manifest = preparar(repo, work2, m1, c2, review.prev_de_memoria(cuerpo))
+            manifest = preparar(repo, work2, m1, c2, review_sticky.prev_de_memoria(cuerpo))
             self.assertEqual(manifest["changed_files"], ["caller.py"])
             cuerpo = publicar_directo(
                 repo,
@@ -189,14 +190,14 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
         policy,
     )
     revisado = (
-        [f"{review.SHA_PREFIX}{actual.revision.head_sha} -->"]
+        [f"{review_sticky.SHA_PREFIX}{actual.revision.head_sha} -->"]
         if actual.revision
         else []
     )
     cuerpo = "\n".join(
-        [review.MARKER, *revisado, domain.encode_snapshot(pedido.snapshot).block]
+        [review_sticky.MARKER, *revisado, domain.encode_snapshot(pedido.snapshot).block]
     )
-    manifest = preparar(repo, work, base, head, review.prev_de_memoria(cuerpo))
+    manifest = preparar(repo, work, base, head, review_sticky.prev_de_memoria(cuerpo))
     artifact = {
         "manifest": {k: manifest[k] for k in review.CAMPOS_DEL_ALCANCE if k in manifest}
     }
@@ -213,7 +214,7 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
             observaciones=tuple(
                 domain.observation_de_entrada(e) for e in modelo["findings"]
             ),
-            cobertura=review.cobertura_declarada(texto, modelo),
+            cobertura=review_sticky.cobertura_declarada(texto, modelo),
         ),
         facts,
         policy,

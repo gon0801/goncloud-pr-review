@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 A, B, BASE, MAIN = "a" * 40, "e" * 40, "b" * 40, "f" * 40
@@ -70,7 +71,7 @@ class GitHubFalso:
         )
 
     def sticky(self):
-        s = review.sticky_from_comments(self.leer(), BOT)
+        s = review_sticky.sticky_from_comments(self.leer(), BOT)
         return s["body"] if s else None
 
     def estado(self):

@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 
@@ -48,8 +49,8 @@ def main():
         ap.error("pasame --body-file, el cuerpo o stdin")
     errores = []
 
-    marcador = review.reviewed_completion(body)
-    sha = review.reviewed_sha(body)
+    marcador = review_sticky.reviewed_completion(body)
+    sha = review_sticky.reviewed_sha(body)
     if marcador is None or sha is None:
         falla(errores, "cabecera sin MARKER/sha/completion en orden")
     else:
@@ -76,9 +77,9 @@ def main():
                 print("verify_sticky: ok: marcador coherente con snapshot")
 
     if not errores and any(
-        linea.startswith(review.COVERED_PREFIX) for linea in body.splitlines()
+        linea.startswith(review_sticky.COVERED_PREFIX) for linea in body.splitlines()
     ):
-        _, libro = review.libro_de(body)
+        _, libro = review_sticky.libro_de(body)
         if libro is None:
             falla(errores, "libro de cobertura ausente, corrupto o de otro head")
         else:

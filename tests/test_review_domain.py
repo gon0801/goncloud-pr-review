@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_domain as domain  # noqa: E402
 
 PRE, SUF = review.FINDINGS_PREFIX, review.FINDINGS_SUFFIX
@@ -514,10 +515,10 @@ class PublicacionConMemoriaV2(unittest.TestCase):
             pending_requests=[],
         )
         sticky_body = (
-            review.MARKER
+            review_sticky.MARKER
             + "\n"
-            + f"{review.SHA_PREFIX}{'a' * 40} -->\n"
-            + f"{review.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+            + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
             + domain.encode_snapshot(snapshot)
             + "\n\n### Revisión anterior\n\nTexto previo que debe permanecer.\n"
         )
@@ -557,9 +558,9 @@ class PublicacionConMemoriaV2(unittest.TestCase):
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review.SHA_PREFIX}{'c' * 40} -->", body, "la revisión avanza")
+        self.assertIn(f"{review_sticky.SHA_PREFIX}{'c' * 40} -->", body, "la revisión avanza")
         self.assertIn(
-            f"{review.COMPLETION_PREFIX}{'c' * 40}:partial -->",
+            f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->",
             body,
             "sin cobertura declarada no se confirma complete",
         )
@@ -2777,7 +2778,7 @@ class CheckpointCapacity(unittest.TestCase):
         )
         self.assertIn(review.CAUTION_MARK, comentario, "aviso visible de capacidad")
         self.assertIsNone(
-            review.reviewed_completion(comentario), "el presupuesto chico no confirma"
+            review_sticky.reviewed_completion(comentario), "el presupuesto chico no confirma"
         )
 
     def test_estructura_con_budget_sin_duplicados(self):
@@ -3044,7 +3045,7 @@ class CheckpointCapacity(unittest.TestCase):
             "el fijo no cabe: aviso de capacidad, jamás un corte a ciegas",
         )
         self.assertNotIn(findings["block"], out)
-        self.assertIsNone(review.reviewed_completion(out))
+        self.assertIsNone(review_sticky.reviewed_completion(out))
         self.assertLessEqual(len(out), review.GITHUB_COMMENT_MAX)
 
     def test_mensaje_sin_revisables_con_findings_vacios(self):

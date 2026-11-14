@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_sticky
 import review_config
 import review_domain as domain  # noqa: E402
 
@@ -615,7 +616,7 @@ class _ComentarioFalso:
 
 
 def cuerpo_v3(snapshot):
-    return f"{review.MARKER}\n{domain.encode_snapshot(snapshot)}"
+    return f"{review_sticky.MARKER}\n{domain.encode_snapshot(snapshot)}"
 
 
 def decision_con_trabajo(estado):
@@ -634,8 +635,8 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
 
     def _con_revision(self, estado):
         return (
-            f"{review.MARKER}\n{review.SHA_PREFIX}{self.HEAD} -->\n"
-            f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->\n"
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{self.HEAD} -->\n"
+            f"{review_sticky.COMPLETION_PREFIX}{self.HEAD}:complete -->\n"
             f"{domain.encode_snapshot(estado).block}\n\n"
             "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee"
         )
@@ -650,13 +651,13 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
         self.assertEqual(
             cuerpo.split("\n")[:3],
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{self.HEAD} -->",
-                f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{self.HEAD} -->",
+                f"{review_sticky.COMPLETION_PREFIX}{self.HEAD}:complete -->",
             ],
         )
         self.assertEqual(
-            review.prev_de_memoria(cuerpo)["completion"],
+            review_sticky.prev_de_memoria(cuerpo)["completion"],
             "complete",
             "el worker del siguiente push no ve la revisión previa como incompleta",
         )
@@ -676,14 +677,14 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
         self.assertEqual(
             cuerpo.split("\n")[:4],
             [
-                review.MARKER,
-                f"{review.SHA_PREFIX}{self.HEAD} -->",
-                f"{review.COMPLETION_PREFIX}{self.HEAD}:complete -->",
+                review_sticky.MARKER,
+                f"{review_sticky.SHA_PREFIX}{self.HEAD} -->",
+                f"{review_sticky.COMPLETION_PREFIX}{self.HEAD}:complete -->",
                 bloque,
             ],
         )
         self.assertIn("No se pudo revisar el commit fffffff", cuerpo)
-        self.assertEqual(review.reviewed_completion(cuerpo), "complete")
+        self.assertEqual(review_sticky.reviewed_completion(cuerpo), "complete")
 
 
 class CheckpointRecovery(unittest.TestCase):
@@ -1133,7 +1134,7 @@ class CoordinadorCli(unittest.TestCase):
                 "seen": 4,
             }
         )
-        cuerpo = f"{review.MARKER}\n{review.SHA_PREFIX}{'e' * 40} -->\n{legado}"
+        cuerpo = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{legado}"
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo, "user": "bot"}])
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -1159,7 +1160,7 @@ class CoordinadorCli(unittest.TestCase):
 
     def test_sticky_sin_bloque_admite_trabajo(self):
         """El banner de falla es ausencia real de memoria."""
-        cuerpo = f"{review.MARKER}\n> [!CAUTION]\n> No se pudo revisar"
+        cuerpo = f"{review_sticky.MARKER}\n> [!CAUTION]\n> No se pudo revisar"
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo, "user": "bot"}])
         despachados = []
         with tempfile.TemporaryDirectory() as tmp:
