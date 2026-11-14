@@ -183,6 +183,18 @@ def reconciliar(github, evento, head, artifact=None):
     return codigo, despachos
 
 
+def resultado_del_worker(request_id, head):
+    return {
+        "request_id": request_id,
+        "run_id": 900,
+        "attempt": 1,
+        "pr_head_sha": head,
+        "policy_digest": review.digest_de_politica(review.politica_de_revision()),
+        "observaciones": [],
+        "cobertura": "complete",
+    }
+
+
 def sticky_con_hallazgo():
     digest = review.digest_de_politica(review.politica_de_revision())
     estado = domain.Snapshot(
@@ -230,19 +242,35 @@ class PushNuevoCancelaAlWorkerAnterior(unittest.TestCase):
 
         # El worker de A terminó y avisó justo antes de que B lo cancelara.
         escrituras, sticky = github.escrituras, github.sticky()
-        artifact = {
-            "request_id": 1,
-            "run_id": 900,
-            "attempt": 1,
-            "pr_head_sha": A,
-            "policy_digest": review.digest_de_politica(review.politica_de_revision()),
-            "observaciones": [],
-            "cobertura": "complete",
-        }
-        codigo, tardio = reconciliar(github, "workflow_dispatch", B, artifact)
+        codigo, tardio = reconciliar(
+            github, "workflow_dispatch", B, resultado_del_worker(1, A)
+        )
         self.assertEqual(codigo, 0)
         self.assertEqual(tardio, [])
         self.assertEqual((github.escrituras, github.sticky()), (escrituras, sticky))
+
+    def test_resultado_de_una_solicitud_que_esta_memoria_nunca_emitio_falla_alto(self):
+        # Un artifact de otro PR, uno corrupto o una memoria perdida no son un
+        # worker cancelado: el run del coordinador queda rojo para que se vea.
+        github = GitHubFalso()
+        reconciliar(github, "pull_request_target", A)
+        escrituras, sticky = github.escrituras, github.sticky()
+        for request_id in (2, "1", None):
+            with self.subTest(request_id=request_id):
+                codigo, despachos = reconciliar(
+                    github, "workflow_dispatch", A, resultado_del_worker(request_id, A)
+                )
+                self.assertNotEqual(codigo, 0)
+                self.assertEqual(despachos, [])
+                self.assertEqual(
+                    (github.escrituras, github.sticky()), (escrituras, sticky)
+                )
+        sin_memoria = GitHubFalso()
+        codigo, despachos = reconciliar(
+            sin_memoria, "workflow_dispatch", A, resultado_del_worker(1, A)
+        )
+        self.assertNotEqual(codigo, 0)
+        self.assertEqual((despachos, sin_memoria.escrituras), ([], 0))
 
     def test_explicaciones_otros_prs_y_coordinador_anterior_no_se_cancelan(self):
         # Una explicación cancelada quedaría pendiente para siempre: la
