@@ -222,18 +222,28 @@ def reviewed_completion(body):
     return match[2]
 
 
-def split_coverage(text):
-    """(prosa, estado, detalle). Declara solo la última línea no vacía; una
-    que solo trae ``` o ** también cierra la respuesta, así que una cita del
-    formato dentro de un fence final no pasa por la declaración."""
-    lines = text.rstrip().splitlines()
+def _cierre(text):
+    """La declaración final del modelo: (prosa, estado, detalle, línea
+    unreviewed o None). La posición la autentica, así que una cita de los
+    marcadores en la prosa no declara nada: COVERAGE es la última línea no
+    vacía (una que solo trae ``` o ** también cierra la respuesta, y una cita
+    dentro de un fence final no pasa por la declaración) y unreviewed, la
+    última no vacía antes de ella."""
+    lines = (text or "").rstrip().splitlines()
     line = lines[-1].strip().strip("`*") if lines else ""
     if line.upper().startswith("COVERAGE:"):
         status, _, detail = line.split(":", 1)[1].strip().partition("|")
         status = status.strip().lower()
         if status in ("complete", "partial"):
-            return "\n".join(lines[:-1]).rstrip(), status, detail.strip()
-    return text.rstrip(), None, ""
+            previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
+            declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
+            prosa = "\n".join(lines[:-1]).rstrip()
+            return prosa, status, detail.strip(), declaracion
+    return (text or "").rstrip(), None, "", None
+
+
+def split_coverage(text):
+    return _cierre(text)[:3]
 
 
 def libro_a_linea(head_sha, libro):
@@ -292,19 +302,18 @@ def libro_de(body):
 def unreviewed_de(texto):
     """Lo que el modelo declaró no revisar; None si falta o no se lee.
 
-    Vale solo un bloque en línea propia (columna 0), único en todo el texto,
-    inmediatamente antes de la línea COVERAGE y con JSON de lista de rutas:
-    cualquier desvío (imitaciones incluidas) anula la declaración."""
+    Vale solo la línea de _cierre (columna 0), única con el prefijo en todo
+    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
+    incluidas) anula la declaración."""
+    declaracion = _cierre(texto)[3]
     lineas = (texto or "").splitlines()
-    con_prefijo = [i for i, ln in enumerate(lineas) if ln.startswith(UNREVIEWED_PREFIX)]
-    if len(con_prefijo) != 1:
-        return None
-    i = con_prefijo[0]
-    if i + 1 >= len(lineas):
-        return None
-    if not lineas[i + 1].strip().strip("`*").upper().startswith("COVERAGE:"):
-        return None
-    segmento = lineas[i][len(UNREVIEWED_PREFIX) :]
+    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
+    return rutas_declaradas(declaracion) if declaracion and unica else None
+
+
+def rutas_declaradas(linea):
+    """Las rutas de una línea unreviewed=; None si no se lee."""
+    segmento = linea[len(UNREVIEWED_PREFIX) :]
     if not segmento.endswith(" -->"):
         return None
     try:
@@ -2163,7 +2172,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         ]
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
-        elif any(unreviewed_de(f"{ln}\nCOVERAGE:") != set() for ln in declaraciones):
+        elif any(rutas_declaradas(ln) != set() for ln in declaraciones):
             # Una lista no vacía o ilegible solo puede restringir lo acreditado,
             # así que cuenta esté donde esté. La declaración no se mueve junto
             # a COVERAGE: ahí el publicador la tomaría por auténtica.
