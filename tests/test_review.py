@@ -3339,6 +3339,7 @@ class Workflows(unittest.TestCase):
                 "review_sticky.py",
                 "review_render.py",
                 "review_github.py",
+                "review_commands.py",
                 "prompt.md",
             ):
                 shutil.copy(ROOT / nombre, Path(origen) / nombre)
