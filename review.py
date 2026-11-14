@@ -223,18 +223,16 @@ def reviewed_completion(body):
 
 
 def split_coverage(text):
+    """(prosa, estado, detalle). Declara solo la última línea no vacía; una
+    que solo trae ``` o ** también cierra la respuesta, así que una cita del
+    formato dentro de un fence final no pasa por la declaración."""
     lines = text.rstrip().splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip().strip("`*")
-        if not line:
-            continue
-        if line.upper().startswith("COVERAGE:"):
-            rest = line.split(":", 1)[1].strip()
-            status, _, detail = rest.partition("|")
-            status = status.strip().lower()
-            if status in ("complete", "partial"):
-                return "\n".join(lines[:i]).rstrip(), status, detail.strip()
-        break
+    line = lines[-1].strip().strip("`*") if lines else ""
+    if line.upper().startswith("COVERAGE:"):
+        status, _, detail = line.split(":", 1)[1].strip().partition("|")
+        status = status.strip().lower()
+        if status in ("complete", "partial"):
+            return "\n".join(lines[:-1]).rstrip(), status, detail.strip()
     return text.rstrip(), None, ""
 
 
