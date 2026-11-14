@@ -39,8 +39,8 @@ traerlo (`git fetch origin <sha>`).
 
 Modo coordinado (coordinador + worker con el escritor anterior retirado, en
 un único commit atómico; ver `docs/reviewer-rollout.md` para el corte y el
-retorno). Pasó el piloto T16 y es el modo del repo central y de los tres
-consumidores (summonaikit-claude, goncloud-openclaw, goncloud-Orbit):
+retorno). Pasó el piloto T16 y es el modo del repo central y de los repos
+que lo consumen:
 
 ```bash
 ACTION_SHA=<sha de main> scripts/install.sh --coordinado gon0801/mi-repo
