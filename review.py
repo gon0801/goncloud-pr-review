@@ -228,20 +228,29 @@ def reviewed_completion(body):
     return match[2]
 
 
+def _cierre(text):
+    """La declaración final del modelo: (prosa, estado, detalle, línea
+    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
+    la última línea no vacía (una de solo ``` o ** también cierra, así que
+    una cita dentro de un fence final no declara) y unreviewed, la última no
+    vacía antes de ella."""
+    lines = (text or "").rstrip().splitlines()
+    line = lines[-1].strip().strip("`*") if lines else ""
+    if line.upper().startswith("COVERAGE:"):
+        status, _, detail = line.split(":", 1)[1].strip().partition("|")
+        status = status.strip().lower()
+        if status in ("complete", "partial"):
+            previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
+            declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
+            if declaracion and rutas_declaradas(declaracion) != set():
+                status = "partial"  # declaró archivos sin leer: no es complete
+            prosa = "\n".join(lines[:-1]).rstrip()
+            return prosa, status, detail.strip(), declaracion
+    return (text or "").rstrip(), None, "", None
+
+
 def split_coverage(text):
-    lines = text.rstrip().splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip().strip("`*")
-        if not line:
-            continue
-        if line.upper().startswith("COVERAGE:"):
-            rest = line.split(":", 1)[1].strip()
-            status, _, detail = rest.partition("|")
-            status = status.strip().lower()
-            if status in ("complete", "partial"):
-                return "\n".join(lines[:i]).rstrip(), status, detail.strip()
-        break
-    return text.rstrip(), None, ""
+    return _cierre(text)[:3]
 
 
 def libro_a_linea(head_sha, libro):
@@ -300,19 +309,18 @@ def libro_de(body):
 def unreviewed_de(texto):
     """Lo que el modelo declaró no revisar; None si falta o no se lee.
 
-    Vale solo un bloque en línea propia (columna 0), único en todo el texto,
-    inmediatamente antes de la línea COVERAGE y con JSON de lista de rutas:
-    cualquier desvío (imitaciones incluidas) anula la declaración."""
+    Vale solo la línea de _cierre (columna 0), única con el prefijo en todo
+    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
+    incluidas) anula la declaración."""
+    declaracion = _cierre(texto)[3]
     lineas = (texto or "").splitlines()
-    con_prefijo = [i for i, ln in enumerate(lineas) if ln.startswith(UNREVIEWED_PREFIX)]
-    if len(con_prefijo) != 1:
-        return None
-    i = con_prefijo[0]
-    if i + 1 >= len(lineas):
-        return None
-    if not lineas[i + 1].strip().strip("`*").upper().startswith("COVERAGE:"):
-        return None
-    segmento = lineas[i][len(UNREVIEWED_PREFIX) :]
+    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
+    return rutas_declaradas(declaracion) if declaracion and unica else None
+
+
+def rutas_declaradas(linea):
+    """Las rutas de una línea unreviewed=; None si no se lee."""
+    segmento = linea[len(UNREVIEWED_PREFIX) :]
     if not segmento.endswith(" -->"):
         return None
     try:
@@ -2075,7 +2083,7 @@ def prompt_de_reparacion(work, texto):
     )
 
 
-def partes_de_respuesta(texto, bloque_en_linea_propia=False):
+def partes_de_respuesta(texto):
     lineas = texto.splitlines()
     leidas = {i: split_coverage(ln)[1:] for i, ln in enumerate(lineas)}
     leidas = {i: c for i, c in leidas.items() if c[0] is not None}
@@ -2091,12 +2099,7 @@ def partes_de_respuesta(texto, bloque_en_linea_propia=False):
     conservar = politica_de_identidad() == "anchors"
     bloque = None
     if hallado and parse_model_findings(resto, conservar_anclas=conservar) is not None:
-        inicio, fin = hallado[:2]
-        antes = resto[:inicio].rpartition("\n")[2]
-        despues = resto[fin:].partition("\n")[0]
-        # Dentro de una frase es una cita del marcador en la prosa, no el bloque.
-        if not bloque_en_linea_propia or not (antes.strip() or despues.strip()):
-            bloque = resto[inicio:fin]
+        bloque = resto[hallado[0] : hallado[1]]
     return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
 
@@ -2123,7 +2126,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             file=sys.stderr,
         )
         return
-    prosa, bloque, cobertura = partes_de_respuesta(texto, bloque_en_linea_propia=True)
+    prosa, bloque, cobertura = partes_de_respuesta(texto)
     texto_rep = ""
     parcial = cobertura is not None and cobertura[0] == "partial"
     if bloque is not None and parcial:
@@ -2190,7 +2193,7 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
         ]
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
-        elif any(unreviewed_de(f"{ln}\nCOVERAGE:") != set() for ln in declaraciones):
+        elif any(rutas_declaradas(ln) != set() for ln in declaraciones):
             # Una lista no vacía o ilegible solo puede restringir lo acreditado,
             # así que cuenta esté donde esté. La declaración no se mueve junto
             # a COVERAGE: ahí el publicador la tomaría por auténtica.
