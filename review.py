@@ -21,6 +21,7 @@ from review_config import (
     env,
     get_provider,
     politica_de_identidad,
+    politica_de_revision,
 )
 import review_domain
 import review_github
@@ -800,14 +801,6 @@ def cmd_install(args):
 # validar_reporte; el adaptador construye los RepositoryFacts con Git. Ambas
 # identidades (current y anchors) pasan por la aceptación del dominio; la
 # emisión de anclas por el modelo llega con la activación del CIERRE.
-
-
-def politica_de_revision(manifest=None, identidad=None):
-    """ReviewPolicy normaliza la identidad externa (`current` → `titles`)."""
-    return review_domain.ReviewPolicy(
-        finding_identity=identidad or politica_de_identidad(),
-        diff_mode=(manifest or {}).get("mode", "full"),
-    )
 
 
 def hechos_de_repo(

@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 import review_github
 import review_render
 import review_sticky
@@ -171,7 +172,7 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
 
 
 def coordinador_revisa(repo, work, actual, base, head, texto):
-    policy = review.politica_de_revision()
+    policy = review_config.politica_de_revision()
     digest = review.digest_de_politica(policy)
     facts = domain.RepositoryFacts(
         revision=domain.Revision(base_sha=base, head_sha=head, policy_digest=digest)

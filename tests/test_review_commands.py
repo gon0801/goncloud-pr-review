@@ -1152,7 +1152,7 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("&lt;!-- ai-review:sha=", linea)
 
     def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         target = domain.ReviewTarget(
             repository="o/r",
             pr_number=1,

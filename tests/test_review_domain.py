@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_config
 import review_github
 import review_render
 import review_sticky
@@ -3873,8 +3874,8 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
             review.digest_de_politica(current), review.digest_de_politica(self.TITLES)
         )
         self.assertEqual(
-            review.politica_de_revision(identidad="current"),
-            review.politica_de_revision(identidad="titles"),
+            review_config.politica_de_revision(identidad="current"),
+            review_config.politica_de_revision(identidad="titles"),
         )
         primero = self._aceptar(self._vacio(), "38017166195")
         por_politica = {

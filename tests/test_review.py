@@ -3927,7 +3927,7 @@ class Workflows(unittest.TestCase):
     def _estado_pendiente(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         return domain.Snapshot(
             schema=3,
             generation=1,
@@ -4063,7 +4063,7 @@ class Workflows(unittest.TestCase):
                         "attempt": 1,
                         "pr_head_sha": "c" * 40,
                         "policy_digest": review.digest_de_politica(
-                            review.politica_de_revision()
+                            review_config.politica_de_revision()
                         ),
                         "target": domain.ReviewTarget(
                             repository="o/r",
@@ -4071,7 +4071,7 @@ class Workflows(unittest.TestCase):
                             head_sha="c" * 40,
                             base_sha="b" * 40,
                             policy_digest=review.digest_de_politica(
-                                review.politica_de_revision()
+                                review_config.politica_de_revision()
                             ),
                         ).json(),
                         "observaciones": [],
@@ -4096,7 +4096,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._estado_pendiente()
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4383,7 +4383,7 @@ class Workflows(unittest.TestCase):
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4417,7 +4417,7 @@ class Workflows(unittest.TestCase):
     def _resultado_de_corrida(self, tmp, corrida):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         (Path(tmp) / "result.json").write_text(
             json.dumps(
                 {
@@ -4563,7 +4563,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
         self.assertEqual(
             paquete["policy_digest"],
-            review.digest_de_politica(review.politica_de_revision()),
+            review.digest_de_politica(review_config.politica_de_revision()),
             "el digest sale de la política normalizada, no del checkpoint",
         )
         self.assertEqual(paquete["finding_identity"], "current")
@@ -5528,7 +5528,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
                 base_sha=base,
                 head_sha=prev,
                 policy_digest=review.digest_de_politica(
-                    review.politica_de_revision()
+                    review_config.politica_de_revision()
                 ),
             ),
         )
@@ -5763,7 +5763,7 @@ class ReviewContinuity(unittest.TestCase):
                                 )
                             else:
                                 work.mkdir(exist_ok=True)
-                                policy = review.politica_de_revision()
+                                policy = review_config.politica_de_revision()
                                 revision = domain.Revision(
                                     base_sha=base, head_sha=head,
                                     policy_digest=review.digest_de_politica(policy),
@@ -9493,7 +9493,7 @@ class CableadoIdentidad(unittest.TestCase):
                 "reviewed": ["app.py"],
                 "excluded": [],
             }
-            policy = review.politica_de_revision(manifest, identidad="anchors")
+            policy = review_config.politica_de_revision(manifest, identidad="anchors")
             cwd = os.getcwd()
             os.chdir(r["repo"])
             try:

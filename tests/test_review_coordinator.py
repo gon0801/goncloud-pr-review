@@ -1059,7 +1059,7 @@ class CoordinadorCli(unittest.TestCase):
         return None
 
     def _pendiente_vigente(self):
-        digest = review.digest_de_politica(review.politica_de_revision())
+        digest = review.digest_de_politica(review_config.politica_de_revision())
         target = domain.ReviewTarget(
             repository="o/r",
             pr_number=1,
