@@ -1296,15 +1296,20 @@ class RunAgent(unittest.TestCase):
         self.assertIn("deepseek", result[review.ERROR_KEY])
         self.assertIn("proxy", result[review.ERROR_KEY])
 
-    def test_max_turns_is_kept_as_partial_result(self):
-        proc, calls, result, _, _ = self.run_agent(
-            {"result": "", "subtype": "error_max_turns", "is_error": True}
-        )
-        self.assertEqual(proc.returncode, 0)
-        # Sin bloque: una vuelta de reparación; si tampoco lo entrega, queda parcial.
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(result["subtype"], "error_max_turns")
-        self.assertEqual(result["block_repair"], "failed")
+    def test_una_respuesta_vacia_no_se_repara(self):
+        # La CLI no trae "result" cuando se agota el tope de turnos.
+        sin_turnos = {"subtype": "error_max_turns", "is_error": True, "num_turns": 61}
+        vacia = {"result": "", "subtype": "success", "num_turns": 41}
+        for respuesta in (sin_turnos, vacia):
+            with self.subTest(subtype=respuesta["subtype"]):
+                proc, calls, result, _, _ = self.run_agent(
+                    None,
+                    provider="deepseek",
+                    FAKE_CLAUDE_REPLIES=json.dumps([respuesta, OK_REPLY]),
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(result, respuesta)
 
     SIN_BLOQUE = {
         "result": "**Veredicto:** 1 High.\n\nF1: división por cero en `calc.py:3`.",
