@@ -895,6 +895,7 @@ AVISOS_DEL_PROGRAMA = (
     "Comentario sin espacio para el estado",
     "No se pudo revisar el commit",
     "Comando no entendido",
+    "Comando no aplicado",
     "Revisión en curso",
 )
 
@@ -2957,6 +2958,27 @@ def texto_visible(cuerpo):
     return re.sub(r"<!--.*?-->", "", cuerpo or "", flags=re.S).strip()
 
 
+def _resto_de(cuerpo):
+    """Lo que `visible(bloque, resto)` recibe de un cuerpo: sin el marcador, sin
+    el bloque y sin la línea de revisión en curso, que no se arrastra."""
+    lineas = cuerpo.split("\n")
+    resto = "\n".join(lineas[1:]) if lineas and lineas[0] == MARKER else cuerpo
+    return "\n".join(
+        linea
+        for linea in strip_findings_block(resto, last=False).split("\n")
+        if not linea.startswith(AVISO_EN_CURSO_PREFIX)
+    ).strip()
+
+
+def encadenar(primero, segundo):
+    """Dos re-renders en orden: segundo parte del cuerpo que armó primero."""
+
+    def armar(bloque, resto):
+        return segundo(bloque, _resto_de(primero(bloque, resto)))
+
+    return armar
+
+
 def publish_checkpoint(decision, observado, adaptador, login=None, visible=None):
     """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
     bloque y conserva el resto (la prosa puede citar otros), salvo que
@@ -3027,19 +3049,7 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
             recibo={"comentario_id": creado.get("id") if creado else None},
             trabajo=decision.work_after_commit,
         )
-    original = observado.get("body") or ""
-    lineas_original = original.split("\n")
-    resto = (
-        "\n".join(lineas_original[1:])
-        if lineas_original and lineas_original[0] == MARKER
-        else original
-    )
-    resto = "\n".join(
-        linea
-        for linea in strip_findings_block(resto, last=False).split("\n")
-        if not linea.startswith(AVISO_EN_CURSO_PREFIX)
-    ).strip()
-    cuerpo = visible(bloque, resto)
+    cuerpo = visible(bloque, _resto_de(observado.get("body") or ""))
     if not cuerpo_publicable(cuerpo, bloque):
         motivo = (
             "el comentario no trae el bloque de estado: se conserva el "
@@ -3583,7 +3593,17 @@ def hechos_con_recortes_del_worker(facts, artifact):
     return replace(facts, omissions=facts.omissions + recortes)
 
 
+def _ultimo_comentario(adaptador):
+    return max(
+        (c["id"] for c in adaptador.leer() if isinstance(c.get("id"), int)),
+        default=0,
+    )
+
+
 def cmd_reconcile(args):
+    """Un run converge el PR sin importar qué evento lo despertó: primero los
+    comandos sin procesar (el cursor los hace idempotentes), después lo que
+    trae el evento y al final una sola escritura."""
     repo, pr = env("REPO"), env("PR_NUMBER")
     worker_ref = env("WORKER_REF")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
@@ -3600,6 +3620,15 @@ def cmd_reconcile(args):
         )
         return
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    if event_name == "issue_comment":
+        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+        if payload.get("action") != "created":
+            accion = payload.get("action")
+            print(
+                f"ai-review: issue_comment {accion!r} no admite comandos",
+                file=sys.stderr,
+            )
+            return
     head = os.environ.get("HEAD_SHA") or ""
     base = os.environ.get("BASE_SHA") or ""
     if event_name in ("workflow_run", "issue_comment", "workflow_dispatch"):
@@ -3627,8 +3656,32 @@ def cmd_reconcile(args):
             base_sha=base, head_sha=head, policy_digest=digest
         )
     )
+    target = review_domain.ReviewTarget(
+        repository=repo,
+        pr_number=int(pr),
+        head_sha=head,
+        base_sha=base,
+        policy_digest=digest,
+    )
 
-    artifact = None
+    def permisos(login_consultado):
+        return collaborator_permission(repo, login_consultado)
+
+    estado, trabajo, rechazos = review_domain.procesar_comandos(
+        current,
+        _comandos_de_comentarios(comments, login=login, cursor=current.command_cursor),
+        permisos,
+        target,
+    )
+    for cid, effect in rechazos:
+        print(f"ai-review: comando {cid} rechazado ({effect})")
+    avisos = tuple(
+        AVISOS_DE_RECHAZO[effect](cid)
+        for cid, effect in rechazos
+        if effect in AVISOS_DE_RECHAZO
+    )
+
+    artifact = solicitud = decision = None
     resultado_despachado = event_name == "workflow_dispatch" and bool(
         os.environ.get("WORKER_RUN_ID")
     )
@@ -3644,13 +3697,14 @@ def cmd_reconcile(args):
             wr = forma_del_run(payload.get("workflow_run") or {})
         artifact = json.loads((Path(args.work) / "result.json").read_text())
         solicitud = next(
-            (r for r in current.pending_requests if r.id == artifact.get("request_id")),
+            (r for r in estado.pending_requests if r.id == artifact.get("request_id")),
             None,
         )
+        rid = artifact.get("request_id")
+        emitida = type(rid) is int and 0 < rid <= estado.request_count
+        if solicitud is None and not emitida:
+            sys.exit(f"ai-review: resultado de solicitud desconocida {rid!r}")
         if solicitud is None:
-            rid = artifact.get("request_id")
-            if not (type(rid) is int and 0 < rid <= current.request_count):
-                sys.exit(f"ai-review: resultado de solicitud desconocida {rid!r}")
             # La podó una solicitud más nueva, cuyo despacho cancela este worker;
             # si el run alcanzó a avisar antes, no queda nada que publicar.
             print(
@@ -3658,174 +3712,138 @@ def cmd_reconcile(args):
                 " ignorado: ya no está pendiente",
                 file=sys.stderr,
             )
-            return
-        confiable = json.loads(
-            sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
-        ).get("sha")
-        sha_del_run = wr.get("head_sha") or ""
-        if sha_del_run and sha_del_run != confiable:
-            # main pudo avanzar mientras el worker corría: el código del run
-            # sigue siendo confiable si es un ancestro de worker_ref.
-            comparacion = json.loads(
-                sh(
-                    "gh", "api", f"repos/{repo}/compare/{sha_del_run}...{worker_ref}"
-                ).stdout
-            )
-            if comparacion.get("status") in ("ahead", "identical"):
-                confiable = sha_del_run
-        request = request_de_solicitud(
-            solicitud,
-            repository=repo,
-            workflow="ai-review-worker",
-            ref=worker_ref,
-            workflow_sha=confiable,
-        )
-        autenticado = authenticate_result(
-            {
-                "repository": repo,
-                "workflow": wr.get("name"),
-                "ref": wr.get("head_branch"),
-                "sha": wr.get("head_sha"),
-                "run_id": wr.get("id"),
-                "attempt": wr.get("run_attempt"),
-            },
-            artifact,
-            request,
-        )
-        if isinstance(autenticado, Rejected):
-            print(
-                f"ai-review: resultado rechazado ({autenticado.motivo})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        fallo = fallo_de_resultado(artifact, wr.get("id"), wr.get("run_attempt"))
-        if fallo is not None:
-            decision = review_domain.reconcile(current, fallo, facts, policy)
+            artifact = None
         else:
-            observaciones = [
-                review_domain.observation_de_entrada(e)
-                for e in autenticado.observaciones
-            ]
-            facts = hechos_con_delta_del_worker(facts, artifact, current)
-            facts = hechos_con_recortes_del_worker(facts, artifact)
-            decision = review_domain.reconcile(
-                current,
-                review_domain.ReportReady(
-                    origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
-                    request_id=artifact.get("request_id"),
-                    run_id=autenticado.run_id,
-                    attempt=autenticado.attempt,
-                    observaciones=tuple(observaciones),
-                    cobertura=autenticado.cobertura,
-                ),
-                facts,
-                policy,
+            confiable = json.loads(
+                sh("gh", "api", f"repos/{repo}/commits/{worker_ref}").stdout
+            ).get("sha")
+            sha_del_run = wr.get("head_sha") or ""
+            if sha_del_run and sha_del_run != confiable:
+                # main pudo avanzar mientras el worker corría: el código del run
+                # sigue siendo confiable si es un ancestro de worker_ref.
+                comparacion = json.loads(
+                    sh(
+                        "gh",
+                        "api",
+                        f"repos/{repo}/compare/{sha_del_run}...{worker_ref}",
+                    ).stdout
+                )
+                if comparacion.get("status") in ("ahead", "identical"):
+                    confiable = sha_del_run
+            request = request_de_solicitud(
+                solicitud,
+                repository=repo,
+                workflow="ai-review-worker",
+                ref=worker_ref,
+                workflow_sha=confiable,
             )
+            autenticado = authenticate_result(
+                {
+                    "repository": repo,
+                    "workflow": wr.get("name"),
+                    "ref": wr.get("head_branch"),
+                    "sha": wr.get("head_sha"),
+                    "run_id": wr.get("id"),
+                    "attempt": wr.get("run_attempt"),
+                },
+                artifact,
+                request,
+            )
+            if isinstance(autenticado, Rejected):
+                print(
+                    f"ai-review: resultado rechazado ({autenticado.motivo})",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            fallo = fallo_de_resultado(artifact, wr.get("id"), wr.get("run_attempt"))
+            if fallo is not None:
+                decision = review_domain.reconcile(estado, fallo, facts, policy)
+            else:
+                observaciones = [
+                    review_domain.observation_de_entrada(e)
+                    for e in autenticado.observaciones
+                ]
+                facts = hechos_con_delta_del_worker(facts, artifact, estado)
+                facts = hechos_con_recortes_del_worker(facts, artifact)
+                decision = review_domain.reconcile(
+                    estado,
+                    review_domain.ReportReady(
+                        origin=review_domain.Origin(kind="re-run", run_id=wr.get("id")),
+                        request_id=artifact.get("request_id"),
+                        run_id=autenticado.run_id,
+                        attempt=autenticado.attempt,
+                        observaciones=tuple(observaciones),
+                        cobertura=autenticado.cobertura,
+                    ),
+                    facts,
+                    policy,
+                )
     elif event_name == "workflow_dispatch":
         decision = review_domain.reconcile(
-            current,
+            estado,
             review_domain.RequestReview(
                 origin=review_domain.Origin(kind="push", run_id=_run_id()),
-                target=review_domain.ReviewTarget(
-                    repository=repo,
-                    pr_number=int(pr),
-                    head_sha=head,
-                    base_sha=base,
-                    policy_digest=digest,
-                ),
+                target=target,
             ),
             facts,
             policy,
         )
     elif event_name in ("pull_request", "pull_request_target"):
         evento = _evento_de_entorno(repo, pr, head, base, digest)
-        decision = review_domain.reconcile(current, evento, facts, policy)
-    elif event_name == "issue_comment":
-        avisos = ()
-        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-        if payload.get("action") != "created":
-            print(
-                f"ai-review: issue_comment {payload.get('action')!r} no admite comandos",
-                file=sys.stderr,
-            )
-            return
-        comandos = _comandos_de_comentarios(
-            comments, login=login, cursor=current.command_cursor
-        )
-        snapshot, work, rechazos = review_domain.procesar_comandos(
-            current,
-            tuple(comandos),
-            lambda login: collaborator_permission(repo, login),
-            review_domain.ReviewTarget(
-                repository=repo,
-                pr_number=int(pr),
-                head_sha=head,
-                base_sha=base,
-                policy_digest=digest,
-            ),
-        )
-        for cid, effect in rechazos:
-            print(f"ai-review: comando {cid} rechazado ({effect})")
-        avisos = tuple(
-            aviso_de_comando_no_entendido(cid)
-            for cid, effect in rechazos
-            if effect == review_domain.RECHAZO_NO_ENTENDIDO
-        )
-        decision = review_domain.Commit(snapshot=snapshot, work_after_commit=work)
-    else:
+        decision = review_domain.reconcile(estado, evento, facts, policy)
+    elif event_name != "issue_comment":
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
             "(pull_request, pull_request_target, issue_comment, "
             "workflow_run o workflow_dispatch)"
         )
 
-    if isinstance(decision, review_domain.Commit) and decision.work_after_commit:
+    previo = estado
+    if isinstance(decision, review_domain.Commit):
+        estado = decision.snapshot
+        trabajo = (*trabajo, *decision.work_after_commit)
+    estado = review_domain.marcar_hallazgos_nuevos(
+        previo, estado, lambda: _ultimo_comentario(adaptador)
+    )
+
+    if trabajo:
         snapshot_ra, despachables, terminadas = review_domain.reautorizar(
-            decision.snapshot,
-            decision.work_after_commit,
-            lambda login_consultado: collaborator_permission(repo, login_consultado),
+            estado, trabajo, permisos
         )
-        decision = review_domain.Commit(
-            snapshot=snapshot_ra or decision.snapshot,
-            work_after_commit=tuple(despachables),
-        )
+        estado, trabajo = snapshot_ra or estado, tuple(despachables)
         for terminada in terminadas:
             print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
 
-    visible = None
+    if estado == current and not trabajo:
+        print("ai-review: nada cambió; el sticky queda como está")
+        return
+
     # Solo un reporte de revisión del target vigente acredita: el dominio
     # devuelve Commit también al descartar un head viejo o al cerrar una
     # explicación, y esos no pueden publicar un SHA revisado.
-    if (
+    vigente = (
         artifact is not None
         and isinstance(decision, review_domain.Commit)
-        and solicitud.kind == "review"
         and review_domain._target_vigente(solicitud, facts, policy)
-    ):
-        visible = revision_visible(
+    )
+    explicacion = None
+    if vigente and solicitud.kind == "explain" and ERROR_KEY not in artifact:
+        explicacion = (solicitud.finding_id, texto_de_explicacion(artifact))
+    visible = estado_visible(estado, explicacion, avisos)
+    if vigente and solicitud.kind == "review":
+        revision = revision_visible(
             artifact,
-            decision.snapshot,
-            {f.id for f in current.findings},
+            estado,
+            {f.id for f in previo.findings},
             artifact.get("pr_head_sha") or head,
         )
-    elif isinstance(decision, review_domain.Commit) and event_name == "issue_comment":
-        visible = estado_visible(decision.snapshot, avisos=avisos)
-    elif (
-        artifact is not None
-        and isinstance(decision, review_domain.Commit)
-        and solicitud.kind == "explain"
-        and ERROR_KEY not in artifact
-        and review_domain._target_vigente(solicitud, facts, policy)
-    ):
-        visible = estado_visible(
-            decision.snapshot,
-            (solicitud.finding_id, texto_de_explicacion(artifact)),
-        )
-    elif isinstance(decision, review_domain.Commit):
-        visible = estado_visible(decision.snapshot)
-    observado = sticky if sticky else None
+        visible = encadenar(revision, visible) if avisos else revision
     resultado = publish_checkpoint(
-        decision, observado, adaptador, login=login, visible=visible
+        review_domain.Commit(snapshot=estado, work_after_commit=trabajo),
+        sticky or None,
+        adaptador,
+        login=login,
+        visible=visible,
     )
     if isinstance(resultado, Unconfirmed):
         print(
@@ -3843,6 +3861,8 @@ def cmd_reconcile(args):
         print(
             f"ai-review: {len(resultado.trabajo)} solicitud(es) confirmada(s) y despachada(s)"
         )
+    elif resultado.recibo.get("sin_texto_visible"):
+        print("ai-review: nada visible que mostrar; no se crea sticky")
     else:
         print("ai-review: checkpoint publicado sin trabajo nuevo")
 
@@ -4100,8 +4120,10 @@ def linea_en_curso(snapshot):
 def es_aviso_de_comando(linea):
     """Solo la línea exacta que escribe el programa para un comentario real se
     conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
-    m = re.fullmatch(re.escape(AVISO_COMANDO_PREFIX) + r"el comentario (\d+) .*", linea)
-    return bool(m) and linea == aviso_de_comando_no_entendido(int(m.group(1)))
+    m = re.search(r"el comentario (\d{1,19}) ", linea)
+    return bool(m) and any(
+        linea == aviso(int(m.group(1))) for aviso in AVISOS_DE_RECHAZO.values()
+    )
 
 
 def aviso_de_comando_no_entendido(cid):
@@ -4110,6 +4132,21 @@ def aviso_de_comando_no_entendido(cid):
         "es un comando que entienda; usa `ai-review: descartar F3`, "
         "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
     )
+
+
+def aviso_de_todo_tardio(cid):
+    return (
+        f"{aviso_md('Comando no aplicado', '')}`ai-review: descartar todo` del "
+        f"comentario {cid} es de antes de la última revisión con hallazgos nuevos y "
+        "no se aplicó; si también quieres descartarlos, comenta de nuevo "
+        "`ai-review: descartar todo`."
+    )
+
+
+AVISOS_DE_RECHAZO = {
+    review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
+    review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
+}
 
 
 _ENTIDAD_RE = re.compile(r"&(?!amp;)(?=#?\w+;)")

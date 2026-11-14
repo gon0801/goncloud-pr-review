@@ -264,6 +264,9 @@ class Snapshot:
     pending_requests: list = field(default_factory=list)
     request_count: int = 0
     receipts: tuple = field(default_factory=tuple)
+    # Mayor id de comentario que ya existía cuando aparecieron los hallazgos
+    # más nuevos: un "descartar todo" de ahí para atrás no los vio.
+    findings_born_after: int = 0
 
 
 @dataclass
@@ -880,6 +883,9 @@ def _v3_snapshot(data):
         or request_count < 0
     ):
         raise _SchemaError("request_count inválido")
+    born_after = data.get("findings_born_after", 0)
+    if type(born_after) is not int or born_after < 0:
+        raise _SchemaError("findings_born_after inválido")
     ids = {f.id for f in findings}
     solicitudes, numericos, legados = [], set(), set()
     for req in data.get("pending_requests") or []:
@@ -977,6 +983,7 @@ def _v3_snapshot(data):
         pending_requests=solicitudes,
         request_count=request_count,
         receipts=tuple(recibos),
+        findings_born_after=born_after,
     )
 
 
@@ -1370,6 +1377,11 @@ def _encode_sin_perdida(snapshot, limite):
                 {"command_id": r.command_id, "effect": r.effect}
                 for r in snapshot.receipts
             ],
+            **(
+                {"findings_born_after": snapshot.findings_born_after}
+                if snapshot.findings_born_after
+                else {}
+            ),
             "findings": _findings_json(snapshot, neutralizar=False),
         }
         blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
@@ -2484,6 +2496,18 @@ def _consumido(current, cid, efecto=None, recibo=True):
 
 ACCION_NO_ENTENDIDA = "no-entendida"
 RECHAZO_NO_ENTENDIDO = "comando no entendido"
+RECHAZO_TODO_TARDIO = (
+    "descartar todo anterior a hallazgos nuevos; hay que repetir el comando"
+)
+
+
+def marcar_hallazgos_nuevos(antes, despues, ultimo_comentario):
+    """Si aparecieron IDs de hallazgo nuevos, fija la marca con el mayor id de
+    comentario existente (ultimo_comentario se consulta solo entonces)."""
+    if not {f.id for f in despues.findings} - {f.id for f in antes.findings}:
+        return despues
+    marca = max(despues.findings_born_after, ultimo_comentario())
+    return replace(despues, findings_born_after=marca)
 
 
 def procesar_comandos(current, comandos, permisos, target):
@@ -2494,8 +2518,9 @@ def procesar_comandos(current, comandos, permisos, target):
     denegación confirmada, un hallazgo inexistente o un comentario editado
     antes de su primera admisión producen un rechazo visible con recibo y
     avanzan el cursor. `descartar` y `descartar todo` capturan los IDs
-    abiertos actuales; `explicar` fija finding_id, target y digest;
-    `revisar` crea una solicitud explícita. Devuelve
+    abiertos actuales, y uno escrito antes de los hallazgos más nuevos
+    (findings_born_after) se rechaza en vez de alcanzarlos; `explicar` fija
+    finding_id, target y digest; `revisar` crea una solicitud explícita. Devuelve
     (snapshot, solicitudes nuevas, rechazos) sin despachar nada.
     """
     snapshot = current
@@ -2524,6 +2549,11 @@ def procesar_comandos(current, comandos, permisos, target):
         if action == ACCION_NO_ENTENDIDA:
             rechazos.append((cid, RECHAZO_NO_ENTENDIDO))
             snapshot = _consumido(snapshot, cid, RECHAZO_NO_ENTENDIDO)
+        elif action == "descartar" and arg == "todo" and (
+            cid <= snapshot.findings_born_after
+        ):
+            rechazos.append((cid, RECHAZO_TODO_TARDIO))
+            snapshot = _consumido(snapshot, cid, RECHAZO_TODO_TARDIO)
         elif action == "descartar":
             ids_hallazgos = {f.id for f in snapshot.findings}
             if arg != "todo" and arg not in ids_hallazgos:

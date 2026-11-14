@@ -296,8 +296,11 @@ class ComandosEnCualquierEvento(unittest.TestCase):
             estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
         )
         self.assertEqual(github.estado().command_cursor, 30)
-        self.assertIn("descartar todo", github.visible())
-        self.assertIn("comentario 20", github.visible())
+        aviso = review.aviso_de_todo_tardio(20)
+        self.assertIn(aviso, github.sticky())
+        github.comentar(31, "ai-review: descartar F2")
+        correr(github, "issue_comment")
+        self.assertIn(aviso, github.sticky(), "el aviso sobrevive al re-render")
 
 
 if __name__ == "__main__":
