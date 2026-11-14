@@ -35,9 +35,12 @@ from review_domain import (
     FINDINGS_PREFIX,
     FINDINGS_SUFFIX,
     FINDINGS_TITLE_MAX,
+    LIBRO_MAX_ENTRADAS,
     OPEN,
     RESOLVED,
     SEVERITIES,
+    UNREVIEWED_PREFIX,
+    cierre_de_respuesta,
     derive_next,
     find_findings_block,
     find_model_findings_block,
@@ -45,8 +48,10 @@ from review_domain import (
     normalize_severity,
     one_line,
     parse_model_findings,
+    rutas_declaradas,
     same_issue,
     sanitize_finding,
+    split_coverage,
     strip_findings_block,
     strip_model_findings_block,
     unique_paths,
@@ -150,8 +155,6 @@ MARKER = "<!-- ai-review:sticky -->"
 SHA_PREFIX = "<!-- ai-review:sha="
 COMPLETION_PREFIX = "<!-- ai-review:completion="
 COVERED_PREFIX = "<!-- ai-review:covered="
-UNREVIEWED_PREFIX = "<!-- ai-review:unreviewed="
-LIBRO_MAX_ENTRADAS = 400
 LIBRO_MAX_BYTES = 30000
 COMMENT_LIMIT = 50000
 GITHUB_COMMENT_MAX = 65000
@@ -217,31 +220,6 @@ def reviewed_completion(body):
     return match[2]
 
 
-def _cierre(text):
-    """La declaración final del modelo: (prosa, estado, detalle, línea
-    unreviewed o None). La autentica la posición, no el texto: COVERAGE es
-    la última línea no vacía (una de solo ``` o ** también cierra, así que
-    una cita dentro de un fence final no declara) y unreviewed, la última no
-    vacía antes de ella."""
-    lines = (text or "").rstrip().splitlines()
-    line = lines[-1].strip().strip("`*") if lines else ""
-    if line.upper().startswith("COVERAGE:"):
-        status, _, detail = line.split(":", 1)[1].strip().partition("|")
-        status = status.strip().lower()
-        if status in ("complete", "partial"):
-            previa = next((ln for ln in reversed(lines[:-1]) if ln.strip()), "")
-            declaracion = previa if previa.startswith(UNREVIEWED_PREFIX) else None
-            if declaracion and rutas_declaradas(declaracion) != set():
-                status = "partial"  # declaró archivos sin leer: no es complete
-            prosa = "\n".join(lines[:-1]).rstrip()
-            return prosa, status, detail.strip(), declaracion
-    return (text or "").rstrip(), None, "", None
-
-
-def split_coverage(text):
-    return _cierre(text)[:3]
-
-
 def libro_a_linea(head_sha, libro):
     """El libro de cobertura como línea oculta del sticky; None si no cabe."""
     if len(libro) > LIBRO_MAX_ENTRADAS:
@@ -298,29 +276,13 @@ def libro_de(body):
 def unreviewed_de(texto):
     """Lo que el modelo declaró no revisar; None si falta o no se lee.
 
-    Vale solo la línea de _cierre (columna 0), única con el prefijo en todo
+    Vale solo la línea de cierre_de_respuesta (columna 0), única con el prefijo en todo
     el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
     incluidas) anula la declaración."""
-    declaracion = _cierre(texto)[3]
+    declaracion = cierre_de_respuesta(texto)[3]
     lineas = (texto or "").splitlines()
     unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
     return rutas_declaradas(declaracion) if declaracion and unica else None
-
-
-def rutas_declaradas(linea):
-    """Las rutas de una línea unreviewed=; None si no se lee."""
-    segmento = linea[len(UNREVIEWED_PREFIX) :]
-    if not segmento.endswith(" -->"):
-        return None
-    try:
-        lista = json.loads(segmento[: -len(" -->")])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(lista, list) or len(lista) > LIBRO_MAX_ENTRADAS:
-        return None
-    if any(not isinstance(ruta, str) or not ruta for ruta in lista):
-        return None
-    return set(lista)
 
 
 def modelo_utilizable(modelo):

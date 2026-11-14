@@ -23,6 +23,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_domain
 import review_config
 import review_context  # noqa: E402
 
@@ -69,19 +70,19 @@ class Filters(unittest.TestCase):
 class Coverage(unittest.TestCase):
     def test_complete(self):
         self.assertEqual(
-            review.split_coverage("**Veredicto:** ok\n\nCOVERAGE: complete\n"),
+            review_domain.split_coverage("**Veredicto:** ok\n\nCOVERAGE: complete\n"),
             ("**Veredicto:** ok", "complete", ""),
         )
 
     def test_partial_with_detail_and_markdown_wrapping(self):
         self.assertEqual(
-            review.split_coverage("x\n`COVERAGE: partial | migrations/ too large`"),
+            review_domain.split_coverage("x\n`COVERAGE: partial | migrations/ too large`"),
             ("x", "partial", "migrations/ too large"),
         )
 
     def test_missing_line_is_reported_as_unknown(self):
         self.assertEqual(
-            review.split_coverage("**Veredicto:** ok"), ("**Veredicto:** ok", None, "")
+            review_domain.split_coverage("**Veredicto:** ok"), ("**Veredicto:** ok", None, "")
         )
 
 
@@ -1470,7 +1471,7 @@ class RunAgent(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
-                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertEqual(result["result"].count("COVERAGE:"), 1)
                 modelo = review.parse_model_findings(result["result"])
                 self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
@@ -1540,7 +1541,7 @@ class RunAgent(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
-                self.assertEqual(review.split_coverage(result["result"])[1:], cobertura)
+                self.assertEqual(review_domain.split_coverage(result["result"])[1:], cobertura)
                 self.assertIsNone(
                     review.unreviewed_de(result["result"]),
                     "una respuesta rearmada no acredita cobertura parcial",
@@ -1564,7 +1565,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 1)
         self.assertEqual(
-            review.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
+            review_domain.split_coverage(result["result"])[1:], ("partial", "no leí b.py")
         )
         self.assertIsNone(
             review.unreviewed_de(result["result"]),
@@ -1601,7 +1602,7 @@ class RunAgent(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertEqual(len(calls), llamadas)
                 self.assertEqual(
-                    review.split_coverage(result["result"])[1:],
+                    review_domain.split_coverage(result["result"])[1:],
                     ("partial", "no leí b.py"),
                 )
                 self.assertIsNone(review.unreviewed_de(result["result"]))
@@ -1647,7 +1648,7 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["usage"], {"input_tokens": 1050, "output_tokens": 210})
         self.assertIn(self.BLOQUE, result["result"])
-        self.assertEqual(review.split_coverage(result["result"])[1], "partial")
+        self.assertEqual(review_domain.split_coverage(result["result"])[1], "partial")
 
     def test_un_bloque_reparado_ilegible_no_cuenta(self):
         """#113 ai-review F2: aceptar con el mismo criterio que dispara."""
@@ -4781,11 +4782,11 @@ class FindingsBlock(unittest.TestCase):
     def test_block_position_before_or_after_coverage(self):
         block = block_of(make_finding())
         text = f"**Veredicto:** x\n\n{block}\nCOVERAGE: complete"
-        self.assertEqual(review.split_coverage(text)[1], "complete")
+        self.assertEqual(review_domain.split_coverage(text)[1], "complete")
         self.assertIsNotNone(review.parse_findings_block(text))
         misplaced = f"**Veredicto:** x\nCOVERAGE: complete\n{block}"
         self.assertIsNone(
-            review.split_coverage(misplaced)[1], "la cobertura queda desconocida"
+            review_domain.split_coverage(misplaced)[1], "la cobertura queda desconocida"
         )
         self.assertIsNotNone(
             review.parse_findings_block(misplaced),
@@ -5121,7 +5122,7 @@ class Fallback(unittest.TestCase):
             "num_turns": 7,
         }
         manifest = dict(MANIFEST, max_turns=60)
-        model = review.parse_model_findings(review.split_coverage(text)[0])
+        model = review.parse_model_findings(review_domain.split_coverage(text)[0])
         merged, new_ids = review.merge_findings(
             None,
             model,
@@ -7345,7 +7346,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
     """T16-f11: 7 de 24 corridas incrementales perdían el bloque del modelo."""
 
     def test_bloque_sin_cierre_conserva_los_hallazgos(self):
-        state = review.parse_model_findings(review.split_coverage(BLOQUE_SIN_CIERRE)[0])
+        state = review.parse_model_findings(review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0])
         self.assertEqual(
             [(f["id"], f["severity"], f["state"]) for f in state["findings"]],
             [("F1", "Medium", "open"), (None, "Low", "open")],
@@ -7354,12 +7355,12 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
 
     def test_cierre_tras_salto_de_linea_conserva_los_hallazgos(self):
         state = review.parse_model_findings(
-            review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+            review_domain.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
         )
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
     def test_espacio_tras_el_prefijo_y_sin_cierre_conserva_los_hallazgos(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         for espacio in (" ", "\n"):
             with self.subTest(espacio=repr(espacio)):
                 texto = prosa.replace(
@@ -7376,11 +7377,11 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         self.assertIsNone(review.parse_model_findings(truncado))
 
     def test_el_texto_visible_no_arrastra_el_bloque_sin_cerrar(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         self.assertEqual(
             review.strip_model_findings_block(prosa), "Detalle del cambio."
         )
-        otra = review.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
+        otra = review_domain.split_coverage(BLOQUE_CIERRE_EN_OTRA_LINEA)[0]
         self.assertEqual(review.strip_model_findings_block(otra), "Detalle del cambio.")
 
     def test_un_bloque_ilegible_no_deja_un_comentario_html_abierto(self):
@@ -7399,12 +7400,12 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
 
     def test_el_ultimo_bloque_sin_cierre_gana_a_uno_citado_antes(self):
         citado = block_of(make_finding("F9", title="Citado del PR"))
-        texto = f"{citado}\ntexto\n" + review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        texto = f"{citado}\ntexto\n" + review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         state = review.parse_model_findings(texto)
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
     def test_el_parser_del_sticky_sigue_exigiendo_el_cierre(self):
-        prosa = review.split_coverage(BLOQUE_SIN_CIERRE)[0]
+        prosa = review_domain.split_coverage(BLOQUE_SIN_CIERRE)[0]
         self.assertIsNone(review.parse_findings_block(prosa))
         import review_domain as domain
 
