@@ -1454,6 +1454,12 @@ class RunAgent(unittest.TestCase):
                 2,
                 ("partial", ""),
             ),
+            "la declara el turno de reparación": (
+                f"Un problema.\n\n{self.BLOQUE}",
+                f"{vacio}\n{sin_b}\nCOVERAGE: complete",
+                2,
+                ("partial", ""),
+            ),
         }
         for caso, (original, reparada, llamadas, cobertura) in casos.items():
             with self.subTest(caso=caso):
