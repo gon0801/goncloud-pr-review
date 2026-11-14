@@ -2203,7 +2203,11 @@ def run_with_provider(
     finally:
         if proxy:
             proxy.terminate()
-            proxy.wait(timeout=10)
+            try:
+                proxy.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
+                proxy.wait()
 
 
 def print_proxy_log(work):
