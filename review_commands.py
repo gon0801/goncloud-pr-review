@@ -60,7 +60,7 @@ def _lineas_utiles(cuerpo):
             if m:
                 cerca = (m.group(1)[0], len(m.group(1)))
                 continue
-            if linea.lstrip().startswith(">"):
+            if linea.lstrip().startswith(">") or re.match(r"(?: {4}|\t)", linea):
                 continue
             yield linea
         elif (
@@ -74,22 +74,22 @@ def _lineas_utiles(cuerpo):
 
 def leer_comando(cuerpo):
     lineas = list(_lineas_utiles(cuerpo))
-    candidatas = [ln for ln in lineas if re.match(r"\s*ai-review:", ln, re.IGNORECASE)]
+    candidatas = [ln for ln in lineas if re.match(r" {0,3}ai-review:", ln, re.IGNORECASE)]
     if not candidatas:
         if any(re.search(r"ai-review:", ln, re.IGNORECASE) for ln in lineas):
             return Comando(review_domain.ACCION_NO_ENTENDIDA)
         return None
     primera, extra = candidatas[0], len(candidatas) > 1
     m = re.match(
-        rf"\s*ai-review:\s*explicar\s+F({FINDING_ID_DIGITS})\b",
+        rf" {{0,3}}ai-review:\s*explicar\s+F({FINDING_ID_DIGITS})\b",
         primera,
         re.IGNORECASE,
     )
     if m:
         return Comando("explicar", frozenset({f"F{int(m.group(1))}"}), extra=extra)
-    if re.fullmatch(r"\s*ai-review:\s*revisar\s*", primera, re.IGNORECASE):
+    if re.fullmatch(r" {0,3}ai-review:\s*revisar\s*", primera, re.IGNORECASE):
         return Comando("revisar", extra=extra)
-    m = re.match(r"\s*ai-review:\s*descartar\s+(.+)", primera, re.IGNORECASE)
+    m = re.match(r" {0,3}ai-review:\s*descartar\s+(.+)", primera, re.IGNORECASE)
     if m:
         ids, todo = dismiss_targets(m.group(1))
         if todo:
