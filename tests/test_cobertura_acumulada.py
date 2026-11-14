@@ -472,6 +472,53 @@ class Continuacion(unittest.TestCase):
         por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
         self.assertEqual(por_id["F1"]["state"], "resolved")
 
+    def test_renombre_cuenta_la_ruta_vieja_como_cambio_del_push(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            # Fija el default de git del runner: un diff.renames=false global
+            # en la máquina ocultaría el caso.
+            git(repo, "config", "diff.renames", "true")
+            cuerpo_util = lineas(16, "ayudante")
+            (repo / "util.py").write_text(cuerpo_util)
+            base = commit(repo, "base")
+            (repo / "util.py").write_text(cuerpo_util + "f = eval(x)\n")
+            head1 = commit(repo, "pasada-1")
+            work1 = Path(tmp, "work1")
+            manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
+            f1 = {
+                "id": "F-new",
+                "file": "util.py",
+                "line": 17,
+                "files": [],
+                "severity": "High",
+                "title": "eval sobre entrada del usuario",
+                "state": "open",
+            }
+            result1 = {
+                "result": texto_pasada("complete", hallazgos=[f1]),
+                "subtype": "success",
+            }
+            cuerpo1 = publicar(work1, head1, manifest1, result1, repo=repo)
+            git(repo, "mv", "util.py", "helpers.py")
+            (repo / "helpers.py").write_text(cuerpo_util + "f = int(x)\n")
+            head2 = commit(repo, "pasada-2")
+            prev, _ = pasar_gate(Path(tmp, "gate"), head2, cuerpo1)
+            work2 = Path(tmp, "work2")
+            manifest2 = preparar(repo, work2, base, head2, prev)
+            self.assertEqual(manifest2["mode"], "incremental")
+            self.assertIn("util.py", manifest2["reviewed"])
+            result2 = {
+                "result": texto_pasada(
+                    "complete", hallazgos=[dict(f1, id="F1", state="resolved")]
+                ),
+                "subtype": "success",
+            }
+            cuerpo2 = publicar(
+                work2, head2, manifest2, result2, body=cuerpo1, repo=repo
+            )
+        por_id = {f["id"]: f for f in bloque_del(cuerpo2)["findings"]}
+        self.assertEqual(por_id["F1"]["state"], "resolved")
+
 
 class FalloCerrado(unittest.TestCase):
     def test_d_parcial_sin_bloque_unreviewed_no_avanza(self):
