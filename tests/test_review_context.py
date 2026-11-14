@@ -295,6 +295,48 @@ class IncrementalContext(unittest.TestCase):
             self.assertNotIn("a_0 = 0", result.partes["y_correccion.py"])
             self.assertEqual(result.hechos.changed_paths, ("y_correccion.py",))
 
+    def test_merging_the_base_into_the_pr_reviews_only_the_pr_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "shared.py").write_text("".join(lineas(40, "linea")))
+            (repo / "solo_base.py").write_text("m = 1\n")
+            commit(repo, "base")
+            git(repo, "checkout", "-q", "-b", "pr")
+            texto = (repo / "shared.py").read_text()
+            (repo / "shared.py").write_text(
+                texto.replace("linea2 = 2", "linea2 = 'pr'")
+            )
+            prev = commit(repo, "pr")
+            git(repo, "checkout", "-q", "main")
+            texto = (repo / "shared.py").read_text()
+            (repo / "shared.py").write_text(
+                texto.replace("linea35 = 35", "linea35 = 'main'")
+            )
+            (repo / "solo_base.py").write_text("m = 'main'\n")
+            base_nueva = commit(repo, "avanza base")
+            git(repo, "checkout", "-q", "pr")
+            git(repo, "merge", "-q", "--no-edit", "main")
+            head = git(repo, "rev-parse", "HEAD")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base_nueva, digest),
+                memoria(prev, base_nueva, digest),
+                policy,
+                cobertura_previa={
+                    "shared.py": git(repo, "rev-parse", f"{prev}:shared.py")
+                },
+            )
+            self.assertEqual(result.modo, "incremental")
+            self.assertEqual([p.text for p in result.entregados], ["shared.py"])
+            cambios = [
+                linea
+                for linea in result.partes["shared.py"].splitlines()
+                if linea[:1] in "+-" and not linea.startswith(("+++", "---"))
+            ]
+            self.assertEqual(cambios, ["-linea2 = 2", "+linea2 = 'pr'"])
+
     def test_strict_budget_leaves_obligation_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
