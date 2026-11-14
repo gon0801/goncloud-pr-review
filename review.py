@@ -2040,6 +2040,14 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     texto = result.get("result") or ""
     if ERROR_KEY in result or hallazgo_a_explicar(work) or not falta_bloque(texto):
         return
+    if not texto.strip():
+        # Sin respuesta no hay qué transcribir. La reparación inventaría un bloque
+        # vacío y una cobertura completa. Pasa al agotar el tope de turnos.
+        print(
+            "ai-review: la revisión no devolvió texto; no hay respuesta que reparar",
+            file=sys.stderr,
+        )
+        return
     restante = int(deadline - time.monotonic()) - 30
     if restante < REPAIR_MIN_SECONDS:
         print(
