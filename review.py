@@ -195,6 +195,8 @@ LITELLM_VERSION = "1.102.1"
 # reviews short. The whole run step (proxy start + attempts + retry wait) must fit in
 # REVIEW_BUDGET_SECONDS; with install, prepare and publish (~3 min) that stays under the
 # 30 min job limit. A timed-out attempt is not retried: another one would take as long.
+# A second run (retry or fallback) starts only if its full attempt time still fits. Cut
+# short, it times out without publishing and the paid API still bills the tokens.
 SECONDS_PER_TURN = 15
 MIN_ATTEMPT_SECONDS = 300
 REVIEW_BUDGET_SECONDS = 1320
@@ -1917,10 +1919,13 @@ def cmd_run(args):
         soft_fail(result_path, primaria.sin_respaldo)
         return
     fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
-    if int(deadline - time.monotonic()) - 30 < MIN_ATTEMPT_SECONDS:
+    quedan = int(deadline - time.monotonic()) - 30
+    if quedan < attempt_timeout:
         soft_fail(
             result_path,
-            f"{primaria.motivo}; no queda tiempo para probar {fallback_name}",
+            f"{primaria.motivo}; no queda tiempo para una revisión completa con "
+            f"{fallback_name} (quedan {quedan} s de los {attempt_timeout} s que "
+            "necesita)",
         )
         return
     print(f"ai-review: {primaria.motivo}; se cambia a {fallback_name}", flush=True)
@@ -2007,8 +2012,20 @@ class FallaDelProveedor:
     def no_disponible(cls, nombre):
         return cls(
             "unavailable",
-            f"{nombre} falló en todos los intentos",
-            "la revisión falló en todos los intentos (proveedor no disponible por ahora)",
+            f"{nombre} falló con un error transitorio",
+            "la revisión falló con un error transitorio (proveedor no disponible "
+            "por ahora)",
+        )
+
+    def sin_tiempo_para_reintentar(self, quedan, necesita):
+        nota = (
+            "no queda tiempo para un reintento completo "
+            f"(quedan {quedan} s de los {necesita} s que necesita)"
+        )
+        return replace(
+            self,
+            motivo=f"{self.motivo}; {nota}",
+            sin_respaldo=f"{self.sin_respaldo}; {nota}",
         )
 
 
@@ -2315,12 +2332,12 @@ def run_agent(
     falla = None
     for attempt in range(1, attempts + 1):
         remaining = int(deadline - time.monotonic())
-        if attempt > 1 and remaining - 30 < MIN_ATTEMPT_SECONDS:
+        if attempt > 1 and remaining - 30 < attempt_timeout:
             print(
                 f"ai-review: no queda tiempo para otro intento ({remaining} s del presupuesto)",
                 file=sys.stderr,
             )
-            break
+            return falla.sin_tiempo_para_reintentar(remaining - 30, attempt_timeout)
         timeout = max(1, min(attempt_timeout, remaining - 30))
         print(
             f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)",
