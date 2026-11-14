@@ -2830,6 +2830,21 @@ class Workflows(unittest.TestCase):
         self.assertEqual(resuelto("2700"), "2700")
         self.assertEqual(resuelto(""), str(review.REVIEW_BUDGET_SECONDS))
 
+    def test_un_presupuesto_mal_escrito_en_la_variable_se_dice_con_claridad(self):
+        # La variable la escribe una persona en la configuración del repo.
+        def presupuesto(valor):
+            with mock.patch.dict(os.environ, {"REVIEW_BUDGET_SECONDS": valor}):
+                return review.presupuesto_de_revision()
+
+        self.assertEqual(presupuesto("2700"), 2700)
+        self.assertEqual(presupuesto(""), review.REVIEW_BUDGET_SECONDS)
+        for valor in ("2700s", "45 min", "0", "-5", "1.5"):
+            with self.subTest(valor=valor):
+                with self.assertRaises(SystemExit) as salida:
+                    presupuesto(valor)
+                self.assertIn("REVIEW_BUDGET_SECONDS", str(salida.exception.code))
+                self.assertIn(repr(valor), str(salida.exception.code))
+
     def test_el_coordinador_baja_solo_el_resultado_del_attempt_avisado(self):
         # El patrón *attempt-1* también tomaba el artifact del attempt 10.
         nombre = re.search(
