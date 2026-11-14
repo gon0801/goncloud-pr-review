@@ -4232,45 +4232,6 @@ def cmd_execute_request(args):
         strict_budget=False,
     )
     previo = prev_de_memoria(sticky["body"] if sticky else None)
-    try:
-        preparacion = prepare_review(
-            GitRepository(Path.cwd()),
-            review_domain.WorkRequest(
-                id=solicitud.id,
-                kind=solicitud.kind,
-                finding_id=solicitud.finding_id,
-                legacy_id=solicitud.legacy_id,
-                origin=solicitud.origin,
-                basis_generation=solicitud.basis_generation,
-                state=solicitud.state,
-                target=review_domain.ReviewTarget(
-                    repository=repo,
-                    pr_number=int(pr),
-                    head_sha=head,
-                    base_sha=base,
-                    policy_digest=digest_de_politica(policy),
-                ).json(),
-                motivo=solicitud.motivo,
-                digest=solicitud.digest,
-                solicitante=solicitud.solicitante,
-            ),
-            current,
-            policy,
-            cobertura_previa=previo.get("covered"),
-        )
-    except Exception as exc:
-        plan = {"mode": "full", "head_sha": head, "base_sha": base}
-        plan_fallback = f"prepare_review no corrió ({type(exc).__name__})"
-    else:
-        plan = {
-            "mode": preparacion.modo,
-            "head_sha": head,
-            "base_sha": base,
-            "changed_paths": list(preparacion.plan.changed_paths),
-            "previous_sha": preparacion.plan.previous_sha,
-            "obligaciones": [ob.ruta for ob in preparacion.plan.obligations],
-        }
-        plan_fallback = ""
     paquete = {
         "request_id": solicitud.id,
         "kind": solicitud.kind,
@@ -4281,13 +4242,10 @@ def cmd_execute_request(args):
         "base_sha": base,
         "policy_digest": digest_de_politica(policy),
         "finding_identity": politica_de_identidad(),
-        "plan": plan,
         "target": dict(solicitud.target),
         "observaciones": [],
         "cobertura": review_domain.UNKNOWN,
     }
-    if plan_fallback:
-        paquete["plan_fallback"] = plan_fallback
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     destino = work / "request-package.json"

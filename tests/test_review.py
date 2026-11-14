@@ -3227,8 +3227,13 @@ class Workflows(unittest.TestCase):
                         )
                 paquete = json.loads((Path(work) / "request-package.json").read_text())
                 self.assertEqual(
-                    paquete["plan"],
-                    {"mode": "full", "head_sha": head, "base_sha": base},
+                    paquete["pr_head_sha"],
+                    head,
+                    "execute-request recibe el HEAD_SHA real del paso",
+                )
+                self.assertEqual(
+                    paquete["base_sha"],
+                    base,
                     "execute-request recibe el BASE_SHA real del paso",
                 )
                 evento = Path(work) / "event.json"
@@ -4509,8 +4514,8 @@ class Workflows(unittest.TestCase):
             request_count=1,
         )
 
-    def test_execute_request_arma_el_paquete_con_plan(self):
-        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+    def test_execute_request_arma_el_paquete(self):
+        """B4 r2: paquete con target, policy digest y RunKey."""
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
@@ -4541,11 +4546,8 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["run_id"], 55)
         self.assertEqual(paquete["attempt"], 2)
         self.assertEqual(paquete["pr_head_sha"], "c" * 40)
+        self.assertEqual(paquete["base_sha"], "b" * 40)
         self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
-        self.assertEqual(
-            paquete["plan"],
-            {"mode": "full", "head_sha": "c" * 40, "base_sha": "b" * 40},
-        )
         self.assertEqual(
             paquete["policy_digest"],
             review.digest_de_politica(review.politica_de_revision()),
@@ -4625,9 +4627,8 @@ class Workflows(unittest.TestCase):
                             argparse.Namespace(work=str(trabajo), request_id="1")
                         )
             paquete = json.loads((trabajo / "request-package.json").read_text())
-            self.assertIn(paquete["plan"]["mode"], ("full", "incremental"))
-            self.assertEqual(paquete["plan"]["changed_paths"], ["other.py"])
-            self.assertNotIn("plan_fallback", paquete)
+            self.assertEqual(paquete["pr_head_sha"], head)
+            self.assertEqual(paquete["base_sha"], base)
 
     def test_actionlint_firma_las_plantillas(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
