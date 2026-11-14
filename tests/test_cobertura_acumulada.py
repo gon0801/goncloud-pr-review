@@ -1199,7 +1199,10 @@ class LecturaDeLaRespuesta(unittest.TestCase):
                 self.assertEqual(titulos, ["división por cero"])
                 self.assertEqual(marcador, "complete")
 
-    def test_un_bloque_real_con_sangria_bajo_una_viñeta_se_lee(self):
+    def test_un_bloque_con_cuatro_columnas_de_sangria_va_a_reparacion(self):
+        """Con esa sangría no se distingue el bloque real bajo una viñeta de una
+        cita en código indentado. Se trata como cita: la reparación recupera el
+        real con un aviso si falla, y una cita nunca vacía los hallazgos."""
         hallazgo = {
             "id": "F-new",
             "file": "a.py",
@@ -1213,13 +1216,12 @@ class LecturaDeLaRespuesta(unittest.TestCase):
             + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
             + review.FINDINGS_SUFFIX
         )
-        cuerpo, marcador, _ = self.publicar_texto(
-            f"**Veredicto:** un problema.\n\n- Hallazgos:\n\n    {real}\n\n"
-            "COVERAGE: complete"
-        )
-        titulos = [f["title"] for f in bloque_del(cuerpo)["findings"]]
-        self.assertEqual(titulos, ["división por cero"])
-        self.assertEqual(marcador, "complete")
+        bajo_viñeta = f"- Hallazgos:\n\n    {real}"
+        cierre = "\n\nCOVERAGE: complete"
+        self.assertIsNone(review.parse_model_findings(bajo_viñeta + cierre))
+        self.assertTrue(review.falta_bloque(bajo_viñeta + cierre))
+        con_cita = f"{bajo_viñeta}\n\n    {BLOQUE_VACIO}{cierre}"
+        self.assertTrue(review.falta_bloque(con_cita))
 
     def test_un_fence_final_que_cita_el_formato_no_declara_complete(self):
         cuerpo, marcador, libro = self.publicar_texto(

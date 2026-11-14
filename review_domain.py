@@ -417,19 +417,13 @@ def find_model_findings_block(text):
     """
     text = text or ""
     citas = _tramos_cercados(text)
-    sangrado = None
     for start in reversed(_block_starts(text)):
         if any(inicio <= start < fin for inicio, fin in citas):
             continue
         found = _model_block_at(text, start)
-        if found is None or not _en_lineas_propias(text, start, found[0]):
-            continue
-        if not _sangrado_como_codigo(text, start):
+        if found is not None and _en_lineas_propias(text, start, found[0]):
             return start, *found
-        # Con cuatro columnas puede ser código citado o contenido de una
-        # viñeta: solo vale si no hay otro bloque sin esa sangría.
-        sangrado = sangrado or (start, *found)
-    return sangrado
+    return None
 
 
 def _model_block_at(text, start):
@@ -454,12 +448,10 @@ def _en_lineas_propias(text, start, end):
     antes = text[text.rfind("\n", 0, start) + 1 : start]
     fin_de_linea = text.find("\n", end)
     despues = text[end : None if fin_de_linea < 0 else fin_de_linea]
-    return not antes.strip() and not despues.strip()
-
-
-def _sangrado_como_codigo(text, start):
-    antes = text[text.rfind("\n", 0, start) + 1 : start]
-    return len(antes.expandtabs(4)) >= 4
+    # Cuatro columnas de sangría hacen un bloque de código en Markdown: ahí el
+    # marcador es una cita. Un bloque real bajo una viñeta lleva menos.
+    en_codigo = len(antes.expandtabs(4)) >= 4
+    return not antes.strip() and not despues.strip() and not en_codigo
 
 
 _FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})")
