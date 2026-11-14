@@ -213,6 +213,31 @@ class IncrementalContext(unittest.TestCase):
             self.assertEqual(set(result.plan.changed_paths), {"m.py"})
             self.assertEqual(set(result.hechos.changed_paths), {"m.py"})
 
+    def test_moving_a_binary_in_a_later_push_still_prepares(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            (repo / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)))
+            base = commit(repo, "base")
+            (repo / "a.py").write_text("a = 2\n")
+            prev = commit(repo, "prev")
+            (repo / "assets").mkdir()
+            git(repo, "mv", "logo.png", "assets/logo.png")
+            head = commit(repo, "head")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria(prev, base, digest),
+                policy,
+            )
+            self.assertEqual(result.modo, "incremental")
+            self.assertIn(
+                review_context.Omission(ruta="assets/logo.png", causa="filtro *.png"),
+                result.omisiones,
+            )
+
     def test_mode_forcing_keeps_the_real_delta(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
