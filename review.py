@@ -2038,8 +2038,15 @@ def partes_de_respuesta(texto):
         i = max(leidas, key=lambda i: (leidas[i][0] == "partial", i))
         cobertura = leidas[i]
         del lineas[i]
-    sin_revisar = [ln for ln in lineas if ln.startswith(UNREVIEWED_PREFIX)]
-    resto = "\n".join(ln for ln in lineas if not ln.startswith(UNREVIEWED_PREFIX))
+        pegada = i - 1
+    else:
+        pegada = max((j for j, ln in enumerate(lineas) if ln.strip()), default=-1)
+    # La declaración del modelo es la línea pegada a COVERAGE, o la última si
+    # COVERAGE falta. Una igual en otra parte es una cita del formato.
+    sin_revisar = []
+    if pegada >= 0 and lineas[pegada].startswith(UNREVIEWED_PREFIX):
+        sin_revisar = [lineas.pop(pegada)]
+    resto = "\n".join(lineas)
     hallado = find_model_findings_block(resto)
     conservar = politica_de_identidad() == "anchors"
     bloque = None
@@ -2126,7 +2133,6 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
     reparado = None
     if bloque is not None and cobertura is not None:
         estado, detalle = cobertura
-        # Van todas juntas: si hay más de una, unreviewed_de no lee ninguna.
         cola = "".join(f"{ln}\n" for ln in sin_revisar)
         if result.get("subtype") == "error_max_turns":
             estado = "partial"  # la revisión no terminó, aunque el bloque llegue
