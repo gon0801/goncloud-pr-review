@@ -2109,12 +2109,19 @@ def prompt_de_cierre(work):
     )
 
 
-def sumar_consumo(result, vuelta):
+def sumar_consumo(result, vuelta, sesion_retomada=False):
     """Suma turnos, costo y usage de una vuelta extra a los totales del
-    resultado: el comentario muestra todo lo que se pagó."""
-    for campo in ("total_cost_usd", "num_turns"):
-        if isinstance(vuelta.get(campo), (int, float)):
-            result[campo] = (result.get(campo) or 0) + vuelta[campo]
+    resultado: el comentario muestra todo lo que se pagó. Una sesión retomada
+    con --resume ya reporta el costo acumulado de la sesión, así que ese total
+    reemplaza al anterior; turnos y usage son solo los de la vuelta."""
+    costo = vuelta.get("total_cost_usd")
+    if isinstance(costo, (int, float)):
+        previo = result.get("total_cost_usd") or 0
+        result["total_cost_usd"] = (
+            max(previo, costo) if sesion_retomada else previo + costo
+        )
+    if isinstance(vuelta.get("num_turns"), (int, float)):
+        result["num_turns"] = (result.get("num_turns") or 0) + vuelta["num_turns"]
     if isinstance(vuelta.get("usage"), dict):
         usage = dict(result.get("usage") or {})
         for campo, valor in vuelta["usage"].items():
@@ -2170,7 +2177,7 @@ def cerrar_sin_turnos(work, result_path, name, key, cmd, deadline):
     except SystemExit:  # soft_fail dentro de la vuelta: el original manda
         falla = True
     vuelta = json.loads(cierre.read_text()) if cierre.exists() else {}
-    sumar_consumo(result, vuelta)
+    sumar_consumo(result, vuelta, sesion_retomada=True)
     texto = (vuelta.get("result") or "") if falla is None else ""
     if texto.strip():
         result["result"] = texto
@@ -4063,6 +4070,12 @@ def cmd_close_result(args):
         for n in ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
     ]
     texto = redact(resultado.get("result") or "", secretos)
+    # El directorio de trabajo se sube completo como artifact: las salidas
+    # crudas de las vueltas extra llevan el mismo borrado que la respuesta.
+    for cruda in ("repair.json", "cierre.json"):
+        ruta = work / cruda
+        if ruta.exists():
+            ruta.write_text(redact(ruta.read_text(), secretos))
     avisar_bloque_sin_cierre(texto)
     # La identidad viaja en el paquete desde la solicitud del coordinador.
     identidad = paquete.get("finding_identity") or politica_de_identidad()
