@@ -269,6 +269,26 @@ class StickyNuncaVacio(unittest.TestCase):
         self.assertIn("Revisión en curso", github.visible())
         self.assertIn(A[:7], github.visible())
 
+    def test_un_sticky_que_pierde_su_revision_pendiente_sigue_con_texto(self):
+        # Un push a un PR en borrador mientras corre el worker: el resultado
+        # llega vencido y la admisión no pide otra revisión.
+        github = GitHubFalso()
+        correr(github, "pull_request_target")
+        github.head, github.draft = B, True
+        github.worker(1, resultado(1, A))
+        codigo, despachos, _ = correr(github, "workflow_dispatch", aviso=(900, 1))
+        self.assertEqual((codigo, despachos), (0, []))
+        self.assertEqual(github.estado().pending_requests, [])
+        self.assertIn("Sin revisión publicada", github.visible())
+        self.assertNotIn("Revisión en curso", github.visible())
+
+        github.draft = False
+        correr(github, "workflow_dispatch", aviso=(900, 1))
+        github.comentar(20, "ai-review: revisar")
+        correr(github, "issue_comment")
+        self.assertNotIn("Sin revisión publicada", github.visible())
+        self.assertEqual(github.visible().count("Revisión en curso"), 1)
+
     def test_la_linea_en_curso_no_se_repite_ni_queda_tras_el_resultado(self):
         github = GitHubFalso()
         correr(github, "pull_request_target")

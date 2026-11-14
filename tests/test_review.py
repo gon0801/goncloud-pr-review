@@ -2840,6 +2840,37 @@ class Workflows(unittest.TestCase):
                 self.assertIn("REVIEW_BUDGET_SECONDS", str(salida.exception.code))
                 self.assertIn(repr(valor), str(salida.exception.code))
 
+    def test_el_coordinador_cosecha_el_artifact_que_sube_el_worker(self):
+        # El nombre sale de la plantilla del worker y el coordinador lo arma
+        # por su cuenta: si dejan de coincidir, toda revisión queda fallida.
+        nombre = re.search(
+            r"^\s+name: (ai-review-result-.+)$", self.worker_texto, re.M
+        ).group(1)
+        subido = (
+            nombre.replace("${{ inputs.request_id }}", "7")
+            .replace("${{ github.run_id }}", "4242")
+            .replace("${{ github.run_attempt }}", "3")
+        )
+        pedidos = []
+
+        def sh_falso(*args, **kw):
+            if args[:3] == ("gh", "run", "download"):
+                opciones = dict(zip(args[4::2], args[5::2]))
+                pedidos.append(opciones["--name"])
+                Path(opciones["--dir"]).mkdir(parents=True)
+                Path(opciones["--dir"], "result.json").write_text('{"request_id": 7}')
+                return mock.Mock(stdout="")
+            listado = [{"name": subido, "expired": False}]
+            return mock.Mock(stdout=json.dumps({"artifacts": listado}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(review, "sh", side_effect=sh_falso):
+                cosechado = review.artefacto_del_run(
+                    "o/r", {"id": 4242, "run_attempt": 3}, 7, tmp
+                )
+        self.assertEqual(cosechado, {"request_id": 7})
+        self.assertEqual(pedidos, [subido])
+
     def test_el_worker_trae_el_pr_de_un_repo_privado_sin_dejar_credenciales(self):
         # Con el fetch anónimo el worker no traía el PR en un repo privado; con
         # persist-credentials: true el token quedaba en .git/config, al alcance
