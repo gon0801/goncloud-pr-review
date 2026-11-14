@@ -365,12 +365,11 @@ def libro_fusionado(previo, manifest, result, repo, model_ok):
             cubiertos = revisados
         elif cobertura == "partial":
             sin = unreviewed_de(texto)
-            # Una ruta declarada que no está en reviewed (`./x`, `b/x`, otra
-            # grafía) no dice cuál quedó sin leer: la pasada no acredita nada.
-            if sin is None or not sin <= set(revisados):
-                cubiertos = []
-            else:
+            declaracion_verificable = sin is not None and sin <= set(revisados)
+            if declaracion_verificable:
                 cubiertos = [p for p in revisados if p not in sin]
+            else:
+                cubiertos = []
         else:
             cubiertos = []
     else:

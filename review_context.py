@@ -217,21 +217,21 @@ class GitRepository:
             == 0
         )
 
-    def diff(self, *args, check=True):
-        # Una sola política de renombres para todo el alcance: un renombre es
-        # un borrado más un alta, así la ruta vieja también cuenta como cambio.
+    def diff_sin_renombres(self, *args, check=True):
         return self.run("diff", "--no-renames", *args, check=check)
 
     def changed_files(self, a, b):
-        out = self.diff("--name-only", "-z", a, b).stdout
+        out = self.diff_sin_renombres("--name-only", "-z", a, b).stdout
         return [GitPath(rec) for rec in out.split(b"\0") if rec]
 
     def numstat(self, base, head):
-        return self.diff("--numstat", "-z", base, head).stdout
+        return self.diff_sin_renombres("--numstat", "-z", base, head).stdout
 
     def diff_bytes(self, base, head, path):
         raw = path.raw if isinstance(path, GitPath) else path.encode("utf-8")
-        return self.diff("--no-color", "-U10", base, head, b"--", raw).stdout
+        return self.diff_sin_renombres(
+            "--no-color", "-U10", base, head, b"--", raw
+        ).stdout
 
     def blob_at(self, rev, path):
         raw = path.raw if isinstance(path, GitPath) else path.encode("utf-8")
@@ -633,7 +633,9 @@ def files_matching_base(repo, paths, base, head):
     same = set()
     for path in paths:
         if (
-            repo.diff("--quiet", base, head, "--", path, check=False).returncode
+            repo.diff_sin_renombres(
+                "--quiet", base, head, "--", path, check=False
+            ).returncode
             == 0
         ):
             same.add(path)
@@ -647,7 +649,7 @@ def delta_real(repo, desde, head):
         # consultarlo evita que un delta re-run dependa del repositorio local.
         return (), (), True
     try:
-        proc = repo.diff("--name-only", "-z", desde, head, check=False)
+        proc = repo.diff_sin_renombres("--name-only", "-z", desde, head, check=False)
     except Exception:
         return (), ("delta real no calculable",), False
     if proc.returncode != 0:
@@ -680,11 +682,6 @@ def blobs_de_head(repo, rutas):
 
 
 def delta_desde_previo(repo, previous_head, head):
-    """Delta real previous_head..head: (rutas, omisiones, calculado).
-
-    Sin previous_head verificable o sin relación de ancestro el delta no es
-    calculable y queda vacío.
-    """
     if not previous_head:
         return (), (), False
     if not repo.cat_file_exists(f"{previous_head}^{{commit}}"):
@@ -873,8 +870,7 @@ def prepare_review(
     target = request.target or {}
     head = target.get("head_sha", "")
     base = target.get("base_sha", "")
-    # Un `-diff` del propio PR sacaría cualquier archivo del alcance: los
-    # atributos salen de la base, como las reglas del repo.
+    # Un `-diff` en el .gitattributes del propio PR sacaría del diff cualquier archivo.
     repo = dataclasses.replace(repo, attr_source=base)
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
@@ -928,13 +924,10 @@ def prepare_review(
     previa = cobertura_previa or {}
     base_movida = False
     if modo in ("incremental", "continuation"):
-        # El merge-base contra el que revisó la pasada previa. Un merge de la
-        # base en el PR o un cambio de base lo mueve, y entonces el delta
-        # previous_head..head trae contenido de la base.
-        base_previa = repo.merge_base(
+        merge_base_previo = repo.merge_base(
             current.revision.base_sha or base, previous_head
         )
-        base_movida = base_previa != merge_base
+        base_movida = merge_base_previo != merge_base
         # Alcance acotado por la cobertura válida del libro: el delta real
         # desde la acreditación más lo del alcance del PR que el libro no
         # acredita contra head. Acreditado y sin cambios queda fuera: ese
@@ -942,8 +935,6 @@ def prepare_review(
         # acreditación fina que conservar y el alcance es solo el delta.
         # Mover la base puede meter en una ruta acreditada un tramo que antes
         # pertenecía a la base y nunca llegó al revisor: ese diff distinto sí entra.
-        # Del delta solo cuenta lo que el PR cambia contra su base: una ruta
-        # que head deja igual que el merge-base no es cambio del PR.
         alcance_pr = set(historicas)
         candidatas = [ruta for ruta in delta_rutas if ruta in alcance_pr]
         if previa:
@@ -962,19 +953,19 @@ def prepare_review(
                     if ruta in candidatas or ruta not in previa:
                         continue
                     if repo.diff_bytes(
-                        base_previa, previous_head, ruta
+                        merge_base_previo, previous_head, ruta
                     ) != repo.diff_bytes(merge_base, head, ruta):
                         candidatas.append(ruta)
         elif base_movida:
             viejas = {
                 path.text
-                for path in repo.changed_files(base_previa, previous_head)
+                for path in repo.changed_files(merge_base_previo, previous_head)
             }
             for ruta in historicas:
                 if ruta in candidatas:
                     continue
                 if ruta not in viejas or repo.diff_bytes(
-                    base_previa, previous_head, ruta
+                    merge_base_previo, previous_head, ruta
                 ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)
         rutas_plan = list(candidatas)
@@ -1005,7 +996,7 @@ def prepare_review(
         # pasada anterior no vio, el origen es la base actual del PR.
         acreditado = modo != "full" and ruta in delta_set and ruta in previa
         if acreditado and base_movida and repo.diff_bytes(
-            base_previa, previous_head, ruta
+            merge_base_previo, previous_head, ruta
         ) != repo.diff_bytes(merge_base, previous_head, ruta):
             acreditado = False
         origen = previous_head if acreditado else merge_base
