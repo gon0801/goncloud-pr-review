@@ -2320,10 +2320,8 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             "ai-review: la reparación tampoco entregó el bloque y COVERAGE; queda parcial",
             file=sys.stderr,
         )
-        result["block_repair"] = "failed"
     else:
         result["result"] = reparado
-        result["block_repair"] = "ok"
     result_path.write_text(json.dumps(result))
 
 
@@ -2557,10 +2555,6 @@ def clasificar_falla_proveedor(result):
     if status in (400, 403) and "usage limit" in message:
         return "quota"
     return None
-
-
-def quota_error(result):
-    return clasificar_falla_proveedor(result) is not None
 
 
 # F0: identidad y evidencia. El dominio trae match_finding / accept_report /
@@ -4140,7 +4134,6 @@ def cmd_reconcile(args):
                     (solicitud.finding_id, texto_de_explicacion(artifact))
                 )
         estado = decision.snapshot
-        trabajo = (*trabajo, *decision.work_after_commit)
     estado = review_domain.marcar_hallazgos_nuevos(
         previo, estado, lambda: _ultimo_comentario(adaptador)
     )
@@ -4239,45 +4232,6 @@ def cmd_execute_request(args):
         strict_budget=False,
     )
     previo = prev_de_memoria(sticky["body"] if sticky else None)
-    try:
-        preparacion = prepare_review(
-            GitRepository(Path.cwd()),
-            review_domain.WorkRequest(
-                id=solicitud.id,
-                kind=solicitud.kind,
-                finding_id=solicitud.finding_id,
-                legacy_id=solicitud.legacy_id,
-                origin=solicitud.origin,
-                basis_generation=solicitud.basis_generation,
-                state=solicitud.state,
-                target=review_domain.ReviewTarget(
-                    repository=repo,
-                    pr_number=int(pr),
-                    head_sha=head,
-                    base_sha=base,
-                    policy_digest=digest_de_politica(policy),
-                ).json(),
-                motivo=solicitud.motivo,
-                digest=solicitud.digest,
-                solicitante=solicitud.solicitante,
-            ),
-            current,
-            policy,
-            cobertura_previa=previo.get("covered"),
-        )
-    except Exception as exc:
-        plan = {"mode": "full", "head_sha": head, "base_sha": base}
-        plan_fallback = f"prepare_review no corrió ({type(exc).__name__})"
-    else:
-        plan = {
-            "mode": preparacion.modo,
-            "head_sha": head,
-            "base_sha": base,
-            "changed_paths": list(preparacion.plan.changed_paths),
-            "previous_sha": preparacion.plan.previous_sha,
-            "obligaciones": [ob.ruta for ob in preparacion.plan.obligations],
-        }
-        plan_fallback = ""
     paquete = {
         "request_id": solicitud.id,
         "kind": solicitud.kind,
@@ -4288,13 +4242,10 @@ def cmd_execute_request(args):
         "base_sha": base,
         "policy_digest": digest_de_politica(policy),
         "finding_identity": politica_de_identidad(),
-        "plan": plan,
         "target": dict(solicitud.target),
         "observaciones": [],
         "cobertura": review_domain.UNKNOWN,
     }
-    if plan_fallback:
-        paquete["plan_fallback"] = plan_fallback
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     destino = work / "request-package.json"

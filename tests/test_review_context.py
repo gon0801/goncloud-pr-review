@@ -367,7 +367,12 @@ class IncrementalContext(unittest.TestCase):
                         self.assertTrue(
                             any(ob.ruta == "f2.py" for ob in result.plan.obligations)
                         )
-                        self.assertEqual(result.cobertura, domain.PARTIAL)
+                        self.assertTrue(
+                            any(
+                                om.causa in ("presupuesto", "budget", "encoding")
+                                for om in result.omisiones
+                            )
+                        )
                     else:
                         self.assertTrue(
                             any(
@@ -411,7 +416,12 @@ class IncrementalContext(unittest.TestCase):
                 self.assertTrue(
                     any(ob.ruta == "g.py" for ob in result.plan.obligations)
                 )
-                self.assertEqual(result.cobertura, domain.PARTIAL)
+                self.assertTrue(
+                    any(
+                        om.causa in ("presupuesto", "budget", "encoding")
+                        for om in result.omisiones
+                    )
+                )
 
     def test_open_findings_outside_delta_become_obligations(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -813,7 +823,12 @@ class SelectiveContext(unittest.TestCase):
                 policy,
                 selectivo=True,
             )
-            self.assertEqual(result.cobertura, domain.PARTIAL)
+            self.assertTrue(
+                any(
+                    om.causa in ("presupuesto", "budget", "encoding")
+                    for om in result.omisiones
+                )
+            )
             al_presupuesto = [
                 om for om in result.omisiones if om.causa == "presupuesto"
             ]

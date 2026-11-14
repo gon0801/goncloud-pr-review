@@ -54,6 +54,17 @@ def request_de(snapshot, rid):
     return next((r for r in snapshot.pending_requests if r.id == rid), None)
 
 
+def comando_revisar(cid):
+    return {
+        "cid": cid,
+        "login": "jefe",
+        "action": "revisar",
+        "arg": "",
+        "creado": "2026-10-06T10:00:00Z",
+        "editado": "",
+    }
+
+
 class RequestTransitions(unittest.TestCase):
     """T07: solicitudes persistidas antes de despachar."""
 
@@ -104,26 +115,23 @@ class RequestTransitions(unittest.TestCase):
         automatica = domain.reconcile(
             estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
         )
-        comando = domain.reconcile(
+        comando, trabajo, rechazos = domain.procesar_comandos(
             automatica.snapshot,
-            domain.AuthorizedCommand(
-                origin=domain.Origin(kind="comando", comment_id=9),
-                target=TARGET,
-                action="revisar",
-            ),
-            hechos(),
-            POLICY,
+            (comando_revisar(9),),
+            lambda _: "write",
+            TARGET,
         )
-        self.assertIsInstance(comando, domain.Commit)
+        self.assertIsInstance(comando, domain.Snapshot)
+        self.assertEqual(rechazos, ())
         self.assertEqual(
-            [r.id for r in comando.snapshot.pending_requests],
+            [r.id for r in comando.pending_requests],
             [2],
             "una revisión viva por PR: la explícita reemplaza a la automática",
         )
-        self.assertEqual(comando.snapshot.request_count, 2)
-        self.assertEqual(len(comando.work_after_commit), 1)
-        self.assertEqual(comando.work_after_commit[0].id, 2)
-        self.assertEqual(comando.work_after_commit[0].origin, "comando")
+        self.assertEqual(comando.request_count, 2)
+        self.assertEqual(len(trabajo), 1)
+        self.assertEqual(trabajo[0].id, 2)
+        self.assertEqual(trabajo[0].origin, "comando")
 
     def test_compactacion_e_ids_nunca_reutilizados(self):
         estado = snapshot_base()
@@ -341,22 +349,20 @@ class RequestTransitions(unittest.TestCase):
             base_sha="b" * 40,
             policy_digest="d" * 64,
         )
-        segunda = domain.reconcile(
+        segunda, trabajo, rechazos = domain.procesar_comandos(
             primera.snapshot,
-            domain.AuthorizedCommand(
-                origin=domain.Origin(kind="comando", comment_id=9),
-                target=target_nuevo,
-                action="revisar",
-            ),
-            hechos(),
-            POLICY,
+            (comando_revisar(9),),
+            lambda _: "write",
+            target_nuevo,
         )
-        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
+        self.assertEqual(rechazos, ())
+        self.assertEqual([r.id for r in segunda.pending_requests], [2])
+        self.assertEqual([r.id for r in trabajo], [2])
         revision_nueva = domain.Revision(
             base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
         )
         vencido = domain.reconcile(
-            segunda.snapshot,
+            segunda,
             domain.ReportReady(
                 origin=domain.Origin(kind="push", run_id=11),
                 request_id=1,

@@ -1357,7 +1357,6 @@ class RunAgent(unittest.TestCase):
             result["result"],
             f"{self.SIN_BLOQUE['result']}\n\n{self.BLOQUE}\nCOVERAGE: complete",
         )
-        self.assertEqual(result["block_repair"], "ok")
         self.assertAlmostEqual(result["total_cost_usd"], 0.23)
         self.assertEqual(result["num_turns"], 31)
         modelo = review.parse_model_findings(result["result"])
@@ -1624,7 +1623,6 @@ class RunAgent(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
-        self.assertEqual(result["block_repair"], "failed")
         self.assertAlmostEqual(result["total_cost_usd"], 0.22)
 
     def test_la_reparacion_suma_usage_y_respeta_el_tope_de_turnos(self):
@@ -1647,8 +1645,8 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["usage"], {"input_tokens": 1050, "output_tokens": 210})
+        self.assertIn(self.BLOQUE, result["result"])
         self.assertEqual(review.split_coverage(result["result"])[1], "partial")
-        self.assertEqual(result["block_repair"], "ok")
 
     def test_un_bloque_reparado_ilegible_no_cuenta(self):
         """#113 ai-review F2: aceptar con el mismo criterio que dispara."""
@@ -1665,7 +1663,6 @@ class RunAgent(unittest.TestCase):
         )
         self.assertEqual(len(calls), 2)
         self.assertEqual(result["result"], self.SIN_BLOQUE["result"])
-        self.assertEqual(result["block_repair"], "failed")
 
     def test_sin_tiempo_no_se_intenta_la_reparacion(self):
         proc, calls, result, _, _ = self.run_agent(
@@ -2724,7 +2721,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(worker.count("FALLBACK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}"), 2)
         self.assertEqual(worker.count("secrets.DEEPSEEK_API_KEY"), 2)
 
-    def test_el_worker_trae_el_pr_antes_de_planear_la_solicitud(self):
+    def test_el_worker_trae_el_pr_antes_de_preparar_el_contexto(self):
         worker = (ROOT / "templates" / "ai-review-worker.yml").read_text()
         pasos = (
             worker.split("jobs:")[1].split("\n  avisar:")[0].split("\n      - name: ")
@@ -2741,8 +2738,9 @@ class Workflows(unittest.TestCase):
             ],
         )
         # prepare_review lee HEAD_SHA y BASE_SHA con git: en la raíz del checkout
-        # confiable esos objetos no existen y la solicitud caía siempre al plan full.
-        self.assertIn("working-directory: pr", paso["preparar solicitud y paquete"])
+        # confiable esos objetos no existen; preparar contexto corre en pr.
+        self.assertIn("working-directory: pr", paso["preparar contexto"])
+        self.assertNotIn("working-directory:", paso["preparar solicitud y paquete"])
         self.assertIn(
             'review.py" execute-request', paso["preparar solicitud y paquete"]
         )
@@ -3230,8 +3228,13 @@ class Workflows(unittest.TestCase):
                         )
                 paquete = json.loads((Path(work) / "request-package.json").read_text())
                 self.assertEqual(
-                    paquete["plan"],
-                    {"mode": "full", "head_sha": head, "base_sha": base},
+                    paquete["pr_head_sha"],
+                    head,
+                    "execute-request recibe el HEAD_SHA real del paso",
+                )
+                self.assertEqual(
+                    paquete["base_sha"],
+                    base,
                     "execute-request recibe el BASE_SHA real del paso",
                 )
                 evento = Path(work) / "event.json"
@@ -4512,8 +4515,8 @@ class Workflows(unittest.TestCase):
             request_count=1,
         )
 
-    def test_execute_request_arma_el_paquete_con_plan(self):
-        """B4 r2: paquete con target, plan, policy digest y RunKey."""
+    def test_execute_request_arma_el_paquete(self):
+        """B4 r2: paquete con target, policy digest y RunKey."""
         import review_domain as domain
 
         estado = self._snapshot_con_solicitud()
@@ -4544,11 +4547,8 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["run_id"], 55)
         self.assertEqual(paquete["attempt"], 2)
         self.assertEqual(paquete["pr_head_sha"], "c" * 40)
+        self.assertEqual(paquete["base_sha"], "b" * 40)
         self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
-        self.assertEqual(
-            paquete["plan"],
-            {"mode": "full", "head_sha": "c" * 40, "base_sha": "b" * 40},
-        )
         self.assertEqual(
             paquete["policy_digest"],
             review.digest_de_politica(review.politica_de_revision()),
@@ -4628,9 +4628,8 @@ class Workflows(unittest.TestCase):
                             argparse.Namespace(work=str(trabajo), request_id="1")
                         )
             paquete = json.loads((trabajo / "request-package.json").read_text())
-            self.assertIn(paquete["plan"]["mode"], ("full", "incremental"))
-            self.assertEqual(paquete["plan"]["changed_paths"], ["other.py"])
-            self.assertNotIn("plan_fallback", paquete)
+            self.assertEqual(paquete["pr_head_sha"], head)
+            self.assertEqual(paquete["base_sha"], base)
 
     def test_actionlint_firma_las_plantillas(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()

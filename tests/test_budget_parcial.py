@@ -146,7 +146,12 @@ class RecorteBudgetDegradaLaMarca(unittest.TestCase):
             facts, creada, preparacion = self.preparar(repo, base, head, policy)
             excluido = [om for om in preparacion.omisiones if om.causa == "budget"]
             self.assertEqual([om.ruta for om in excluido], ["grande.py"])
-            self.assertEqual(preparacion.cobertura, domain.PARTIAL)
+            self.assertTrue(
+                any(
+                    om.causa in ("presupuesto", "budget", "encoding")
+                    for om in preparacion.omisiones
+                )
+            )
 
             artifact = {
                 "request_id": 1,
@@ -179,7 +184,13 @@ class RecorteBudgetDegradaLaMarca(unittest.TestCase):
             policy = politica()
 
             facts, creada, preparacion = self.preparar(repo, base, head, policy)
-            self.assertEqual(preparacion.cobertura, domain.COMPLETE_CLAIM)
+            self.assertTrue(preparacion.entregados)
+            self.assertFalse(
+                any(
+                    om.causa in ("presupuesto", "budget", "encoding")
+                    for om in preparacion.omisiones
+                )
+            )
             self.assertFalse(
                 [om for om in preparacion.omisiones if om.causa == "budget"]
             )
@@ -219,7 +230,13 @@ class RecorteBudgetDegradaLaMarca(unittest.TestCase):
             self.assertFalse(
                 [om for om in preparacion.omisiones if om.causa == "budget"]
             )
-            self.assertEqual(preparacion.cobertura, domain.COMPLETE_CLAIM)
+            self.assertTrue(preparacion.entregados)
+            self.assertFalse(
+                any(
+                    om.causa in ("presupuesto", "budget", "encoding")
+                    for om in preparacion.omisiones
+                )
+            )
 
             artifact = {
                 "request_id": 1,

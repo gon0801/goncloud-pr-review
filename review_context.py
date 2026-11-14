@@ -21,12 +21,10 @@ from pathlib import Path
 
 import review_domain as domain
 from review_domain import (
-    COMPLETE_CLAIM,
     DISMISSED,
     OPEN,
     PARTIAL,
     RESOLVED,
-    UNKNOWN,
     is_complete,
 )
 
@@ -256,7 +254,6 @@ class PreparedReview:
     omisiones: tuple
     modo: str
     motivo: str
-    cobertura: str
     partes: dict = dataclasses.field(default_factory=dict)
     sin_codificar: tuple = ()
     over_budget_bytes: int = 0
@@ -1058,16 +1055,6 @@ def prepare_review(
         Obligation(ruta=ruta)
         for ruta in dict.fromkeys(list(rutas_plan) + rutas_abiertas(current))
     )
-    # Diagnóstico y consistencia con la ruta directa: PreparedReview.cobertura
-    # no tiene consumidor de producción (la degradación real la decide el
-    # dominio con las omisiones plegadas en los hechos).
-    if any(om.causa in ("presupuesto", "budget", "encoding") for om in omisiones):
-        cobertura = PARTIAL
-    elif not entregados:
-        cobertura = UNKNOWN
-    else:
-        cobertura = COMPLETE_CLAIM
-
     revision = domain.Revision(base_sha=merge_base, head_sha=head, policy_digest=digest)
     plan = domain.ReviewPlan(
         revision=revision,
@@ -1096,7 +1083,6 @@ def prepare_review(
         omisiones=tuple(omisiones),
         modo=modo,
         motivo=motivo,
-        cobertura=cobertura,
         partes=partes,
         sin_codificar=tuple(sin_codificar),
         over_budget_bytes=over_budget,

@@ -367,23 +367,20 @@ class CommandExecution(unittest.TestCase):
 
         # explicación antigua: el target quedó atrás; no acredita y sale de la
         # cola sin crear trabajo (el head vivo lo admite el coordinador)
-        con_vieja = domain.reconcile(
+        con_vieja, work_vieja, rechazos = domain.procesar_comandos(
             snapshot_base(),
-            domain.AuthorizedCommand(
-                origin=domain.Origin(kind="comando", comment_id=7),
-                target=TARGET,
-                action="explicar",
-                finding_id="F1",
-            ),
-            domain.RepositoryFacts(),
-            POLICY,
+            (comando(7, "explicar", "F1"),),
+            permisos_ok,
+            TARGET,
         )
-        self.assertEqual(con_vieja.snapshot.pending_requests[0].kind, "explain")
+        self.assertEqual(rechazos, ())
+        self.assertEqual(con_vieja.pending_requests[0].kind, "explain")
+        self.assertEqual([r.id for r in work_vieja], [1])
         revision_nueva = domain.Revision(
             base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
         )
         salida = domain.reconcile(
-            con_vieja.snapshot,
+            con_vieja,
             domain.ReportReady(
                 origin=domain.Origin(kind="re-run", run_id=21),
                 request_id=1,
