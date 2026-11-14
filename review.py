@@ -4134,7 +4134,6 @@ def cmd_reconcile(args):
                     (solicitud.finding_id, texto_de_explicacion(artifact))
                 )
         estado = decision.snapshot
-        trabajo = (*trabajo, *decision.work_after_commit)
     estado = review_domain.marcar_hallazgos_nuevos(
         previo, estado, lambda: _ultimo_comentario(adaptador)
     )
