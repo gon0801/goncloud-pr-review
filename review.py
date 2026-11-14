@@ -2559,10 +2559,6 @@ def clasificar_falla_proveedor(result):
     return None
 
 
-def quota_error(result):
-    return clasificar_falla_proveedor(result) is not None
-
-
 # F0: identidad y evidencia. El dominio trae match_finding / accept_report /
 # validar_reporte; el adaptador construye los RepositoryFacts con Git. Ambas
 # identidades (current y anchors) pasan por la aceptación del dominio; la
