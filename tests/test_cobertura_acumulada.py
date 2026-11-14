@@ -1216,6 +1216,39 @@ class LecturaDeLaRespuesta(unittest.TestCase):
         self.assertEqual(marcador, "partial")
         self.assertEqual(libro, [], "parcial sin declaración: nada acreditado")
 
+    def test_complete_con_lista_unreviewed_no_vacia_es_partial(self):
+        lista = f'{UNREVIEWED}["b.py"] -->'
+        cierres = {
+            "justo encima": f"{lista}\nCOVERAGE: complete",
+            "tras una línea en blanco": f"{lista}\n\nCOVERAGE: complete",
+        }
+        for nombre, cierre in cierres.items():
+            with self.subTest(cierre=nombre):
+                texto = f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n{cierre}"
+                cuerpo, marcador, libro = self.publicar_texto(texto)
+                self.assertEqual(marcador, "partial")
+                self.assertIn("el revisor no alcanzó a revisar todo", cuerpo)
+                self.assertEqual(libro, ["a.py", "c.py", "d.py"])
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo, base, head1 = Escenario().escenario(tmp)
+                    paquete = AcreditacionDePasada().paquete_hermes(
+                        repo,
+                        Path(tmp, "work"),
+                        head1,
+                        base,
+                        {"result": texto, "subtype": "success"},
+                    )
+                self.assertEqual(paquete["cobertura"], domain.PARTIAL)
+                self.assertEqual(sorted(paquete["covered"]), ["a.py", "c.py", "d.py"])
+
+    def test_complete_con_lista_unreviewed_ilegible_es_partial(self):
+        _, marcador, libro = self.publicar_texto(
+            f"**Veredicto:** sin problemas.\n{BLOQUE_VACIO}\n"
+            f"{UNREVIEWED}[b.py] -->\nCOVERAGE: complete"
+        )
+        self.assertEqual(marcador, "partial")
+        self.assertEqual(libro, [])
+
 
 if __name__ == "__main__":
     unittest.main()
