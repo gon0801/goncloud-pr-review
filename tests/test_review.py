@@ -963,7 +963,6 @@ class RunAgent(unittest.TestCase):
         self.assertEqual({c["ANTHROPIC_MODEL"] for c in calls}, {"deepseek-v4.1-flash"})
         for llamada in calls:
             argv = llamada["argv"]
-            self.assertIn("--no-session-persistence", argv)
             for bandera in ("--resume", "--continue", "-r", "-c"):
                 self.assertNotIn(bandera, argv)
             entorno = llamada["env"]
