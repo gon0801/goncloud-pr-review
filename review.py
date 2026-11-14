@@ -3417,22 +3417,29 @@ def despachar_worker(solicitud, *, repo, ref, run_id, pr_number):
     )
 
 
-def _evento_de_entorno(repo, pr, head, base, digest):
-    """El evento push admisible desde el entorno."""
-    target = review_domain.ReviewTarget(
-        repository=repo,
-        pr_number=int(pr),
-        head_sha=head,
-        base_sha=base,
-        policy_digest=digest,
-    )
+def _admision(target, pr_data, repo):
+    """La revisión que pide cualquier evento. El push trae su head (el `if:`
+    del workflow ya filtró borradores y forks); la recuperación manual siempre
+    pide una nueva; el resto admite el head vivo solo en un PR abierto, no
+    borrador y del propio repo, lo mismo que el `if:` exige a un push."""
     nombre = os.environ.get("GITHUB_EVENT_NAME", "")
-    if nombre in ("pull_request", "pull_request_target"):
-        return review_domain.RequestReview(
-            origin=review_domain.Origin(kind="push", run_id=_run_id()),
-            target=target,
-        )
-    return None
+    recuperacion = nombre == "workflow_dispatch" and not os.environ.get(
+        "WORKER_RUN_ID"
+    )
+    if pr_data is not None and not recuperacion:
+        cabeza = pr_data.get("head") or {}
+        if not (
+            pr_data.get("state") == "open"
+            and pr_data.get("draft") is False
+            and (cabeza.get("repo") or {}).get("full_name") == repo
+        ):
+            return None
+    return review_domain.RequestReview(
+        origin=review_domain.Origin(
+            kind="re-run" if recuperacion else "push", run_id=_run_id()
+        ),
+        target=target,
+    )
 
 
 def _run_id():
@@ -3631,6 +3638,7 @@ def cmd_reconcile(args):
             return
     head = os.environ.get("HEAD_SHA") or ""
     base = os.environ.get("BASE_SHA") or ""
+    pr_data = None
     if event_name in ("workflow_run", "issue_comment", "workflow_dispatch"):
         # el head/base vivos salen del PR por API, nunca del checkpoint
         try:
@@ -3778,20 +3786,12 @@ def cmd_reconcile(args):
                     facts,
                     policy,
                 )
-    elif event_name == "workflow_dispatch":
-        decision = review_domain.reconcile(
-            estado,
-            review_domain.RequestReview(
-                origin=review_domain.Origin(kind="push", run_id=_run_id()),
-                target=target,
-            ),
-            facts,
-            policy,
-        )
-    elif event_name in ("pull_request", "pull_request_target"):
-        evento = _evento_de_entorno(repo, pr, head, base, digest)
-        decision = review_domain.reconcile(estado, evento, facts, policy)
-    elif event_name != "issue_comment":
+    elif event_name not in (
+        "issue_comment",
+        "workflow_dispatch",
+        "pull_request",
+        "pull_request_target",
+    ):
         sys.exit(
             "ai-review: evento sin admisión en reconcile "
             "(pull_request, pull_request_target, issue_comment, "
@@ -3805,6 +3805,14 @@ def cmd_reconcile(args):
     estado = review_domain.marcar_hallazgos_nuevos(
         previo, estado, lambda: _ultimo_comentario(adaptador)
     )
+    admision = _admision(target, pr_data, repo)
+    if admision is not None:
+        admitido = review_domain.reconcile(estado, admision, facts, policy)
+        estado = admitido.snapshot
+        # Una revisión nueva poda la anterior, que ya no se despacha.
+        vivas = {r.id for r in estado.pending_requests}
+        trabajo = tuple(w for w in trabajo if w.id in vivas)
+        trabajo = (*trabajo, *admitido.work_after_commit)
 
     if trabajo:
         snapshot_ra, despachables, terminadas = review_domain.reautorizar(

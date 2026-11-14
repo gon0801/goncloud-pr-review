@@ -3818,8 +3818,13 @@ class Workflows(unittest.TestCase):
                     returncode=0,
                     stdout=json.dumps(
                         {
-                            "head": {"sha": entorno.get("HEAD_LIVE") or "c" * 40},
+                            "head": {
+                                "sha": entorno.get("HEAD_LIVE") or "c" * 40,
+                                "repo": {"full_name": "o/r"},
+                            },
                             "base": {"sha": "b" * 40},
+                            "state": "open",
+                            "draft": False,
                         }
                     ),
                 )
@@ -4335,15 +4340,16 @@ class Workflows(unittest.TestCase):
                     WORKER_ATTEMPT="1",
                 )
 
-    def test_la_recuperacion_redescubre_lo_pendiente(self):
+    def test_la_recuperacion_reemplaza_lo_pendiente_con_una_revision_nueva(self):
+        import review_domain as domain
+
         with tempfile.TemporaryDirectory() as tmp:
             patches, despachados = self._reconciliar(
                 self._estado_pendiente(), tmp, "workflow_dispatch"
             )
-        self.assertEqual(
-            despachados, [1], "la recuperación vuelve a despachar lo pendiente"
-        )
-        self.assertEqual(patches, [], "sin cambio de estado no reescribe")
+        self.assertEqual(despachados, [2], "cada solicitud se despacha una sola vez")
+        publicado = domain.read_snapshot(patches[-1][1]).snapshot
+        self.assertEqual([r.id for r in publicado.pending_requests], [2])
 
     def test_el_despacho_pasa_base_sha_al_worker(self):
         capturado = []

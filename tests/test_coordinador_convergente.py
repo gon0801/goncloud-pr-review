@@ -223,7 +223,7 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
 
 class StickyNuncaVacio(unittest.TestCase):
     def test_comentario_sin_comando_en_pr_sin_sticky_no_crea_comentario(self):
-        github = GitHubFalso()
+        github = GitHubFalso(draft=True)
         github.comentar(20, "LGTM", user="cualquiera")
         codigo, despachos, _ = correr(github, "issue_comment", permiso="read")
         self.assertEqual((codigo, despachos), (0, []))

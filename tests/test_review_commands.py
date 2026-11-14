@@ -365,8 +365,8 @@ class CommandExecution(unittest.TestCase):
         )
         self.assertEqual(entregada.snapshot.pending_requests, [])
 
-        # explicación antigua: el target quedó atrás; no acredita y la cola
-        # queda con la explicación para el target vigente (identificable)
+        # explicación antigua: el target quedó atrás; no acredita y sale de la
+        # cola sin crear trabajo (el head vivo lo admite el coordinador)
         con_vieja = domain.reconcile(
             snapshot_base(),
             domain.AuthorizedCommand(
@@ -401,8 +401,8 @@ class CommandExecution(unittest.TestCase):
             ["Fuga A", "Fuga B"],
             "la explicación antigua no acredita ni cambia hallazgos",
         )
-        vigente = salida.snapshot.pending_requests[0]
-        self.assertEqual(vigente.target["head_sha"], "e" * 40)
+        self.assertEqual(salida.snapshot.pending_requests, [])
+        self.assertEqual(salida.work_after_commit, ())
 
 
 def hechos_vigentes():

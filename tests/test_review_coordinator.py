@@ -14,11 +14,12 @@ import review_domain as domain  # noqa: E402
 
 
 def snapshot_base(generation=1, findings=(), completion=domain.UNKNOWN, schema=3):
+    """Memoria de una revisión anterior (head a…a); el PR ya va en c…c."""
     return domain.Snapshot(
         schema=schema,
         generation=generation,
         revision=domain.Revision(
-            base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
+            base_sha="b" * 40, head_sha="a" * 40, policy_digest="d" * 64
         ),
         next_id=1,
         completion=completion,
@@ -95,9 +96,7 @@ class RequestTransitions(unittest.TestCase):
             "agrupada: el estado no cambia",
         )
         self.assertEqual(
-            repetida.work_after_commit,
-            tuple(primera.snapshot.pending_requests),
-            "el trabajo ya persistido se re-deriva para la recuperación",
+            repetida.work_after_commit, (), "repetir el evento no despacha otra vez"
         )
 
     def test_comando_explicito_mismo_sha_crea_nueva_solicitud(self):
@@ -116,8 +115,11 @@ class RequestTransitions(unittest.TestCase):
             POLICY,
         )
         self.assertIsInstance(comando, domain.Commit)
-        self.assertEqual(len(comando.snapshot.pending_requests), 2)
-        self.assertEqual([r.id for r in comando.snapshot.pending_requests], [1, 2])
+        self.assertEqual(
+            [r.id for r in comando.snapshot.pending_requests],
+            [2],
+            "una revisión viva por PR: la explícita reemplaza a la automática",
+        )
         self.assertEqual(comando.snapshot.request_count, 2)
         self.assertEqual(len(comando.work_after_commit), 1)
         self.assertEqual(comando.work_after_commit[0].id, 2)
@@ -142,7 +144,9 @@ class RequestTransitions(unittest.TestCase):
         self.assertEqual(aceptado.snapshot.request_count, 1)
         nueva = domain.reconcile(
             aceptado.snapshot,
-            domain.RequestReview(origin=PUSH, target=TARGET),
+            domain.RequestReview(
+                origin=PUSH, target=domain.replace(TARGET, head_sha="e" * 40)
+            ),
             hechos(),
             POLICY,
         )
@@ -226,7 +230,7 @@ class RequestTransitions(unittest.TestCase):
         )
         self.assertEqual(aceptado.snapshot.command_cursor, 3)
 
-    def test_resultado_vencido_no_acredita_cobertura_y_deja_trabajo_vigente(self):
+    def test_resultado_vencido_no_acredita_cobertura_ni_crea_trabajo(self):
         estado = snapshot_base()
         creada = domain.reconcile(
             estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
@@ -258,11 +262,10 @@ class RequestTransitions(unittest.TestCase):
             "el resultado antiguo no acredita cobertura",
         )
         self.assertEqual(vencido.snapshot.findings, [])
-        self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
-        nueva = request_de(vencido.snapshot, 2)
-        self.assertEqual(nueva.target["head_sha"], "e" * 40)
-        self.assertEqual(nueva.target["policy_digest"], "9" * 64)
-        self.assertEqual(len(vencido.work_after_commit), 1)
+        self.assertEqual(vencido.snapshot.pending_requests, [])
+        self.assertEqual(
+            vencido.work_after_commit, (), "el head vivo lo admite el coordinador"
+        )
 
     def test_push_nuevo_poda_la_solicitud_superseded(self):
         estado = snapshot_base()
@@ -324,9 +327,9 @@ class RequestTransitions(unittest.TestCase):
         self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
         self.assertEqual(segunda.snapshot.request_count, 2)
 
-    def test_vencido_con_viva_del_target_nuevo_reusa_y_no_duplica(self):
-        """Con una solicitud viva del target nuevo, el vencido de la vieja
-        re-despacha la viva en lugar de crear otra."""
+    def test_vencido_con_viva_del_target_nuevo_no_vuelve_a_despacharla(self):
+        """El resultado de la revisión que reemplazó un `revisar` ya no
+        encuentra solicitud: no re-despacha la viva, que ya corre."""
         estado = snapshot_base()
         primera = domain.reconcile(
             estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
@@ -338,7 +341,6 @@ class RequestTransitions(unittest.TestCase):
             base_sha="b" * 40,
             policy_digest="d" * 64,
         )
-        # el comando explícito no poda
         segunda = domain.reconcile(
             primera.snapshot,
             domain.AuthorizedCommand(
@@ -349,7 +351,7 @@ class RequestTransitions(unittest.TestCase):
             hechos(),
             POLICY,
         )
-        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [1, 2])
+        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
         revision_nueva = domain.Revision(
             base_sha="b" * 40, head_sha="e" * 40, policy_digest="d" * 64
         )
@@ -366,9 +368,7 @@ class RequestTransitions(unittest.TestCase):
             hechos(revision_nueva),
             POLICY,
         )
-        self.assertIsInstance(vencido, domain.Commit)
-        self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
-        self.assertEqual([s.id for s in vencido.work_after_commit], [2])
+        self.assertIsInstance(vencido, domain.Keep)
 
     def test_sin_target_o_sin_revision_no_acreditan(self):
         observacion = domain.Observation(
@@ -418,7 +418,7 @@ class RequestTransitions(unittest.TestCase):
 
     def test_cada_campo_de_vigencia_se_discrimina(self):
         """Cambiar un solo campo de vigencia vence la solicitud: sin hallazgos
-        acreditados, cobertura unknown y reexpedición con el target nuevo."""
+        acreditados, cobertura unknown y la solicitud sale sin crear trabajo."""
         for campo, valor in (
             ("head_sha", "e" * 40),
             ("base_sha", "9" * 40),
@@ -460,10 +460,8 @@ class RequestTransitions(unittest.TestCase):
                 self.assertIsInstance(vencido, domain.Commit)
                 self.assertEqual(vencido.snapshot.completion, domain.UNKNOWN)
                 self.assertEqual(vencido.snapshot.findings, [])
-                self.assertEqual([r.id for r in vencido.snapshot.pending_requests], [2])
-                self.assertEqual(
-                    vencido.snapshot.pending_requests[0].target[campo], valor
-                )
+                self.assertEqual(vencido.snapshot.pending_requests, [])
+                self.assertEqual(vencido.work_after_commit, ())
 
     def test_observacion_rechazada_no_crashea_y_no_acredita(self):
         """CodeRabbit r1: la frontera valida el artifact antes de aceptar."""
@@ -544,7 +542,7 @@ class RequestTransitions(unittest.TestCase):
 
         creada2 = domain.reconcile(
             aceptado.snapshot,
-            domain.RequestReview(origin=PUSH, target=TARGET),
+            domain.RequestReview(origin=domain.Origin(kind="re-run"), target=TARGET),
             hechos(),
             POLICY,
         )

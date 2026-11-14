@@ -2225,18 +2225,16 @@ class Commit:
     work_after_commit: tuple = ()
 
 
-def _podar(current, target_json):
-    """Al crear una solicitud nueva: fuera las superseded de otros targets y
-    los tombstones finished (el presupuesto del bloque es compartido con los
-    hallazgos y el contador nunca retrocede).
+def _podar(current):
+    """Al crear una revisión: fuera las demás revisiones y los tombstones
+    finished (el presupuesto del bloque es compartido con los hallazgos y el
+    contador nunca retrocede). A lo sumo una revisión viva por PR: el grupo
+    compartido del worker cancela el run de las otras, que ya no avisan.
     """
     return [
         r
         for r in current.pending_requests
-        if r.state != "finished"
-        and not (
-            r.kind == "review" and target_json and not _mismo_target(r, target_json)
-        )
+        if r.state != "finished" and r.kind != "review"
     ]
 
 
@@ -2265,35 +2263,41 @@ def _mismo_target(solicitud, target_json):
     return solicitud.target == target_json
 
 
+def _revisado(current, target_json):
+    revision = current.revision
+    return revision is not None and target_json == {
+        "head_sha": revision.head_sha or "",
+        "base_sha": revision.base_sha or "",
+        "policy_digest": revision.policy_digest or "",
+    }
+
+
 def _reconcile_revision(current, evento):
-    """Push o recuperación: agrupa automáticas, siempre crea las explícitas."""
+    """Admisión: una automática solo crea trabajo si el target no está revisado
+    ni tiene una revisión viva (repetir el evento no despacha otra vez); una
+    explícita (comando, recuperación) siempre crea una revisión nueva. Cada
+    solicitud se despacha una sola vez: reintentar es crear otra."""
     target_json = evento.target.json()
-    explícito = evento.origin.kind in ("comando", "re-run")
-    if not explícito:
-        agrupables = tuple(
-            r
-            for r in current.pending_requests
-            if (
-                r.kind == "review"
-                and r.state in ("pending", "failed_retryable")
-                and r.origin == "push"
-                and _mismo_target(r, target_json)
-            )
-        )
-        if agrupables:
-            # nada nuevo que persistir; el trabajo ya persistido se re-deriva
-            # para que la recuperación vuelva a despachar (at-least-once)
-            return Commit(snapshot=current, work_after_commit=agrupables)
+    viva = any(
+        r.kind == "review" and r.state != "finished" and _mismo_target(r, target_json)
+        for r in current.pending_requests
+    )
+    if evento.origin.kind not in ("comando", "re-run") and (
+        viva or _revisado(current, target_json)
+    ):
+        return Commit(snapshot=current)
     nueva = _solicitud_nueva(evento, current)
     snapshot = replace(
         current,
-        pending_requests=[*_podar(current, target_json), nueva],
+        pending_requests=[*_podar(current), nueva],
         request_count=current.request_count + 1,
     )
     return Commit(snapshot=snapshot, work_after_commit=(nueva,))
 
 
 def _reconcile_comando(current, evento):
+    if evento.action != "explicar":
+        return _reconcile_revision(current, evento)
     nueva = _solicitud_nueva(evento, current)
     snapshot = replace(
         current,
@@ -2340,46 +2344,9 @@ def _reconcile_resultado(current, evento, facts, policy):
     if solicitud is None:
         return Keep(reason="resultado de solicitud desconocida o ya finalizada")
     if not _target_vigente(solicitud, facts, policy):
-        podada = _sin_solicitud(current, evento.request_id)
-        revision = facts.revision
-        target_json = ReviewTarget(
-            repository="",
-            pr_number=0,
-            head_sha=revision.head_sha if revision else "",
-            base_sha=revision.base_sha if revision else "",
-            policy_digest=revision.policy_digest if revision else "",
-        ).json()
-        viva = next(
-            (
-                r
-                for r in podada.pending_requests
-                if r.kind == "review"
-                and r.state in ("pending", "failed_retryable")
-                and _mismo_target(r, target_json)
-            ),
-            None,
-        )
-        if viva is not None:
-            return Commit(snapshot=podada, work_after_commit=(viva,))
-        nueva = _solicitud_nueva(
-            RequestReview(
-                origin=Origin(kind="push"),
-                target=ReviewTarget(
-                    repository="",
-                    pr_number=0,
-                    head_sha=target_json["head_sha"],
-                    base_sha=target_json["base_sha"],
-                    policy_digest=target_json["policy_digest"],
-                ),
-            ),
-            podada,
-        )
-        snapshot = replace(
-            podada,
-            pending_requests=[*podada.pending_requests, nueva],
-            request_count=podada.request_count + 1,
-        )
-        return Commit(snapshot=snapshot, work_after_commit=(nueva,))
+        # Vencido: no acredita y sale. El head vivo lo admite la admisión del
+        # coordinador, que no re-despacha una revisión que ya corre.
+        return Commit(snapshot=_sin_solicitud(current, evento.request_id))
     if solicitud.kind == "explain":
         # una explicación jamás cambia hallazgos ni acredita cobertura
         return Commit(snapshot=_sin_solicitud(current, evento.request_id))
@@ -2619,9 +2586,10 @@ def procesar_comandos(current, comandos, permisos, target):
             )
             snapshot = replace(
                 snapshot,
-                pending_requests=[*snapshot.pending_requests, nueva],
+                pending_requests=[*_podar(snapshot), nueva],
                 request_count=snapshot.request_count + 1,
             )
+            work = [w for w in work if w.kind != "review"]
             snapshot = _consumido(snapshot, cid, f"solicitud de revisión {nueva.id}")
             work.append(nueva)
     return snapshot, tuple(work), tuple(rechazos)
