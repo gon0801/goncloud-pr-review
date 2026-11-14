@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from review_commands import dismiss_targets
+from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
     IDENTIDADES,
@@ -53,33 +53,12 @@ from review_sticky import (
     sticky_from_comments,
 )
 from review_domain import (
-    FINDING_ID_DIGITS,
     leer_cierre,
     parse_model_findings,
     strip_findings_block,
     strip_model_findings_block,
 )
 from review_context import GitRepository, digest_de_politica
-
-
-def parse_comando_reconcile(body):
-    """Dict con acción y argumento del comentario-comando ai-review:, o None."""
-    texto = (body or "").strip()
-    m = re.match(
-        rf"ai-review:\s*explicar\s+(F{FINDING_ID_DIGITS})\b", texto, re.IGNORECASE
-    )
-    if m:
-        return {"action": "explicar", "arg": f"F{int(m.group(1)[1:])}"}
-    if re.fullmatch(r"ai-review:\s*revisar\s*", texto, re.IGNORECASE):
-        return {"action": "revisar", "arg": ""}
-    m = re.match(r"ai-review:\s*descartar\s+(.+)", texto, re.IGNORECASE)
-    if m:
-        ids, todo = dismiss_targets(m.group(1))
-        if todo:
-            return {"action": "descartar", "arg": "todo"}
-        if len(ids) == 1:
-            return {"action": "descartar", "arg": next(iter(ids))}
-    return None
 
 
 @dataclass
@@ -524,7 +503,7 @@ def _estado_actual(sticky):
 
 def _comandos_de_comentarios(comentarios, login, cursor):
     """El checkpoint es datos, nunca comandos: fuera los comentarios del
-    propio bot y el texto que no arranca con el comando."""
+    propio bot y el texto que no contiene un comando."""
 
     comandos = []
     for c in comentarios or []:
@@ -532,21 +511,26 @@ def _comandos_de_comentarios(comentarios, login, cursor):
         if not isinstance(cid, int) or cid <= cursor:
             continue
         autor = _login_de(c)
-        if login and autor == login:
+        if autor is None or (login and autor == login):
             continue
         cuerpo = c.get("body") or ""
-        parsed = parse_comando_reconcile(cuerpo)
+        parsed = leer_comando(cuerpo)
         if parsed is None:
-            if not re.match(r"\s*ai-review:", cuerpo, re.IGNORECASE):
-                continue
-            parsed = {"action": review_domain.ACCION_NO_ENTENDIDA, "arg": ""}
+            continue
+        comando = {
+            "action": parsed.accion,
+            "arg": next(iter(parsed.ids)) if parsed.accion == "explicar" else "",
+            "extra": parsed.extra,
+        }
+        if parsed.accion == "descartar":
+            comando.update(ids=parsed.ids, todo=parsed.todo)
         comandos.append(
             {
                 "cid": cid,
                 "login": autor,
                 "creado": c.get("created_at") or "",
                 "editado": c.get("updated_at") or "",
-                **parsed,
+                **comando,
             }
         )
     return tuple(comandos)

@@ -5,13 +5,12 @@ import argparse
 from dataclasses import replace
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from review_commands import dismiss_targets
+from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
     env,
@@ -178,7 +177,6 @@ FINDINGS_MAX_BYTES = 8000
 # That endpoint only needs Metadata:read, which every GITHUB_TOKEN carries
 # implicitly (`metadata` is not even a settable `permissions:` key), so the
 # minimal template token (contents:read + pull-requests:write) is enough.
-DISMISS_RE = re.compile(r"ai-review:\s*descartar\s+(.+)", re.IGNORECASE)
 WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 CLAUDE_CODE_VERSION = "2.1.282"
 LITELLM_VERSION = "1.102.1"
@@ -341,12 +339,10 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
 
 def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
-    ids, all_open = set(), False
-    for match in DISMISS_RE.finditer(body or ""):
-        found, todo = dismiss_targets(match.group(1))
-        ids |= found
-        all_open = all_open or todo
-    return ids, all_open
+    comando = leer_comando(body)
+    if comando is None or comando.accion != "descartar":
+        return set(), False
+    return set(comando.ids), comando.todo
 
 
 def collect_dismissals(repo, pr, bot_login, comments, after=0):

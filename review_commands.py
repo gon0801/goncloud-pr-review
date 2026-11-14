@@ -1,8 +1,18 @@
-"""La gramática del comando `ai-review: descartar` que comparten los dos modos."""
+"""La gramática compartida de los comandos `ai-review:` para ambos modos."""
 
 import re
+from dataclasses import dataclass
 
+import review_domain
 from review_domain import FINDING_ID_DIGITS
+
+
+@dataclass(frozen=True)
+class Comando:
+    accion: str
+    ids: frozenset = frozenset()
+    todo: bool = False
+    extra: bool = False
 
 
 DISMISS_ALL_WORD = "todo"
@@ -40,3 +50,41 @@ def dismiss_targets(rest):
         r"\s*\w", tail
     )
     return ids, todo
+
+
+def _lineas_utiles(cuerpo):
+    en_bloque = False
+    for linea in (cuerpo or "").splitlines():
+        if linea.lstrip().startswith(("```", "~~~")):
+            en_bloque = not en_bloque
+            continue
+        if en_bloque or linea.lstrip().startswith(">"):
+            continue
+        yield linea
+
+
+def leer_comando(cuerpo):
+    lineas = list(_lineas_utiles(cuerpo))
+    candidatas = [ln for ln in lineas if re.match(r"\s*ai-review:", ln, re.IGNORECASE)]
+    if not candidatas:
+        if any(re.search(r"ai-review:", ln, re.IGNORECASE) for ln in lineas):
+            return Comando(review_domain.ACCION_NO_ENTENDIDA)
+        return None
+    primera, extra = candidatas[0], len(candidatas) > 1
+    m = re.match(
+        rf"\s*ai-review:\s*explicar\s+F({FINDING_ID_DIGITS})\b",
+        primera,
+        re.IGNORECASE,
+    )
+    if m:
+        return Comando("explicar", frozenset({f"F{int(m.group(1))}"}), extra=extra)
+    if re.fullmatch(r"\s*ai-review:\s*revisar\s*", primera, re.IGNORECASE):
+        return Comando("revisar", extra=extra)
+    m = re.match(r"\s*ai-review:\s*descartar\s+(.+)", primera, re.IGNORECASE)
+    if m:
+        ids, todo = dismiss_targets(m.group(1))
+        if todo:
+            return Comando("descartar", frozenset(), True, extra)
+        if ids:
+            return Comando("descartar", frozenset(ids), False, extra)
+    return Comando(review_domain.ACCION_NO_ENTENDIDA, extra=extra)
