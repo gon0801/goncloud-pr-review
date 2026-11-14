@@ -38,7 +38,10 @@ FINDINGS_TITLE_MAX = 160
 FINDING_FILES_MAX = 5
 SEVERITIES = ("Critical", "High", "Medium", "Low")
 OPEN, RESOLVED, DISMISSED = "open", "resolved", "dismissed"
-FINDING_ID_RE = re.compile(r"^F(\d+)$")
+# Dígitos ASCII y a lo sumo nueve: un id que llega de comentarios o del modelo
+# pasa por int(), que rechaza más de 4300 dígitos.
+FINDING_ID_DIGITS = r"[0-9]{1,9}"
+FINDING_ID_RE = re.compile(rf"^F({FINDING_ID_DIGITS})$")
 COMPLETE_CLAIM, PARTIAL, UNKNOWN = "complete_claim", "partial", "unknown"
 
 
@@ -337,7 +340,7 @@ def sanitize_finding(entry, *, allow_dismissed, conservar_anclas=False):
         return None
     try:
         line = int(entry.get("line") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         line = 0
     state = str(entry.get("state") or OPEN).strip().lower()
     if state not in (OPEN, RESOLVED, DISMISSED) or (
@@ -408,7 +411,8 @@ def find_model_findings_block(text):
     for start in reversed(_block_starts(text)):
         found = _closed_block_at(text, start)
         if found is not None:
-            return (start, *found, True)
+            end, data = found
+            return start, end, _sin_surrogates(data), True
         # raw_decode no salta espacios iniciales; json.loads del camino cerrado sí.
         body = re.compile(r"\s*").match(text, start + len(FINDINGS_PREFIX)).end()
         try:
@@ -417,8 +421,24 @@ def find_model_findings_block(text):
             continue
         if isinstance(data, dict) and isinstance(data.get("findings"), list):
             closer = re.match(r"\s*-->", text[end:])
-            return start, end + (closer.end() if closer else 0), data, False
+            end += closer.end() if closer else 0
+            return start, end, _sin_surrogates(data), False
     return None
+
+
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _sin_surrogates(valor):
+    """El JSON admite escapes como \\ud800 sueltos, que no se pueden codificar en
+    UTF-8: el estado que los guardara no podría publicarse."""
+    if isinstance(valor, str):
+        return _SURROGATE_RE.sub("\ufffd", valor)
+    if isinstance(valor, list):
+        return [_sin_surrogates(v) for v in valor]
+    if isinstance(valor, dict):
+        return {_sin_surrogates(k): _sin_surrogates(v) for k, v in valor.items()}
+    return valor
 
 
 def _block_starts(text):

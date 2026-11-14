@@ -21,6 +21,7 @@ import review_domain
 from review_domain import (
     DISMISSED,
     FINDING_FILES_MAX,
+    FINDING_ID_DIGITS,
     FINDING_ID_RE,
     FINDINGS_MAX_COUNT,
     FINDINGS_PREFIX,
@@ -548,13 +549,16 @@ def apply_dismissals(state, dismiss_ids, dismiss_all):
 
 
 DISMISS_TARGETS_RE = re.compile(
-    r"(?:\s*(?:[,;]|\b[yeo]\b|F\d+\b|"
+    r"(?:\s*(?:[,;]|\b[yeo]\b|F"
+    + FINDING_ID_DIGITS
+    + r"\b|"
     + DISMISS_ALL_WORD
     + r"\b(?:\s+lo\s+dem[áa]s\b)?))*",
     re.IGNORECASE,
 )
 DISMISS_FIRST_TOKEN_RE = re.compile(
-    r"\s*(?:F\d+\b|" + DISMISS_ALL_WORD + r"\b)", re.IGNORECASE
+    r"\s*(?:F" + FINDING_ID_DIGITS + r"\b|" + DISMISS_ALL_WORD + r"\b)",
+    re.IGNORECASE,
 )
 
 
@@ -568,7 +572,10 @@ def dismiss_targets(rest):
         return set(), False
     end = DISMISS_TARGETS_RE.match(rest).end()
     lead, tail = rest[:end], rest[end:]
-    ids = {f"F{int(n)}" for n in re.findall(r"\bF(\d+)", lead, re.IGNORECASE)}
+    ids = {
+        f"F{int(n)}"
+        for n in re.findall(rf"\bF({FINDING_ID_DIGITS})", lead, re.IGNORECASE)
+    }
     todo = bool(re.search(r"\btodo\b", lead, re.IGNORECASE)) and not re.match(
         r"\s*\w", tail
     )
@@ -578,7 +585,9 @@ def dismiss_targets(rest):
 def parse_comando_reconcile(body):
     """Dict con acción y argumento del comentario-comando ai-review:, o None."""
     texto = (body or "").strip()
-    m = re.match(r"ai-review:\s*explicar\s+(F\d+)\b", texto, re.IGNORECASE)
+    m = re.match(
+        rf"ai-review:\s*explicar\s+(F{FINDING_ID_DIGITS})\b", texto, re.IGNORECASE
+    )
     if m:
         return {"action": "explicar", "arg": f"F{int(m.group(1)[1:])}"}
     if re.fullmatch(r"ai-review:\s*revisar\s*", texto, re.IGNORECASE):
