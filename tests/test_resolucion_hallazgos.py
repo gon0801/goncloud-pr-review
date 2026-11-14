@@ -33,6 +33,10 @@ def hacer_repo(tmp):
     return repo
 
 
+def git_codigo(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True).returncode
+
+
 def commit(repo, mensaje):
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", mensaje)
@@ -284,6 +288,51 @@ class ForcePushEnModoCoordinado(unittest.TestCase):
                 estados_v3(actual),
                 [("F1", "Open")],
                 "el force-push devolvió el bug a a.py: el hallazgo se reabre",
+            )
+
+    def test_sin_el_sha_previo_un_resuelto_del_modelo_no_se_acredita(self):
+        bug = "def f(x):\n    return eval(x)\n"
+        hallazgo = {"file": "a.py", "line": 2, "severity": "High", "title": "eval"}
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = hacer_repo(tmp)
+            (repo / "a.py").write_text("def f(x):\n    return x\n")
+            m0 = commit(repo, "base")
+            git(repo, "checkout", "-q", "-b", "pr")
+            (repo / "a.py").write_text(bug)
+            c1 = commit(repo, "feature")
+            vacio = domain.Snapshot(
+                schema=3,
+                generation=1,
+                revision=None,
+                next_id=1,
+                completion=domain.UNKNOWN,
+                findings=[],
+                command_cursor=0,
+            )
+            actual = coordinador_revisa(
+                repo, Path(tmp, "w1"), vacio, m0, c1, texto_del_modelo(hallazgo)
+            )
+
+            git(repo, "commit", "-q", "--amend", "-m", "feature (mismo contenido)")
+            c2 = git(repo, "rev-parse", "HEAD")
+            git(repo, "reflog", "expire", "--expire=now", "--all")
+            git(repo, "gc", "-q", "--prune=now")
+            self.assertNotEqual(
+                git_codigo(repo, "cat-file", "-e", f"{c1}^{{commit}}"), 0
+            )
+            actual = coordinador_revisa(
+                repo,
+                Path(tmp, "w2"),
+                actual,
+                m0,
+                c2,
+                texto_del_modelo(dict(hallazgo, id="F1", state="resolved")),
+            )
+            self.assertEqual(
+                estados_v3(actual),
+                [("F1", "Open")],
+                "a.py no cambió y el SHA previo ya no existe: sin delta "
+                "verificable el resuelto del modelo no se acredita",
             )
 
 
