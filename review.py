@@ -166,7 +166,7 @@ __all__ = [
 FINDINGS_MAX_BYTES = 8000
 
 # Findings memory (PR B). The model emits one hidden block BEFORE the COVERAGE line
-# (never after: split_coverage drops everything behind it, and the 50k/65k trims cut
+# (never after: leer_cierre drops everything behind it, and the 50k/65k trims cut
 # from the end). Publish re-emits the canonical block right after the SHA marker, so
 # tail trims can never eat it; the review text budget reserves its bytes.
 # The constants and the state functions live in review_domain; re-exported above.

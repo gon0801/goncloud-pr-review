@@ -8,11 +8,8 @@ from review_config import ERROR_KEY
 from review_context import LIBRO_BORRADO
 from review_domain import (
     LIBRO_MAX_ENTRADAS,
-    UNREVIEWED_PREFIX,
-    cierre_de_respuesta,
+    leer_cierre,
     parse_model_findings,
-    rutas_declaradas,
-    split_coverage,
 )
 
 
@@ -96,18 +93,6 @@ def libro_de(body):
     return None, None
 
 
-def unreviewed_de(texto):
-    """Lo que el modelo declaró no revisar; None si falta o no se lee.
-
-    Vale solo la línea de cierre_de_respuesta (columna 0), única con el prefijo en todo
-    el texto y con JSON de lista de rutas: cualquier desvío (imitaciones
-    incluidas) anula la declaración."""
-    declaracion = cierre_de_respuesta(texto)[3]
-    lineas = (texto or "").splitlines()
-    unica = sum(ln.startswith(UNREVIEWED_PREFIX) for ln in lineas) == 1
-    return rutas_declaradas(declaracion) if declaracion and unica else None
-
-
 def modelo_utilizable(modelo):
     """La forma la decide el transporte del dominio, sin descartar el bloque."""
     return modelo is not None and not modelo.get("rechazadas_forma") and not any(
@@ -125,7 +110,7 @@ def pasada_acredita(result, model_ok):
     válidos; si no, no agrega nada al libro."""
     if ERROR_KEY in (result or {}):
         return False
-    _, cobertura, _ = split_coverage((result or {}).get("result") or "")
+    cobertura = leer_cierre((result or {}).get("result") or "").cobertura
     return (
         cobertura is not None
         and (result or {}).get("subtype") != "error_max_turns"
@@ -149,12 +134,12 @@ def libro_fusionado(previo, manifest, result, repo, model_ok):
         return {}
     texto = (result or {}).get("result") or ""
     if pasada_acredita(result, model_ok):
-        _, cobertura, _ = split_coverage(texto)
+        cierre = leer_cierre(texto)
         revisados = manifest.get("reviewed") or []
-        if cobertura == "complete":
+        if cierre.cobertura == "complete":
             cubiertos = revisados
-        elif cobertura == "partial":
-            sin = unreviewed_de(texto)
+        elif cierre.cobertura == "partial":
+            sin = cierre.sin_revisar
             excluidos = {e["path"] for e in manifest.get("excluded") or []}
             reconocibles = set(revisados) | excluidos
             declaracion_verificable = sin is not None and sin <= reconocibles
@@ -214,7 +199,7 @@ def sha_hexa(valor):
 
 def cobertura_declarada(texto, modelo):
     """Cobertura respaldada por el bloque del modelo; sin bloque, UNKNOWN."""
-    _, cobertura, _ = split_coverage(texto)
+    cobertura = leer_cierre(texto).cobertura
     mapeada = {
         "complete": review_domain.COMPLETE_CLAIM,
         "partial": review_domain.PARTIAL,
