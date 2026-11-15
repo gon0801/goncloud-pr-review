@@ -540,7 +540,6 @@ def cmd_prepare(args):
         kind="review",
         origin="push",
         basis_generation=current.generation if current.revision is not None else 1,
-        state="pending",
         target=review_domain.ReviewTarget(
             repository=os.environ.get("REPO", ""),
             pr_number=int(os.environ.get("PR_NUMBER") or 0),

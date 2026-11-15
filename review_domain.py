@@ -178,6 +178,12 @@ class PendingRequest:
     finding_id: str | None = None
 
 
+PENDIENTE = "pending"
+FALLIDA = "failed_retryable"
+TERMINADA = "finished"
+ESTADOS_DE_SOLICITUD = (PENDIENTE, FALLIDA, TERMINADA)
+
+
 @dataclass
 class WorkRequest:
     """Solicitud pendiente con id numérico monotónico.
@@ -192,11 +198,28 @@ class WorkRequest:
     legacy_id: str | None = None
     origin: str = ""
     basis_generation: int = 0
-    state: str = "pending"
+    state: str = PENDIENTE
     target: dict = field(default_factory=dict)
     motivo: str = ""
     digest: str = ""
     solicitante: str = ""
+
+    @property
+    def viva(self):
+        """Pendiente o fallida: se puede ejecutar, bloquea otra igual y se poda al terminar."""
+        return self.state in (PENDIENTE, FALLIDA)
+
+    @property
+    def fallida(self):
+        return self.state == FALLIDA
+
+
+def con_estado(solicitud, estado, motivo):
+    """La única forma de cambiar el estado de una solicitud. Solo una viva cambia,
+    y solo a fallida o terminada."""
+    if not solicitud.viva or estado not in (FALLIDA, TERMINADA):
+        raise ValueError(f"transición inválida: {solicitud.state} -> {estado}")
+    return replace(solicitud, state=estado, motivo=motivo)
 
 
 @dataclass
@@ -1027,7 +1050,7 @@ def _v3_snapshot(data):
             )
         origin = req.get("origin", "")
         basis = req.get("basis_generation", 0)
-        state = req.get("state", "pending")
+        state = req.get("state", PENDIENTE)
         target = req.get("target", {})
         motivo = req.get("motivo", "")
         digest = req.get("digest", "")
@@ -1036,7 +1059,7 @@ def _v3_snapshot(data):
             raise _SchemaError("origin de solicitud debe ser texto")
         if not isinstance(basis, int) or isinstance(basis, bool) or basis < 0:
             raise _SchemaError("basis_generation de solicitud inválida")
-        if not isinstance(state, str) or not state:
+        if state not in ESTADOS_DE_SOLICITUD:
             raise _SchemaError("state de solicitud inválido")
         if not isinstance(target, dict) or any(
             not isinstance(v, str) for v in target.values()
@@ -2312,13 +2335,12 @@ class ReportReady:
 
 @dataclass(frozen=True)
 class ReportFailed:
-    """Fallo del worker: retryable deja la solicitud para otro intento."""
+    """Fallo del worker: deja la solicitud fallida para otro intento."""
 
     request_id: int
     run_id: int
     attempt: int
     motivo: str
-    retryable: bool = True
 
 
 @dataclass
@@ -2331,14 +2353,14 @@ class Commit:
 
 def _podar(current):
     """Al crear una revisión: fuera las demás revisiones y los tombstones
-    finished (el presupuesto del bloque es compartido con los hallazgos y el
+    terminados (el presupuesto del bloque es compartido con los hallazgos y el
     contador nunca retrocede). A lo sumo una revisión viva por PR: el grupo
     compartido del worker cancela el run de las otras, que ya no avisan.
     """
     return [
         r
         for r in current.pending_requests
-        if r.state != "finished" and r.kind != "review"
+        if r.viva and r.kind != "review"
     ]
 
 
@@ -2350,7 +2372,6 @@ def _solicitud_nueva(evento, current):
         finding_id=None,
         origin=evento.origin.kind,
         basis_generation=current.generation,
-        state="pending",
         target=evento.target.json(),
         solicitante=(
             evento.origin.login if evento.origin.kind in ("comando", "re-run") else ""
@@ -2383,12 +2404,12 @@ def _reconcile_revision(current, evento):
                 r
                 for r in current.pending_requests
                 if r.kind == "review"
-                and r.state != "finished"
+                and r.viva
                 and _mismo_target(r, target_json)
             ),
             None,
         )
-        fallida = viva is not None and viva.state == "failed_retryable"
+        fallida = viva is not None and viva.fallida
         if not (evento.reintenta and fallida) and (
             viva is not None or _revisado(current, target_json)
         ):
@@ -2405,7 +2426,7 @@ def _reconcile_revision(current, evento):
 def _solicitud_viva(current, rid):
     """La solicitud por id entre las no finalizadas; None si no existe."""
     return next(
-        (r for r in current.pending_requests if r.id == rid and r.state != "finished"),
+        (r for r in current.pending_requests if r.id == rid and r.viva),
         None,
     )
 
@@ -2462,15 +2483,12 @@ def _reconcile_resultado(current, evento, facts, policy):
 
 
 def _reconcile_fallo(current, evento):
-    """Fallo del worker: reintento deja la solicitud con su motivo; el rechazo
-    terminal queda Finished con el motivo persistido (auditoría e idempotencia).
-    """
+    """Fallo del worker: deja la solicitud con su motivo para reintento."""
     solicitud = _solicitud_viva(current, evento.request_id)
     if solicitud is None:
         return Keep(reason="fallo de solicitud desconocida o ya finalizada")
-    estado = "failed_retryable" if evento.retryable else "finished"
     vivas = [
-        replace(r, state=estado, motivo=evento.motivo)
+        con_estado(r, FALLIDA, evento.motivo)
         if r.id == evento.request_id
         else r
         for r in current.pending_requests
@@ -2481,7 +2499,7 @@ def _reconcile_fallo(current, evento):
 def reautorizar(current, work, permisos):
     """Re-autoriza las solicitudes de origen comando antes de despachar (T09).
 
-    Revocado → `finished` con motivo visible (tumba persistida); consulta
+    Revocado → terminada con motivo visible (tumba persistida); consulta
     fallida → la solicitud queda pendiente para otro evento; el resto pasa.
     Devuelve (snapshot o None si nada cambió, despachables, terminadas).
     """
@@ -2502,7 +2520,7 @@ def reautorizar(current, work, permisos):
                 f"permiso revocado de {solicitud.solicitante} "
                 f"({nivel or 'sin permiso'})"
             )
-            terminadas.append(replace(solicitud, state="finished", motivo=motivo))
+            terminadas.append(con_estado(solicitud, TERMINADA, motivo))
             vivas = [terminadas[-1] if r.id == solicitud.id else r for r in vivas]
             cambio = True
             continue
@@ -2518,7 +2536,7 @@ def reconcile(current, event, facts, policy):
     explícitas; ReportReady sólo satisface una solicitud no finalizada y
     vigente (acepta sobre el snapshot actual con la aceptación del dominio y
     compacta la solicitud); ReportFailed
-    marca reintento o cierra con motivo. El dominio nunca despacha trabajo.
+    marca reintento con motivo. El dominio nunca despacha trabajo.
     """
     if isinstance(event, RequestReview):
         return _reconcile_revision(current, event)
@@ -2660,7 +2678,6 @@ def procesar_comandos(current, comandos, permisos, target):
                 finding_id=arg,
                 origin="comando",
                 basis_generation=snapshot.generation,
-                state="pending",
                 target=target.json(),
                 digest=digest_de_hallazgo(hallazgo),
                 solicitante=comando["login"],
@@ -2680,7 +2697,6 @@ def procesar_comandos(current, comandos, permisos, target):
                 kind="review",
                 origin="comando",
                 basis_generation=snapshot.generation,
-                state="pending",
                 target=target.json(),
                 solicitante=comando["login"],
             )

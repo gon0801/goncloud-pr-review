@@ -546,7 +546,6 @@ def fallo_de_resultado(artifact, run_id, attempt):
         run_id=run_id,
         attempt=attempt,
         motivo=artifact[ERROR_KEY] or "el worker falló sin motivo",
-        retryable=True,
     )
 
 
@@ -678,7 +677,7 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
     solo cuenta un artifact, el de un "Re-run jobs" exitoso del worker:
     volver a reportar su fallo pintaría el aviso encima de la revisión nueva.
     Devuelve (entregas, sin_corrida, hubo_rechazo)."""
-    vivas = {r.id: r for r in estado.pending_requests if r.state != "finished"}
+    vivas = {r.id: r for r in estado.pending_requests if r.viva}
     if avisado is None and not vivas:
         return [], [], False
     corridas, rechazo, rid_avisado = corridas_por_solicitud(repo, pr), False, None
@@ -703,7 +702,7 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
         )
     confianza, entregas, sin_corrida = {}, [], []
     for solicitud in vivas.values():
-        fallida = solicitud.state == "failed_retryable" and solicitud.id != rid_avisado
+        fallida = solicitud.fallida and solicitud.id != rid_avisado
         if solicitud.id not in corridas:
             if not fallida:
                 sin_corrida.append(solicitud)
@@ -1089,7 +1088,7 @@ def cmd_execute_request(args):
             r
             for r in current.pending_requests
             if r.id == int(args.request_id)
-            and r.state in ("pending", "failed_retryable")
+            and r.viva
         ),
         None,
     )
@@ -1279,7 +1278,7 @@ def linea_en_curso(snapshot):
         (
             r
             for r in reversed(snapshot.pending_requests)
-            if r.kind == "review" and r.state == "pending"
+            if r.kind == "review" and r.state == review_domain.PENDIENTE
         ),
         None,
     )

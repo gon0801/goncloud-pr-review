@@ -316,29 +316,6 @@ class RequestTransitions(unittest.TestCase):
         )
         self.assertIsInstance(vencido, domain.Keep)
 
-    def test_tombstones_antiguos_se_podian(self):
-        estado = snapshot_base()
-        primera = domain.reconcile(
-            estado, domain.RequestReview(origin=PUSH, target=TARGET), hechos(), POLICY
-        )
-        terminal = domain.reconcile(
-            primera.snapshot,
-            domain.ReportFailed(
-                request_id=1, run_id=11, attempt=1, motivo="x", retryable=False
-            ),
-            hechos(),
-            POLICY,
-        )
-        segunda = domain.reconcile(
-            terminal.snapshot,
-            domain.RequestReview(origin=PUSH, target=TARGET),
-            hechos(),
-            POLICY,
-        )
-        self.assertIsInstance(segunda, domain.Commit)
-        self.assertEqual([r.id for r in segunda.snapshot.pending_requests], [2])
-        self.assertEqual(segunda.snapshot.request_count, 2)
-
     def test_vencido_con_viva_del_target_nuevo_no_vuelve_a_despacharla(self):
         """El resultado de la revisión que reemplazó un `revisar` ya no
         encuentra solicitud: no re-despacha la viva, que ya corre."""
@@ -528,7 +505,6 @@ class RequestTransitions(unittest.TestCase):
                 run_id=11,
                 attempt=1,
                 motivo="proveedor 503",
-                retryable=True,
             ),
             hechos(),
             POLICY,
@@ -549,43 +525,6 @@ class RequestTransitions(unittest.TestCase):
         aceptado = domain.reconcile(reintento.snapshot, resultado, hechos(), POLICY)
         self.assertIsInstance(aceptado, domain.Commit)
         self.assertEqual(aceptado.snapshot.pending_requests, [])
-
-        creada2 = domain.reconcile(
-            aceptado.snapshot,
-            domain.RequestReview(origin=domain.Origin(kind="re-run"), target=TARGET),
-            hechos(),
-            POLICY,
-        )
-        terminal = domain.reconcile(
-            creada2.snapshot,
-            domain.ReportFailed(
-                request_id=2,
-                run_id=13,
-                attempt=1,
-                motivo="solicitud revocada",
-                retryable=False,
-            ),
-            hechos(),
-            POLICY,
-        )
-        self.assertIsInstance(terminal, domain.Commit)
-        finalizada = request_de(terminal.snapshot, 2)
-        self.assertEqual(finalizada.state, "finished")
-        self.assertEqual(finalizada.motivo, "solicitud revocada")
-        repetido = domain.reconcile(
-            terminal.snapshot,
-            domain.ReportReady(
-                origin=domain.Origin(kind="push", run_id=14),
-                request_id=2,
-                run_id=14,
-                attempt=1,
-                observaciones=(),
-                cobertura=domain.PARTIAL,
-            ),
-            hechos(),
-            POLICY,
-        )
-        self.assertIsInstance(repetido, domain.Keep)
 
 
 class _ComentarioFalso:
