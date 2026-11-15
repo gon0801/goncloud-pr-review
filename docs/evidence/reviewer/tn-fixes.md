@@ -11,7 +11,7 @@ La comparación `git diff d1858c0c1dd67b5a726f9ec09318e88a778a6e08..origin/main 
 | Unidad | Commit | Comprobación | Resultado |
 | --- | --- | --- | --- |
 | C1 | `fix(action): mantener identidad entre pasos` | `PYTHONPATH=tests:. python3 -m unittest tests.test_review.CableadoIdentidad tests.test_review.Workflows`; `actionlint -color` | 74 tests y actionlint pasan. La prueba nueva falló antes del cambio porque `prepare` y `publish` elegían `titles` mientras `run` elegía `anchors`. |
-| C2 | pendiente | pendiente | pendiente |
+| C2 | `fix(domain): rechazar metadatos incompatibles antes de aceptar` | `PYTHONPATH=tests:. python3 -m unittest tests.test_review_domain.ObservacionDeEntrada tests.test_review_domain.ReportBoundary tests.test_review.CableadoIdentidad`; `ruff check --select F review_domain.py tests/test_review_domain.py` | 30 tests y ruff pasan. Las 17 variantes inválidas de los tests nuevos fallaron antes de validar; un reporte mixto publica solo el hallazgo válido con cobertura parcial. |
 | C3 | pendiente | pendiente | pendiente |
 | C4 | pendiente | pendiente | pendiente |
 | C5 | pendiente | pendiente | pendiente |

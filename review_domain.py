@@ -2024,6 +2024,15 @@ def observation_de_entrada(entry):
     ancla = entry.get("anchor")
     if ancla is not None and not isinstance(ancla, dict):
         return ObservationRejected(motivo="ancla primaria sin estructura válida")
+    for source, campo in (
+        (entry, "cause_hint"),
+        (entry, "symbol_hint"),
+        (ancla, "symbol_hint"),
+    ):
+        if isinstance(source, dict):
+            value = source.get(campo)
+            if value is not None and not isinstance(value, str):
+                return ObservationRejected(motivo=f"{campo} inválido")
     if isinstance(ancla, dict) and ancla.get("blob_sha"):
         rango = ancla.get("range")
         if not _rango_valido(rango):
@@ -2048,6 +2057,10 @@ def observation_de_entrada(entry):
         primaria = AnchorLegacy(path=str(entry.get("file") or ""), line=linea)
     relacionadas = []
     for a in entry.get("related_anchors", []) or []:
+        if isinstance(a, dict):
+            symbol = a.get("symbol_hint")
+            if symbol is not None and not isinstance(symbol, str):
+                return ObservationRejected(motivo="symbol_hint relacionado inválido")
         if isinstance(a, dict) and a.get("blob_sha"):
             r = a.get("range")
             if not _rango_valido(r):

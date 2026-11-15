@@ -2099,6 +2099,47 @@ class SeveridadDeObservacion(unittest.TestCase):
 
 
 class ObservacionDeEntrada(unittest.TestCase):
+    def test_hints_del_modelo_tienen_forma_tipada(self):
+        base = {"title": "t", "severity": "High", "file": "a.py", "line": 1}
+        located = {
+            "path": "a.py", "blob_sha": "a" * 40,
+            "range": [1, 1], "excerpt_digest": "b" * 64,
+        }
+        cases = (
+            ("cause_hint", lambda v: {**base, "cause_hint": v}),
+            ("symbol_hint", lambda v: {**base, "symbol_hint": v}),
+            ("anchor.symbol_hint", lambda v: {**base, "anchor": {**located, "symbol_hint": v}}),
+            ("related_anchors.symbol_hint", lambda v: {
+                **base, "related_anchors": [{**located, "symbol_hint": v}],
+            }),
+        )
+        for name, build in cases:
+            for value in (None, "", "sí", 42, True, [], {}):
+                with self.subTest(field=name, value=value):
+                    observation = domain.observation_de_entrada(build(value))
+                    if value is None or isinstance(value, str):
+                        self.assertIsInstance(observation, domain.Observation)
+                    else:
+                        self.assertIsInstance(observation, domain.ObservationRejected)
+                        self.assertIn("symbol_hint" if "symbol" in name else "cause_hint", observation.motivo)
+
+    def test_hallazgo_invalido_no_impide_publicar_otro_valido(self):
+        base = {"title": "válido", "severity": "High", "file": "a.py", "line": 1}
+        text = (
+            PRE + json.dumps({"findings": [
+                {**base, "cause_hint": 42}, {**base, "title": "otro"},
+            ]}) + SUF + "\nCOVERAGE: complete"
+        )
+        result = review.build_findings(
+            {"result": text},
+            {"base": "b" * 40, "head": "c" * 40, "reviewed": ["a.py"], "mode": "full"},
+            None, "o/r", "1", "bot", [],
+        )
+        loaded = domain.read_snapshot(result["block"])
+        self.assertIsInstance(loaded, domain.Valid)
+        self.assertEqual([f.title for f in loaded.snapshot.findings], ["otro"])
+        self.assertEqual(loaded.snapshot.completion, domain.PARTIAL)
+
     def test_bloque_con_anclas_se_parsea_a_located(self):
         entrada = {
             "title": "t",
