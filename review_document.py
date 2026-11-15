@@ -569,8 +569,6 @@ def prepare_publication(document, budget=None, secrets=()):
     )
     if omit_book:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
     if len(current.explanations) > 3 or len(current.notices) > 3:
         return DocumentBlocked("demasiadas explicaciones o avisos", "")
     capped = tuple(
@@ -580,13 +578,9 @@ def prepare_publication(document, budget=None, secrets=()):
     )
     if capped != current.explanations:
         current = _with_notice(current, "explanation-truncated")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, explanations=capped)
     if current.covered and libro_a_linea(current.covered.head_sha, dict(current.covered.entries)) is None:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, covered=None)
     body = _render(current, block)
     if isinstance(body, DocumentBlocked):
@@ -603,8 +597,6 @@ def prepare_publication(document, budget=None, secrets=()):
         )
         if not _capacity(_render(fixed, block), budget):
             current = _with_notice(current, "book-omitted")
-            if isinstance(current, domain.CapacityExceeded):
-                return current
             current = replace(current, covered=None)
             body = _render(current, block)
     if not _capacity(body, budget) and current.review and current.review.prose.text:
@@ -615,8 +607,6 @@ def prepare_publication(document, budget=None, secrets=()):
         body = _render(current, block)
     if not _capacity(body, budget) and current.covered:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, covered=None)
         body = _render(current, block)
     for i, entry in enumerate(current.explanations):
