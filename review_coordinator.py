@@ -1180,12 +1180,6 @@ def cmd_close_result(args):
     resultado = json.loads((work / "result.json").read_text())
     secretos = secretos_del_entorno()
     texto = redact(resultado.get("result") or "", secretos)
-    # El directorio de trabajo se sube completo como artifact: las salidas
-    # crudas de las vueltas extra llevan el mismo borrado que la respuesta.
-    for cruda in ("repair.json", "cierre.json"):
-        ruta = work / cruda
-        if ruta.exists():
-            ruta.write_text(redact(ruta.read_text(), secretos))
     review_github.avisar_bloque_sin_cierre(texto)
     # La identidad viaja en el paquete desde la solicitud del coordinador.
     identidad = paquete.get("finding_identity") or politica_de_identidad()
