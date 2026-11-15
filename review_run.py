@@ -50,10 +50,28 @@ SEGUNDA_CORRIDA_MIN_SECONDS = 600
 REVIEW_BUDGET_SECONDS = 1320
 
 
+MARGEN_SEGUNDOS = 30
+
+
 RETRY_DELAY = "30"
 
 
 PROXY_START_TIMEOUT = "60"
+
+
+@dataclass(frozen=True)
+class Reloj:
+    """El presupuesto de tiempo de todas las llamadas al modelo de una corrida."""
+
+    fin: float
+
+    @classmethod
+    def con_presupuesto(cls, segundos):
+        return cls(time.monotonic() + segundos)
+
+    def restante(self):
+        """Segundos que quedan después del margen; puede ser negativo."""
+        return int(self.fin - time.monotonic()) - MARGEN_SEGUNDOS
 
 
 def soft_fail(result_path, reason):
@@ -245,7 +263,7 @@ def presupuesto_de_revision():
 
 def cmd_run(args):
     politica_de_identidad()  # F0: rechazo temprano del modo de identidad
-    deadline = time.monotonic() + presupuesto_de_revision()
+    reloj = Reloj.con_presupuesto(presupuesto_de_revision())
     work = Path(args.work)
     name, provider = get_provider()
     manifest = json.loads((work / "manifest.json").read_text())
@@ -300,68 +318,72 @@ def cmd_run(args):
         os.environ.get("ATTEMPT_TIMEOUT") or attempt_timeout_for(max_turns)
     )
     primaria = run_with_provider(
-        name, key, cmd, work, result_path, attempt_timeout, deadline
+        name, key, cmd, work, result_path, attempt_timeout, reloj
     )
-    if primaria is None:
-        cerrar_sin_turnos(work, result_path, name, key, cmd, deadline)
-        reparar_bloque(work, result_path, name, key, cmd, deadline)
+    if isinstance(primaria, FallaPermanente):
+        soft_fail(result_path, primaria.motivo)
         return
-    if name == "opencode-go" and primaria.tipo != "quota":
-        # Solo una cuota agotada autoriza pasar de la suscripción a la API de pago.
-        # La saturación, un timeout o un fallo del proxy quedan pendientes.
-        soft_fail(
+    if primaria is not None:
+        if name == "opencode-go" and primaria.tipo != "quota":
+            # Solo una cuota agotada autoriza pasar de la suscripción a la API de pago.
+            # La saturación, un timeout o un fallo del proxy quedan pendientes.
+            soft_fail(
+                result_path,
+                f"{primaria.motivo}; la suscripción es la única vía y no se cambia "
+                "a la API de pago"
+                if os.environ.get("FALLBACK_API_KEY", "")
+                else primaria.sin_respaldo,
+            )
+            return
+        fallback_key = os.environ.get("FALLBACK_API_KEY", "")
+        if not fallback_key:
+            soft_fail(result_path, primaria.sin_respaldo)
+            return
+        fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
+        quedan = max(0, reloj.restante())
+        necesita = minimo_para_segunda_corrida(attempt_timeout)
+        if quedan < necesita:
+            soft_fail(
+                result_path,
+                f"{primaria.motivo}; no queda tiempo para probar {fallback_name} "
+                f"(quedan {quedan} s, se necesitan al menos {necesita} s)",
+            )
+            return
+        print(f"ai-review: {primaria.motivo}; se cambia a {fallback_name}", flush=True)
+        cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
+        respaldo = run_with_provider(
+            fallback_name,
+            fallback_key,
+            cmd,
+            work,
             result_path,
-            f"{primaria.motivo}; la suscripción es la única vía y no se cambia "
-            "a la API de pago"
-            if os.environ.get("FALLBACK_API_KEY", "")
-            else primaria.sin_respaldo,
+            attempt_timeout,
+            reloj,
+            respaldo=True,
         )
-        return
-    fallback_key = os.environ.get("FALLBACK_API_KEY", "")
-    if not fallback_key:
-        soft_fail(result_path, primaria.sin_respaldo)
-        return
-    fallback_name = "deepseek" if name == "opencode-go" else "opencode-go"
-    quedan = max(0, int(deadline - time.monotonic()) - 30)
-    necesita = minimo_para_segunda_corrida(attempt_timeout)
-    if quedan < necesita:
-        soft_fail(
-            result_path,
-            f"{primaria.motivo}; no queda tiempo para probar {fallback_name} "
-            f"(quedan {quedan} s, se necesitan al menos {necesita} s)",
-        )
-        return
-    print(f"ai-review: {primaria.motivo}; se cambia a {fallback_name}", flush=True)
-    cmd[cmd.index("--model") + 1] = PROVIDERS[fallback_name]["model"]
-    respaldo = run_with_provider(
-        fallback_name,
-        fallback_key,
-        cmd,
-        work,
-        result_path,
-        attempt_timeout,
-        deadline,
-        respaldo=True,
-    )
-    if respaldo is None:
+        if isinstance(respaldo, FallaPermanente):
+            soft_fail(result_path, respaldo.motivo)
+            return
+        if respaldo is not None:
+            if primaria.tipo == respaldo.tipo == "quota":
+                soft_fail(result_path, "ambos proveedores agotaron su cuota")
+                return
+            if primaria.tipo == respaldo.tipo == "saturation":
+                soft_fail(
+                    result_path,
+                    "ambos proveedores están saturados; la cuenta no está agotada "
+                    "y la revisión queda pendiente de que se recuperen",
+                )
+                return
+            soft_fail(result_path, f"{primaria.motivo}; {respaldo.motivo}")
+            return
         result = json.loads(result_path.read_text())
         if ERROR_KEY not in result:
             result["review_provider"] = fallback_name
             result_path.write_text(json.dumps(result))
-        cerrar_sin_turnos(
-            work, result_path, fallback_name, fallback_key, cmd, deadline
-        )
-        reparar_bloque(work, result_path, fallback_name, fallback_key, cmd, deadline)
-    elif primaria.tipo == respaldo.tipo == "quota":
-        soft_fail(result_path, "ambos proveedores agotaron su cuota")
-    elif primaria.tipo == respaldo.tipo == "saturation":
-        soft_fail(
-            result_path,
-            "ambos proveedores están saturados; la cuenta no está agotada "
-            "y la revisión queda pendiente de que se recuperen",
-        )
-    else:
-        soft_fail(result_path, f"{primaria.motivo}; {respaldo.motivo}")
+        name, key = fallback_name, fallback_key
+    cerrar_sin_turnos(work, result_path, name, key, cmd, reloj)
+    reparar_bloque(work, result_path, name, key, cmd, reloj)
 
 
 @dataclass(frozen=True)
@@ -433,6 +455,13 @@ class FallaDelProveedor:
             motivo=f"{self.motivo}; {nota}",
             sin_respaldo=f"{self.sin_respaldo}; {nota}",
         )
+
+
+@dataclass(frozen=True)
+class FallaPermanente:
+    """Ningún proveedor lo arreglaría: llave, modelo o endpoint inválidos, o falta el binario."""
+
+    motivo: str
 
 
 SIN_LLAVE_DE_RESPALDO = "falta FALLBACK_API_KEY para usar el otro proveedor"
@@ -528,7 +557,45 @@ def sumar_consumo(result, vuelta, sesion_retomada=False):
         result["usage"] = usage
 
 
-def cerrar_sin_turnos(work, result_path, name, key, cmd, deadline):
+def vuelta_extra(
+    reloj,
+    name,
+    key,
+    cmd,
+    work,
+    archivo,
+    *,
+    prompt,
+    turnos,
+    tope,
+    minimo,
+    aviso_sin_tiempo,
+    aviso_inicio,
+    extra=(),
+):
+    """None si no queda tiempo; si no, (texto, vuelta), con texto vacío si falló."""
+    restante = reloj.restante()
+    if restante < minimo:
+        print(f"{aviso_sin_tiempo} ({restante} s)", file=sys.stderr)
+        return None
+    archivo.unlink(missing_ok=True)
+    orden = list(cmd)
+    orden[orden.index("-p") + 1] = prompt()
+    orden[orden.index("--max-turns") + 1] = str(turnos)
+    orden += extra
+    print(aviso_inicio, flush=True)
+    falla = run_with_provider(
+        name, key, orden, work, archivo, min(tope, restante), reloj, attempts=1
+    )
+    if isinstance(falla, FallaPermanente):
+        archivo.write_text(json.dumps({ERROR_KEY: falla.motivo}))
+        print(f"::warning::ai-review: {falla.motivo}")
+    vuelta = json.loads(archivo.read_text()) if archivo.exists() else {}
+    texto = (vuelta.get("result") or "") if falla is None else ""
+    return texto, vuelta
+
+
+def cerrar_sin_turnos(work, result_path, name, key, cmd, reloj):
     """Retoma con --resume la sesión de una corrida que terminó en
     error_max_turns, con las mismas restricciones y el mismo proveedor; su
     texto pasa a ser la respuesta. El subtype se queda: el aviso de turnos
@@ -546,37 +613,26 @@ def cerrar_sin_turnos(work, result_path, name, key, cmd, deadline):
             file=sys.stderr,
         )
         return
-    restante = int(deadline - time.monotonic()) - 30
-    if restante < CIERRE_MIN_SECONDS:
-        print(
-            f"ai-review: la revisión se quedó sin turnos y no queda tiempo para "
-            f"la vuelta de cierre ({restante} s)",
-            file=sys.stderr,
-        )
-        return
     cierre = work / "cierre.json"
-    cierre.unlink(missing_ok=True)
-    cmd_cierre = list(cmd)
-    cmd_cierre[cmd_cierre.index("-p") + 1] = prompt_de_cierre(work)
-    cmd_cierre[cmd_cierre.index("--max-turns") + 1] = str(CIERRE_TURNS)
-    cmd_cierre += ["--resume", sesion]
-    print("ai-review: la revisión se quedó sin turnos; vuelta de cierre", flush=True)
-    try:
-        falla = run_with_provider(
-            name,
-            key,
-            cmd_cierre,
-            work,
-            cierre,
-            min(CIERRE_TIMEOUT, restante),
-            deadline,
-            attempts=1,
-        )
-    except SystemExit:  # soft_fail dentro de la vuelta: el original manda
-        falla = True
-    vuelta = json.loads(cierre.read_text()) if cierre.exists() else {}
-    sumar_consumo(result, vuelta, sesion_retomada=True)
-    texto = (vuelta.get("result") or "") if falla is None else ""
+    vuelta = vuelta_extra(
+        reloj,
+        name,
+        key,
+        cmd,
+        work,
+        cierre,
+        prompt=lambda: prompt_de_cierre(work),
+        turnos=CIERRE_TURNS,
+        tope=CIERRE_TIMEOUT,
+        minimo=CIERRE_MIN_SECONDS,
+        aviso_sin_tiempo="ai-review: la revisión se quedó sin turnos y no queda tiempo para la vuelta de cierre",
+        aviso_inicio="ai-review: la revisión se quedó sin turnos; vuelta de cierre",
+        extra=("--resume", sesion),
+    )
+    if vuelta is None:
+        return
+    texto, datos = vuelta
+    sumar_consumo(result, datos, sesion_retomada=True)
     if texto.strip():
         result["result"] = texto
         print("ai-review: la vuelta de cierre entregó la respuesta final", flush=True)
@@ -611,7 +667,7 @@ def partes_de_respuesta(texto):
     return strip_model_findings_block(resto).rstrip(), bloque, cobertura
 
 
-def reparar_bloque(work, result_path, name, key, cmd, deadline):
+def reparar_bloque(work, result_path, name, key, cmd, reloj):
     """Paso de reparación tras una revisión entregada a la que le falta el
     bloque o COVERAGE como última línea.
 
@@ -644,39 +700,25 @@ def reparar_bloque(work, result_path, name, key, cmd, deadline):
             flush=True,
         )
     else:
-        restante = int(deadline - time.monotonic()) - 30
-        if restante < REPAIR_MIN_SECONDS:
-            print(
-                f"ai-review: la revisión no entregó su bloque y no queda tiempo para "
-                f"repararlo ({restante} s)",
-                file=sys.stderr,
-            )
-            return
         reparacion = work / "repair.json"
-        reparacion.unlink(missing_ok=True)
-        cmd_rep = list(cmd)
-        cmd_rep[cmd_rep.index("-p") + 1] = prompt_de_reparacion(work, texto)
-        cmd_rep[cmd_rep.index("--max-turns") + 1] = str(REPAIR_TURNS)
-        print(
-            "ai-review: la revisión no entregó su bloque o su COVERAGE; vuelta de reparación",
-            flush=True,
+        vuelta = vuelta_extra(
+            reloj,
+            name,
+            key,
+            cmd,
+            work,
+            reparacion,
+            prompt=lambda: prompt_de_reparacion(work, texto),
+            turnos=REPAIR_TURNS,
+            tope=REPAIR_TIMEOUT,
+            minimo=REPAIR_MIN_SECONDS,
+            aviso_sin_tiempo="ai-review: la revisión no entregó su bloque y no queda tiempo para repararlo",
+            aviso_inicio="ai-review: la revisión no entregó su bloque o su COVERAGE; vuelta de reparación",
         )
-        try:
-            falla = run_with_provider(
-                name,
-                key,
-                cmd_rep,
-                work,
-                reparacion,
-                min(REPAIR_TIMEOUT, restante),
-                deadline,
-                attempts=1,
-            )
-        except SystemExit:  # soft_fail dentro de la reparación: el original manda
-            falla = True
-        rep = json.loads(reparacion.read_text()) if reparacion.exists() else {}
+        if vuelta is None:
+            return
+        texto_rep, rep = vuelta
         sumar_consumo(result, rep)
-        texto_rep = (rep.get("result") or "") if falla is None else ""
         _, bloque_rep, cobertura_rep = partes_de_respuesta(texto_rep)
         bloque = bloque or bloque_rep
         if not parcial:
@@ -717,11 +759,11 @@ def run_with_provider(
     work,
     result_path,
     attempt_timeout,
-    deadline,
+    reloj,
     respaldo=False,
     attempts=None,
 ):
-    """None si dejó un resultado en result_path; FallaDelProveedor si no."""
+    """None si dejó resultado; FallaDelProveedor o FallaPermanente si no."""
     provider = PROVIDERS[name]
     model = provider["model"]
     proxy = None
@@ -764,7 +806,7 @@ def run_with_provider(
 
     try:
         return run_agent(
-            cmd, child_env, result_path, name, attempt_timeout, deadline, attempts
+            cmd, child_env, result_path, name, attempt_timeout, reloj, attempts
         )
     finally:
         if proxy:
@@ -831,17 +873,16 @@ def run_in_group(cmd, env, timeout):
 
 
 def run_agent(
-    cmd, child_env, result_path, name, attempt_timeout, deadline, attempts=None
+    cmd, child_env, result_path, name, attempt_timeout, reloj, attempts=None
 ):
-    """None si dejó un resultado en result_path; FallaDelProveedor si este
-    proveedor no pudo revisar. Lo que ningún proveedor arreglaría termina en
-    soft_fail aquí mismo."""
+    """None si dejó resultado; FallaDelProveedor si otro proveedor podría
+    revisar, FallaPermanente si ninguno lo arreglaría."""
     attempts = attempts or int(os.environ.get("ATTEMPTS", "2"))
     falla = None
     necesita = minimo_para_segunda_corrida(attempt_timeout)
     for attempt in range(1, attempts + 1):
-        remaining = int(deadline - time.monotonic())
-        quedan = max(0, remaining - 30)
+        restante = reloj.restante()
+        quedan = max(0, restante)
         if attempt > 1 and quedan < necesita:
             print(
                 f"ai-review: no queda tiempo para otro intento "
@@ -849,7 +890,7 @@ def run_agent(
                 file=sys.stderr,
             )
             return falla.sin_tiempo_para_reintentar(quedan, necesita)
-        timeout = max(1, min(attempt_timeout, remaining - 30))
+        timeout = max(1, min(attempt_timeout, restante))
         print(
             f"ai-review: intento {attempt}/{attempts} con {name} (límite {timeout} s)",
             flush=True,
@@ -857,11 +898,9 @@ def run_agent(
         try:
             proc = run_in_group(cmd, child_env, timeout)
         except FileNotFoundError:
-            soft_fail(
-                result_path,
+            return FallaPermanente(
                 "no se encontró el binario de claude (falló la instalación)",
             )
-            return
         except subprocess.TimeoutExpired as exc:
             print(
                 f"ai-review: el intento excedió el tiempo límite\n{as_text(exc.stderr)[-4000:]}",
@@ -907,11 +946,9 @@ def run_agent(
             if reasoning_replay_error:
                 falla = FallaDelProveedor.razonamiento(name)
             elif result.get("api_error_status") in (400, 401, 403, 404):
-                soft_fail(
-                    result_path,
+                return FallaPermanente(
                     "error permanente del proveedor (llave, modelo o endpoint inválidos)",
                 )
-                return
         if attempt < attempts:
             time.sleep(int(os.environ.get("RETRY_DELAY", RETRY_DELAY)))
     return falla or FallaDelProveedor.no_disponible(name)

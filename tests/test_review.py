@@ -728,13 +728,9 @@ class ReasoningReplayRecovery(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()),
         ):
             result_path = Path(tmp) / "result.json"
-            falla = None
-            try:
-                falla = review_run.run_agent(
-                    cmd, child_env, result_path, provider, 600, remaining
-                )
-            except SystemExit as exc:
-                self.assertEqual(exc.code, 0)
+            falla = review_run.run_agent(
+                cmd, child_env, result_path, provider, 600, review_run.Reloj(remaining)
+            )
             result = falla or json.loads(result_path.read_text())
         return result, runner.call_args_list, cmd, child_env
 
@@ -784,12 +780,18 @@ class ReasoningReplayRecovery(unittest.TestCase):
                     [{"result": message, "is_error": True, "api_error_status": status}]
                 )
                 self.assertEqual(len(calls), 1)
-                self.assertIn("error permanente", result[review_config.ERROR_KEY])
+                self.assertEqual(
+                    result.motivo,
+                    "error permanente del proveedor (llave, modelo o endpoint inválidos)",
+                )
 
     def test_exception_does_not_apply_to_direct_deepseek_provider(self):
         result, calls, _, _ = self.run_replies([self.replay_error], provider="deepseek")
         self.assertEqual(len(calls), 1)
-        self.assertIn("error permanente", result[review_config.ERROR_KEY])
+        self.assertEqual(
+            result.motivo,
+            "error permanente del proveedor (llave, modelo o endpoint inválidos)",
+        )
 
 
 class RunAgent(unittest.TestCase):
@@ -2285,9 +2287,9 @@ class TimeBudget(unittest.TestCase):
             return proxy, "http://127.0.0.1:4000", "sk-token"
 
         def fake_run_agent(
-            cmd, child_env, result_path, name, attempt_timeout, deadline, attempts=None
+            cmd, child_env, result_path, name, attempt_timeout, reloj, attempts=None
         ):
-            captured["deadline"] = deadline
+            captured["reloj"] = reloj
             result_path.write_text(json.dumps(OK_REPLY))
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2312,7 +2314,7 @@ class TimeBudget(unittest.TestCase):
                 mock.patch.object(review_run, "run_agent", side_effect=fake_run_agent),
             ):
                 review_run.cmd_run(argparse.Namespace(work=str(work)))
-        self.assertEqual(captured["deadline"], 1000 + 1320)
+        self.assertEqual(captured["reloj"].fin, 1000 + 1320)
 
     def test_timeout_kills_grandchildren_that_hold_the_output(self):
         script = textwrap.dedent("""\
