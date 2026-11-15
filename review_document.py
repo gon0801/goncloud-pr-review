@@ -297,7 +297,7 @@ def document_from_result(previous, snapshot, result, manifest, provider, head, n
         covered=CoverageBook(head, tuple(covered.items())) if covered is not None else None,
         review=ReviewView(head, provider, tuple(new_ids), scope, tuple(warnings), SafeProse(prose)),
         failure=None,
-        historical=None,
+        historical=previous.historical if not result.get("model_ok", True) else None,
     )
 
 

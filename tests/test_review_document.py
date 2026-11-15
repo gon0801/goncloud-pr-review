@@ -63,6 +63,35 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_unusable_report_keeps_imported_history(self):
+        original = document()
+        history = "Previous useful review and explanation"
+        legacy = "\n".join((
+            "<!-- ai-review:sticky -->",
+            f"<!-- ai-review:sha={'a' * 40} -->",
+            f"<!-- ai-review:completion={'a' * 40}:partial -->",
+            domain.encode_snapshot(original.memory).block,
+            history,
+        ))
+        imported = read_document(legacy)
+        self.assertIsInstance(imported, ReviewDocument)
+        self.assertIsNotNone(imported.historical)
+        manifest = {"reviewed": ["a.py"], "excluded": []}
+        invalid = document_from_result(
+            imported, imported.memory, {"result": "garbage", "model_ok": False},
+            manifest, "opencode-go", "a" * 40, [],
+        )
+        prepared = prepare_publication(invalid)
+        self.assertIsInstance(prepared, PreparedPublication)
+        self.assertIn(history, prepared.body)
+        restarted = read_document(prepared.body)
+        self.assertEqual(restarted.historical.text, imported.historical.text)
+        valid = document_from_result(
+            restarted, restarted.memory, {"result": "Revisión válida", "model_ok": True},
+            manifest, "opencode-go", "a" * 40, [],
+        )
+        self.assertNotIn(history, prepare_publication(valid).body)
+
     def test_view_json_cannot_end_its_html_comment(self):
         current = document()
         scope = replace(
