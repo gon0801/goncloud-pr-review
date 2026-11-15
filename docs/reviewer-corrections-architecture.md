@@ -89,7 +89,7 @@ flowchart LR
 |---|---|---|
 | `review_domain.py`, existente | Identidad, transiciones, solicitudes, cobertura y codec. Puro, sin Git, red o modelo. | `reconcile`, `read_snapshot`, `encode_snapshot`; reutiliza matching y aceptación existentes. |
 | `review.py`, existente | CLI, autenticación GitHub, coordinación, ejecución del modelo y presentación. | Comandos actuales para compatibilidad; futuros `reconcile` y `execute-request` para la instalación nueva. |
-| `review_context.py`, futuro en D0 | Lectura Git, delta, obligaciones, contexto y presupuesto. | `prepare_review` devuelve paquete y hechos coherentes. R0 corrige primero las funciones actuales sin exigir esta extracción. |
+| `review_context.py`, existente | Lectura Git, delta y presupuesto del diff. | `prepare_review` devuelve `PreparedReview` con `entregados`, `omisiones`, `partes`, `sin_codificar` y `over_budget_bytes`. |
 | Workflows y `action.yml` | Separación de credenciales, activación y exclusión de escritores. | Workers y coordinador con roles diferentes. |
 | `scripts/compare_reviews.py`, existente | Cohortes, adjudicación y métricas. | Informe offline con grupos y pares explícitos. |
 
@@ -151,7 +151,7 @@ def encode_snapshot(current: Snapshot,
 
 `Complete`, `Commit` y los demás constructores de una línea representan uniones discriminadas. `Origin` identifica el evento y su contenido autenticado; `AuthorizedCommand` sólo se construye después de consultar permisos. `ReportReady` recibe un reporte validado de nuevo por el coordinador. Un worker no puede declarar que sus propios datos son confiables.
 
-`PreparedReview` reúne plan, hechos Git, bytes exactos del diff/contexto y omisiones con causa. `RepositoryFacts` separa `changed_paths`, `reverted_paths`, renombres y blobs verificados de los archivos entregados al modelo. `ReviewPlan` guarda target, generación de origen, obligaciones requeridas y entregadas. `ValidatedReport` conserva cobertura declarada, obligaciones declaradas cubiertas y evidencias rechazadas.
+`PreparedReview` contiene `entregados`, `omisiones`, `partes`, `sin_codificar` y `over_budget_bytes`; no contiene `plan` ni `hechos`. `RepositoryFacts` separa `changed_paths`, `reverted_paths`, renombres y blobs verificados de los archivos entregados al modelo. `ReviewPlan` guarda target, generación de origen, obligaciones requeridas y entregadas. `ValidatedReport` conserva cobertura declarada, obligaciones declaradas cubiertas y evidencias rechazadas.
 
 La revisión y los metadatos de coordinación amplían el esquema persistente. Se propone **schema 3**, reutilizando los tipos de v2: revisión con base y merge-base separados, cobertura, contador de solicitudes, solicitudes pendientes, recibos necesarios para idempotencia y cursor de comandos. No se agregan campos a v2 que un escritor viejo pueda eliminar sin advertirlo. Lectores anteriores deben tratar schema 3 como futuro y conservarlo.
 
@@ -274,6 +274,8 @@ La hoja para juzgar elimina nombres de producto, badges y severidad con formato 
 Los PRs completos se asignan a ajuste o evaluación reservada. Todos los pushes de un PR quedan juntos. La muestra y criterios pendientes de E1 se completan o se revisan expresamente antes de activar D0/C0. Corregir R0, identidad y publicación no depende de juntar treinta PRs.
 
 ## D0 y contexto selectivo
+
+El código de C0 se retiró en el paso 7 (#167); nunca se activó en producción.
 
 El trabajo nuevo procede de `previous_head..head`, acotado a las rutas que el PR cambia contra su merge-base en head o cambiaba en el head previo. Una reversión del PR entra al alcance aunque el archivo vuelva a su contenido base. Lo que trae un merge de la base sin que el PR lo haya tocado queda fuera. El contexto histórico y las obligaciones de hallazgos abiertos se entregan aparte, con su procedencia. El delta que decide si un hallazgo pudo resolverse sigue incluyendo eliminaciones y reversiones aunque el archivo haya desaparecido del diff global del PR. Un renombre se trata como un borrado más un alta en todo el cálculo, y `prepare` no entrega pares de renombre.
 
