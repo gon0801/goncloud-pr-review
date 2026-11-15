@@ -87,6 +87,27 @@ sin publicar. Consumidores sin configuración nueva se comportan igual que antes
    solo con la activación aprobada por el operador y con un SHA que ya corre
    en el repo central.
 
+## Retorno después de publicar el documento tipado
+
+Desde `82b224c8f37b0b34bd712ab2635764a287a1bdc8`, el comentario contiene
+`ai-review:view` y slots con hashes además de la memoria schema 3. Publicador
+y worker deben fijar el mismo SHA; el worker exporta solo `result.json` cerrado.
+
+Después de publicar esa vista, no se debe restaurar `6eec25d` ni otro escritor
+anterior al puente. El retorno conservador es
+`4db77cc5ff984d54d7e0ed450456837204ed72af` (D3): reconoce el documento nuevo,
+conserva íntegro el comentario y rechaza modificarlo. Detiene escrituras y
+no promete continuar revisando. Para reanudar, se instala una versión que
+entienda la vista publicada; no se eliminan los marcadores ni se convierten
+comentarios a mano.
+
+Antes de activar o retornar, se drenan workers y publicadores del consumidor.
+El central se comprueba primero: publicación releída con `verify_sticky.py`,
+memoria válida y artifact que contenga exclusivamente `result.json`. Después
+se actualiza cada consumidor en un único commit para sus dos workflows,
+conservando sus ajustes. El procedimiento histórico de retorno que sigue no
+autoriza usar un escritor que desconozca `ai-review:view`.
+
 ## Retorno: del coordinador al escritor compatible
 
 El rollback operativo **no** es volver al binario `179e6a3`: ese escritor
