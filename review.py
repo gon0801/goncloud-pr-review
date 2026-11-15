@@ -39,7 +39,7 @@ from review_sticky import (
     libro_fusionado,
     modelo_utilizable,
     prev_de_memoria,
-    recortes_de_continuacion,
+    recortes_del_manifest,
     reviewed_sha,
     sha_hexa,
     sticky_from_comments,
@@ -895,7 +895,7 @@ def actualizar_memoria_valida(
         cobertura = review_domain.PARTIAL
     omisiones_alcance = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
-        for e in recortes_de_continuacion(manifest)
+        for e in recortes_del_manifest(manifest)
     )
 
     head = manifest.get("head")
