@@ -636,6 +636,32 @@ class PublicacionCompleta(unittest.TestCase):
         )
         self.assertEqual(adapter.writes, [("PATCH", 7)])
 
+    def test_usable_review_removes_capacity_notice_and_keeps_command_notices(self):
+        command_notice = Notice("no-entendido", comment_id=12)
+        current = prepare_publication(replace(document(), notices=(command_notice,)))
+        adapter = self.Comments(current.body)
+        publish_capacity_notice(adapter.leer()[0], adapter, login="bot")
+        previous = read_document(adapter.leer()[0]["body"])
+        self.assertIn(Notice("capacity-exceeded"), previous.notices)
+        manifest = {"reviewed": ["a.py"], "excluded": []}
+        for model_ok in (False, True):
+            candidate = document_from_result(
+                previous, previous.memory,
+                {"result": "Revisión nueva", "model_ok": model_ok},
+                manifest, "opencode-go", "b" * 40, [],
+            )
+            receipt = publish_checkpoint(
+                prepare_publication(candidate), adapter.leer()[0], adapter, login="bot",
+            )
+            self.assertIsInstance(receipt, PublishReceipt)
+            previous = read_document(adapter.leer()[0]["body"])
+            self.assertIn(command_notice, previous.notices)
+            if model_ok:
+                self.assertNotIn(Notice("capacity-exceeded"), previous.notices)
+                self.assertNotIn("se conserva el checkpoint previo", adapter.leer()[0]["body"])
+            else:
+                self.assertIn(Notice("capacity-exceeded"), previous.notices)
+
     def test_review_dismiss_explain_notice_failure_and_restart_keep_the_view(self):
         prior = domain.Snapshot(3, 1, None, 1, domain.UNKNOWN, [], 0)
         findings = [

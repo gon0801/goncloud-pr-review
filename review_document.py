@@ -298,6 +298,10 @@ def document_from_result(previous, snapshot, result, manifest, provider, head, n
         review=ReviewView(head, provider, tuple(new_ids), scope, tuple(warnings), SafeProse(prose)),
         failure=None,
         historical=previous.historical if not result.get("model_ok", True) else None,
+        notices=tuple(
+            notice for notice in previous.notices
+            if notice.kind != "capacity-exceeded" or not result.get("model_ok", True)
+        ),
     )
 
 
