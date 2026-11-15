@@ -34,6 +34,12 @@ def env(name):
 
 
 ERROR_KEY = "ai_review_error"
+SECRETOS_DEL_ENTORNO = ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
+
+
+def secretos_del_entorno():
+    """Los valores que nunca se publican: redact los quita de todo texto visible."""
+    return [os.environ.get(nombre, "") for nombre in SECRETOS_DEL_ENTORNO]
 
 
 def get_provider():
