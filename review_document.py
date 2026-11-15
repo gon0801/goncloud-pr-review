@@ -597,11 +597,21 @@ def _fit_slot(text, candidate, block, budget):
 
 
 def _with_notice(document, kind):
+    if document.review and kind in (
+        "book-omitted", "history-truncated", "explanation-truncated", "failure-truncated",
+    ):
+        warning = ReviewWarning(kind)
+        if warning in document.review.warnings:
+            return document
+        return replace(
+            document,
+            review=replace(document.review, warnings=document.review.warnings + (warning,)),
+        )
     notice = Notice(kind)
     if notice in document.notices:
         return document
     if len(document.notices) >= 3:
-        return domain.CapacityExceeded(3, len(document.notices) + 1)
+        return replace(document, notices=document.notices[-2:] + (notice,))
     return replace(document, notices=document.notices + (notice,))
 
 

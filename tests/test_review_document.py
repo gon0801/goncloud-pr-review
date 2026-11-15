@@ -27,6 +27,7 @@ from review_document import (
     ReviewDocument,
     ReviewedHeader,
     ReviewView,
+    ReviewWarning,
     SafeProse,
     ScopeUsage,
     ScopeView,
@@ -63,6 +64,66 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_three_notices_do_not_block_optional_book_omission(self):
+        notices = tuple(Notice("no-entendido", comment_id=cid) for cid in (1, 2, 3))
+        book = CoverageBook(
+            "a" * 40,
+            tuple((f"path{i}.py", "b" * 40) for i in range(401)),
+        )
+        current = replace(document(), covered=book, notices=notices)
+        prepared = prepare_publication(current)
+        self.assertIsInstance(prepared, PreparedPublication)
+        decoded = read_document(prepared.body)
+        self.assertIsInstance(decoded, ReviewDocument)
+        self.assertIsNone(decoded.covered)
+        self.assertEqual(decoded.notices, notices)
+        self.assertIn(
+            ReviewWarning("book-omitted"),
+            decoded.review.warnings,
+        )
+        self.assertEqual(decoded.memory, current.memory)
+
+    def test_three_notices_allow_prose_and_explanation_reduction(self):
+        original = document()
+        finding = domain.Finding(
+            id="F1", title="Error", severity="High",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+        )
+        current = replace(
+            original,
+            memory=replace(original.memory, findings=[finding], next_id=2),
+            review=replace(original.review, prose=SafeProse("x" * 80000)),
+            explanations=(ExplanationView("F1", SafeProse("y" * 8001)),),
+            notices=tuple(Notice("no-entendido", comment_id=cid) for cid in (1, 2, 3)),
+        )
+        prepared = prepare_publication(current)
+        self.assertIsInstance(prepared, PreparedPublication)
+        decoded = read_document(prepared.body)
+        self.assertIsInstance(decoded, ReviewDocument)
+        self.assertEqual(decoded.notices, current.notices)
+        self.assertEqual(decoded.memory, current.memory)
+        self.assertIn(ReviewWarning("explanation-truncated"), decoded.review.warnings)
+        self.assertIn(ReviewWarning("prose-truncated"), decoded.review.warnings)
+
+    def test_three_notices_without_review_keep_latest_when_failure_is_trimmed(self):
+        original = document()
+        current = replace(
+            original,
+            review=None,
+            failure=FailureView("b" * 40, "worker-failed", SafeProse("x" * 70000)),
+            notices=tuple(Notice("no-entendido", comment_id=cid) for cid in (1, 2, 3)),
+        )
+        prepared = prepare_publication(current)
+        self.assertIsInstance(prepared, PreparedPublication)
+        decoded = read_document(prepared.body)
+        self.assertIsInstance(decoded, ReviewDocument)
+        self.assertEqual(
+            decoded.notices,
+            current.notices[-2:] + (Notice("failure-truncated"),),
+        )
+        self.assertEqual(decoded.memory, original.memory)
+
     def test_unusable_report_keeps_imported_history(self):
         original = document()
         history = "Previous useful review and explanation"
@@ -277,7 +338,7 @@ class CodecDocumento(unittest.TestCase):
         self.assertLessEqual(len(result.body.encode("utf-8")), 60000)
         self.assertLessEqual(len(result.body), 60000)
 
-    def test_book_omission_with_three_notices_keeps_the_previous_document(self):
+    def test_book_omission_with_three_notices_publishes_without_losing_them(self):
         original = document()
         current = replace(
             original,
@@ -288,7 +349,12 @@ class CodecDocumento(unittest.TestCase):
             notices=(Notice("uno"), Notice("dos"), Notice("tres")),
         )
         result = prepare_publication(current, domain.StorageBudget(), ())
-        self.assertTrue(isinstance(result, domain.CapacityExceeded), type(result).__name__)
+        self.assertIsInstance(result, PreparedPublication)
+        restored = read_document(result.body)
+        self.assertEqual(restored.notices, current.notices)
+        self.assertEqual(restored.memory, original.memory)
+        self.assertIsNone(restored.covered)
+        self.assertIn(ReviewWarning("book-omitted"), restored.review.warnings)
 
     def test_large_book_is_omitted_with_notice_without_losing_state(self):
         original = document()
@@ -303,7 +369,7 @@ class CodecDocumento(unittest.TestCase):
         restored = read_document(result.body)
         self.assertIsInstance(restored, ReviewDocument)
         self.assertIsNone(restored.covered)
-        self.assertIn(Notice("book-omitted"), restored.notices)
+        self.assertIn(ReviewWarning("book-omitted"), restored.review.warnings)
         self.assertEqual(restored.memory, original.memory)
 
     def test_generated_title_is_not_used_as_a_presentation_parser(self):
