@@ -18,6 +18,7 @@ from review_config import (
     get_provider,
     politica_de_identidad,
     politica_de_revision,
+    secretos_del_entorno,
 )
 import review_domain
 import review_github
@@ -1177,10 +1178,7 @@ def cmd_close_result(args):
     work = Path(args.work)
     paquete = json.loads((work / "request-package.json").read_text())
     resultado = json.loads((work / "result.json").read_text())
-    secretos = [
-        os.environ.get(n, "")
-        for n in ("API_KEY", "FALLBACK_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
-    ]
+    secretos = secretos_del_entorno()
     texto = redact(resultado.get("result") or "", secretos)
     # El directorio de trabajo se sube completo como artifact: las salidas
     # crudas de las vueltas extra llevan el mismo borrado que la respuesta.

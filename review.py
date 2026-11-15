@@ -16,6 +16,7 @@ from review_config import (
     env,
     get_provider,
     politica_de_revision,
+    secretos_del_entorno,
 )
 import review_coordinator
 import review_domain
@@ -1163,19 +1164,11 @@ def cmd_publish(args):
         )
         body = redact(
             body,
-            [
-                os.environ.get("API_KEY", ""),
-                os.environ.get("FALLBACK_API_KEY", ""),
-                os.environ.get("GH_TOKEN", ""),
-            ],
+            secretos_del_entorno(),
         )
         summary_text = redact(
             banner,
-            [
-                os.environ.get("API_KEY", ""),
-                os.environ.get("FALLBACK_API_KEY", ""),
-                os.environ.get("GH_TOKEN", ""),
-            ],
+            secretos_del_entorno(),
         )
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
@@ -1195,19 +1188,11 @@ def cmd_publish(args):
                 body = f"{MARKER}\n{banner}"
             body = redact(
                 body,
-                [
-                    os.environ.get("API_KEY", ""),
-                    os.environ.get("FALLBACK_API_KEY", ""),
-                    os.environ.get("GH_TOKEN", ""),
-                ],
+                secretos_del_entorno(),
             )
             summary_text = redact(
                 banner,
-                [
-                    os.environ.get("API_KEY", ""),
-                    os.environ.get("FALLBACK_API_KEY", ""),
-                    os.environ.get("GH_TOKEN", ""),
-                ],
+                secretos_del_entorno(),
             )
         else:
             cuerpo = redact(
@@ -1228,11 +1213,7 @@ def cmd_publish(args):
                     else None,
                     budget=review_domain.StorageBudget(),
                 ),
-                [
-                    os.environ.get("API_KEY", ""),
-                    os.environ.get("FALLBACK_API_KEY", ""),
-                    os.environ.get("GH_TOKEN", ""),
-                ],
+                secretos_del_entorno(),
             )
             if not cuerpo_publicable(cuerpo, findings["block"]):
                 # El fijo del comentario no cabe (ni sin libro): el cuerpo no
