@@ -867,6 +867,94 @@ def _ultimo_comentario(adaptador):
     )
 
 
+@dataclass(frozen=True)
+class Plan:
+    """Lo que decidió una corrida del coordinador; cmd_reconcile solo lo publica y lo despacha."""
+
+    estado: object
+    trabajo: tuple
+    terminadas: tuple
+    sin_cambios: bool
+    visible: object = None
+
+
+def decidir(
+    current,
+    estado,
+    trabajo,
+    avisos,
+    entregas,
+    sin_corrida,
+    admision,
+    *,
+    facts,
+    policy,
+    admisible,
+    hay_sticky,
+    permisos,
+    ultimo_comentario,
+):
+    # Se despacha otra vez; si el run solo tardó en aparecer en la lista, el
+    # grupo del worker cancela al anterior y cuenta el más nuevo. Un PR
+    # cerrado o en borrador no gasta otra corrida del modelo.
+    if admisible:
+        por_despachar = {w.id for w in trabajo}
+        trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
+    previo = estado
+    revision_entregada, explicaciones = None, []
+    for entrega in entregas:
+        evento, hechos = evento_de_entrega(entrega, facts, estado)
+        decision = review_domain.reconcile(estado, evento, hechos, policy)
+        if not isinstance(decision, review_domain.Commit):
+            continue
+        solicitud, artifact = entrega.solicitud, entrega.artifact
+        # Solo un reporte del target vigente se muestra como revisión: el
+        # dominio también hace Commit al descartar un head viejo.
+        if review_domain._target_vigente(solicitud, facts, policy):
+            if solicitud.kind == "review":
+                revision_entregada = (
+                    artifact or {ERROR_KEY: evento.motivo},
+                    {f.id for f in estado.findings},
+                    solicitud.target.get("head_sha") or facts.revision.head_sha,
+                )
+            elif artifact is not None and ERROR_KEY not in artifact:
+                explicaciones.append(
+                    (solicitud.finding_id, texto_de_explicacion(artifact))
+                )
+        estado = decision.snapshot
+    estado = review_domain.marcar_hallazgos_nuevos(previo, estado, ultimo_comentario)
+    if admision is not None:
+        admitido = review_domain.reconcile(estado, admision, facts, policy)
+        estado = admitido.snapshot
+        # Una revisión nueva poda la anterior, que ya no se despacha.
+        vivas = {r.id for r in estado.pending_requests}
+        trabajo = tuple(w for w in trabajo if w.id in vivas)
+        trabajo = (*trabajo, *admitido.work_after_commit)
+
+    terminadas = ()
+    if trabajo:
+        snapshot_ra, despachables, terminadas = review_domain.reautorizar(
+            estado, trabajo, permisos
+        )
+        estado, trabajo = snapshot_ra or estado, tuple(despachables)
+
+    if not hay_sticky and admision is None:
+        avisos = ()
+
+    if estado == current and not trabajo:
+        return Plan(estado, trabajo, terminadas, sin_cambios=True)
+
+    # Varias explicaciones pueden llegar en la misma cosecha: una por re-render.
+    pasos = [estado_visible(estado, e) for e in explicaciones[:-1]]
+    pasos.append(estado_visible(estado, (explicaciones or [None])[-1], avisos))
+    if revision_entregada is not None:
+        artifact, previos, cabeza = revision_entregada
+        revision = revision_visible(artifact, estado, previos, cabeza)
+        pasos = [revision, *pasos] if avisos or explicaciones else [revision]
+    visible = encadenar(*pasos)
+    return Plan(estado, trabajo, terminadas, sin_cambios=False, visible=visible)
+
+
 def cmd_reconcile(args):
     """Un run converge el PR sin importar qué evento lo despertó: los comandos
     sin procesar (el cursor los hace idempotentes), los resultados que el
@@ -971,77 +1059,36 @@ def cmd_reconcile(args):
             file=sys.stderr,
         )
         entregas, sin_corrida, rechazo = [], [], True
-    # Se despacha otra vez; si el run solo tardó en aparecer en la lista, el
-    # grupo del worker cancela al anterior y cuenta el más nuevo. Un PR
-    # cerrado o en borrador no gasta otra corrida del modelo.
-    if _pr_admisible(pr_data, repo):
-        por_despachar = {w.id for w in trabajo}
-        trabajo = (*trabajo, *(s for s in sin_corrida if s.id not in por_despachar))
-    previo = estado
-    revision_entregada, explicaciones = None, []
-    for entrega in entregas:
-        evento, hechos = evento_de_entrega(entrega, facts, estado)
-        decision = review_domain.reconcile(estado, evento, hechos, policy)
-        if not isinstance(decision, review_domain.Commit):
-            continue
-        solicitud, artifact = entrega.solicitud, entrega.artifact
-        # Solo un reporte del target vigente se muestra como revisión: el
-        # dominio también hace Commit al descartar un head viejo.
-        if review_domain._target_vigente(solicitud, facts, policy):
-            if solicitud.kind == "review":
-                revision_entregada = (
-                    artifact or {ERROR_KEY: evento.motivo},
-                    {f.id for f in estado.findings},
-                    solicitud.target.get("head_sha") or head,
-                )
-            elif artifact is not None and ERROR_KEY not in artifact:
-                explicaciones.append(
-                    (solicitud.finding_id, texto_de_explicacion(artifact))
-                )
-        estado = decision.snapshot
-    estado = review_domain.marcar_hallazgos_nuevos(
-        previo, estado, lambda: _ultimo_comentario(adaptador)
-    )
     admision = _admision(target, pr_data, repo)
-    if admision is not None:
-        admitido = review_domain.reconcile(estado, admision, facts, policy)
-        estado = admitido.snapshot
-        # Una revisión nueva poda la anterior, que ya no se despacha.
-        vivas = {r.id for r in estado.pending_requests}
-        trabajo = tuple(w for w in trabajo if w.id in vivas)
-        trabajo = (*trabajo, *admitido.work_after_commit)
-
-    if trabajo:
-        snapshot_ra, despachables, terminadas = review_domain.reautorizar(
-            estado, trabajo, permisos
-        )
-        estado, trabajo = snapshot_ra or estado, tuple(despachables)
-        for terminada in terminadas:
-            print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
-
-    if sticky is None and admision is None:
-        avisos = ()
-
-    if estado == current and not trabajo:
+    plan = decidir(
+        current,
+        estado,
+        trabajo,
+        avisos,
+        entregas,
+        sin_corrida,
+        admision,
+        facts=facts,
+        policy=policy,
+        admisible=_pr_admisible(pr_data, repo),
+        hay_sticky=sticky is not None,
+        permisos=permisos,
+        ultimo_comentario=lambda: _ultimo_comentario(adaptador),
+    )
+    for terminada in plan.terminadas:
+        print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
+    if plan.sin_cambios:
         print("ai-review: nada cambió; el sticky queda como está")
         if rechazo:
             sys.exit(1)
         return
 
-    # Varias explicaciones pueden llegar en la misma cosecha: una por re-render.
-    pasos = [estado_visible(estado, e) for e in explicaciones[:-1]]
-    pasos.append(estado_visible(estado, (explicaciones or [None])[-1], avisos))
-    if revision_entregada is not None:
-        artifact, previos, cabeza = revision_entregada
-        revision = revision_visible(artifact, estado, previos, cabeza)
-        pasos = [revision, *pasos] if avisos or explicaciones else [revision]
-    visible = encadenar(*pasos)
     resultado = publish_checkpoint(
-        review_domain.Commit(snapshot=estado, work_after_commit=trabajo),
+        review_domain.Commit(snapshot=plan.estado, work_after_commit=plan.trabajo),
         sticky or None,
         adaptador,
         login=login,
-        visible=visible,
+        visible=plan.visible,
     )
     if isinstance(resultado, Unconfirmed):
         print(
