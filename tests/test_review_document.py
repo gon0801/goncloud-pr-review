@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import replace
+from html.parser import HTMLParser
 from pathlib import Path
 from unittest import mock
 
@@ -62,6 +63,41 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_view_json_cannot_end_its_html_comment(self):
+        current = document()
+        scope = replace(
+            current.review.scope,
+            excluded_count=1,
+            exclusions=("`a--!><h1>Injected title</h1>` (filter)",),
+        )
+        prepared = prepare_publication(
+            replace(current, review=replace(current.review, scope=scope)),
+        )
+        self.assertIsInstance(prepared, PreparedPublication)
+        view_line = next(
+            line for line in prepared.body.splitlines() if line.startswith("<!-- ai-review:view=")
+        )
+
+        class Visible(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = []
+                self.text = []
+
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+
+            def handle_data(self, data):
+                if data.strip():
+                    self.text.append(data)
+
+        parser = Visible()
+        parser.feed(view_line)
+        self.assertEqual((parser.tags, parser.text), ([], []))
+        decoded = read_document(prepared.body)
+        self.assertIsInstance(decoded, ReviewDocument)
+        self.assertEqual(decoded.review.scope.exclusions, scope.exclusions)
+
     def test_known_secret_not_published_in_coverage(self):
         secret = "FAKE_AUDIT_" + "SECRET_123456789"
         current = replace(
