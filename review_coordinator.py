@@ -344,31 +344,78 @@ def _run_avisado():
     return None
 
 
+@dataclass(frozen=True)
+class RunSearchComplete:
+    by_request: dict[int, tuple[dict, ...]]
+
+
+@dataclass(frozen=True)
+class RunSearchUnknown:
+    reason: str
+
+
+def _run_valido(run):
+    return (
+        isinstance(run, dict)
+        and type(run.get("id")) is int
+        and run["id"] > 0
+        and type(run.get("run_attempt")) is int
+        and run["run_attempt"] > 0
+        and isinstance(run.get("event"), str)
+        and isinstance(run.get("display_title"), str)
+        and isinstance(run.get("path"), str)
+        and isinstance(run.get("head_branch"), str)
+        and isinstance(run.get("head_sha"), str)
+        and isinstance(run.get("status"), str)
+    )
+
+
 def corridas_por_solicitud(repo, pr):
     """Los runs del worker de este PR por solicitud, del más nuevo al más viejo.
     El run-name del worker es `PR <n> solicitud <id>`: así se atribuye también
     un run que terminó sin artifact."""
-    datos = json.loads(
-        review_github.sh(
-            "gh",
-            "api",
-            f"repos/{repo}/actions/workflows/ai-review-worker.yml/runs"
-            "?event=workflow_dispatch&per_page=100",
-        ).stdout
-    )
+    try:
+        paginas = json.loads(
+            review_github.sh(
+                "gh", "api",
+                f"repos/{repo}/actions/workflows/ai-review-worker.yml/runs?per_page=100",
+                "--paginate", "--slurp", timeout=60,
+            ).stdout
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return RunSearchUnknown("listado del worker no disponible")
+    if not isinstance(paginas, list) or not paginas:
+        return RunSearchUnknown("páginas del worker inválidas")
     corridas = {}
-    for run in datos.get("workflow_runs") or []:
-        titulo = TITULO_DEL_WORKER.fullmatch(str(run.get("display_title") or ""))
+    seen, total = set(), None
+    for pagina in paginas:
         if (
-            titulo
-            and int(titulo.group(1)) == int(pr)
-            and type(run.get("id")) is int
-            and type(run.get("run_attempt")) is int
+            not isinstance(pagina, dict)
+            or type(pagina.get("total_count")) is not int
+            or pagina["total_count"] < 0
+            or not isinstance(pagina.get("workflow_runs"), list)
         ):
-            corridas.setdefault(int(titulo.group(2)), []).append(run)
+            return RunSearchUnknown("página del worker inválida")
+        if total is None:
+            total = pagina["total_count"]
+        if pagina["total_count"] != total:
+            return RunSearchUnknown("total del worker cambió durante la búsqueda")
+        for run in pagina["workflow_runs"]:
+            if not _run_valido(run) or run["id"] in seen:
+                return RunSearchUnknown("run del worker inválido o duplicado")
+            seen.add(run["id"])
+            if run["event"] != "workflow_dispatch":
+                continue
+            titulo = TITULO_DEL_WORKER.fullmatch(run["display_title"])
+            if titulo is None:
+                return RunSearchUnknown("run del worker sin solicitud atribuible")
+            if int(titulo.group(1)) == int(pr):
+                corridas.setdefault(int(titulo.group(2)), []).append(run)
+    if len(seen) != total:
+        return RunSearchUnknown("historial del worker incompleto")
     for runs in corridas.values():
         runs.sort(key=lambda run: -run["id"])
-    return corridas
+    return RunSearchComplete({rid: tuple(runs) for rid, runs in corridas.items()})
 
 
 def sha_de_confianza(repo, worker_ref, sha_del_run, cache):
@@ -437,16 +484,44 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
     vivas = {r.id: r for r in estado.pending_requests if r.viva}
     if avisado is None and not vivas:
         return [], [], False
-    corridas, rechazo, rid_avisado = corridas_por_solicitud(repo, pr), False, None
+    history = corridas_por_solicitud(repo, pr)
+    if isinstance(history, RunSearchUnknown):
+        print(f"ai-review: {history.reason}; solicitudes pendientes", file=sys.stderr)
+        return [], [], False
+    corridas, rechazo, rid_avisado = history.by_request, False, None
+    callback = None
+    if avisado:
+        try:
+            callback = json.loads(
+                review_github.sh(
+                    "gh", "api", f"repos/{repo}/actions/runs/{avisado[0]}",
+                    timeout=15,
+                ).stdout
+            )
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+            print("ai-review: run avisado no verificable; solicitudes pendientes", file=sys.stderr)
+            return [], [], False
+        if not _run_valido(callback) or callback["id"] != avisado[0]:
+            print("ai-review: run avisado inválido; solicitudes pendientes", file=sys.stderr)
+            return [], [], False
+        title = TITULO_DEL_WORKER.fullmatch(callback["display_title"])
+        if (
+            callback["event"] != "workflow_dispatch"
+            or title is None
+            or int(title.group(1)) != int(pr)
+            or forma_del_run(callback)["name"] != "ai-review-worker"
+        ):
+            print("ai-review: run avisado ajeno al PR o workflow", file=sys.stderr)
+            return [], [], True
     for rid, runs in corridas.items():
         if avisado and any(run["id"] == avisado[0] for run in runs):
             rid_avisado = rid
     if avisado and rid_avisado is None:
         print(
-            f"ai-review: el run avisado {avisado[0]} no es un worker de este PR",
+            "ai-review: run avisado ausente del historial completo; solicitudes pendientes",
             file=sys.stderr,
         )
-        rechazo = True
+        return [], [], False
     elif rid_avisado is not None and rid_avisado not in vivas:
         if not 0 < rid_avisado <= estado.request_count:
             sys.exit(f"ai-review: resultado de solicitud desconocida {rid_avisado!r}")
@@ -464,7 +539,30 @@ def cosechar(estado, repo, pr, worker_ref, work, avisado):
             if not fallida:
                 sin_corrida.append(solicitud)
             continue
-        for run in corridas[solicitud.id]:
+        for listed in corridas[solicitud.id]:
+            try:
+                run = (
+                    callback
+                    if callback is not None and callback["id"] == listed["id"]
+                    else json.loads(
+                        review_github.sh(
+                            "gh", "api", f"repos/{repo}/actions/runs/{listed['id']}",
+                            timeout=15,
+                        ).stdout
+                    )
+                )
+            except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+                print("ai-review: refresh del worker falló; solicitud pendiente", file=sys.stderr)
+                break
+            if (
+                not _run_valido(run)
+                or run["id"] != listed["id"]
+                or run["event"] != "workflow_dispatch"
+                or run["display_title"] != listed["display_title"]
+                or forma_del_run(run)["name"] != "ai-review-worker"
+            ):
+                print("ai-review: refresh del worker inválido; solicitud pendiente", file=sys.stderr)
+                break
             forma = forma_del_run(run)
             meta = {
                 "repository": repo,

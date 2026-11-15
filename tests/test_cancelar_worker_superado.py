@@ -154,9 +154,10 @@ def reconciliar(github, evento, head, artifact=None):
         # El worker 900 avisó con el artifact de la solicitud que nombra.
         rid = (artifact or {}).get("request_id")
         nombre = f"ai-review-result-request-{rid}-run-900-attempt-1"
-        if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+        if "/actions/workflows/ai-review-worker.yml/runs" in ruta or re.search(r"/actions/runs/\d+$", ruta):
             run = {
                 "id": 900,
+                "event": "workflow_dispatch",
                 "display_title": f"PR 12 solicitud {rid}",
                 "path": ".github/workflows/ai-review-worker.yml",
                 "head_branch": "main",
@@ -175,7 +176,10 @@ def reconciliar(github, evento, head, artifact=None):
                 for n, despachada in enumerate(github.despachadas)
             ]
             runs = ([run] if artifact is not None else []) + en_curso
-            return mock.Mock(stdout=json.dumps({"workflow_runs": runs}))
+            if re.search(r"/actions/runs/\d+$", ruta):
+                run_id = int(ruta.rsplit("/", 1)[-1])
+                return mock.Mock(stdout=json.dumps(next(r for r in runs if r["id"] == run_id)))
+            return mock.Mock(stdout=json.dumps([{"total_count": len(runs), "workflow_runs": runs}]))
         if ruta.endswith("/actions/runs/900/artifacts?per_page=100"):
             return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
         if re.search(r"/actions/runs/5\d\d/artifacts", ruta):
@@ -281,8 +285,8 @@ class PushNuevoCancelaAlWorkerAnterior(unittest.TestCase):
         self.assertEqual((github.escrituras, github.sticky()), (escrituras, sticky))
 
     def test_resultado_de_una_solicitud_que_esta_memoria_nunca_emitio_falla_alto(self):
-        # Un artifact de otro PR, uno corrupto o una memoria perdida no son un
-        # worker cancelado: el run del coordinador queda rojo para que se vea.
+        # Un artifact de otro PR o una memoria perdida no son un worker
+        # cancelado. Un título corrupto deja la búsqueda como desconocida.
         github = GitHubFalso()
         reconciliar(github, "pull_request_target", A)
         escrituras, sticky = github.escrituras, github.sticky()
@@ -291,7 +295,10 @@ class PushNuevoCancelaAlWorkerAnterior(unittest.TestCase):
                 codigo, despachos = reconciliar(
                     github, "workflow_dispatch", A, resultado_del_worker(request_id, A)
                 )
-                self.assertNotEqual(codigo, 0)
+                if request_id is None:
+                    self.assertEqual(codigo, 0)
+                else:
+                    self.assertNotEqual(codigo, 0)
                 self.assertEqual(despachos, [])
                 self.assertEqual(
                     (github.escrituras, github.sticky()), (escrituras, sticky)

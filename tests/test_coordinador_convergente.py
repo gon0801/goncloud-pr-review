@@ -213,8 +213,15 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
             return mock.Mock(stdout="")
         ruta = args[2]
         if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
-            corridas = sorted(github.corridas, key=lambda c: -c["id"])
-            return mock.Mock(stdout=json.dumps({"workflow_runs": corridas}))
+            corridas = sorted(
+                ({**run, "event": "workflow_dispatch"} for run in github.corridas),
+                key=lambda c: -c["id"],
+            )
+            return mock.Mock(stdout=json.dumps([{"total_count": len(corridas), "workflow_runs": corridas}]))
+        if re.search(r"/actions/runs/\d+$", ruta):
+            run_id = int(ruta.rsplit("/", 1)[-1])
+            run = next(run for run in github.corridas if run["id"] == run_id)
+            return mock.Mock(stdout=json.dumps({**run, "event": "workflow_dispatch"}))
         if re.search(r"/actions/runs/\d+/artifacts", ruta):
             run_id = int(re.search(r"/actions/runs/(\d+)/", ruta).group(1))
             listado = [
