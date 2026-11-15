@@ -82,6 +82,7 @@ runs:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         EXTRA_EXCLUDES: ${{ inputs.exclude }}
         MAX_DIFF_BYTES: ${{ inputs.max_diff_bytes }}
+        FINDING_IDENTITY: ${{ inputs.finding_identity }}
       run: |
         git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags --quiet origin "$BASE_SHA"
         python3 "$GITHUB_ACTION_PATH/review.py" prepare
@@ -136,4 +137,5 @@ runs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PROVIDER: ${{ inputs.provider }}
         BOT_LOGIN: ${{ inputs.bot_login }}
+        FINDING_IDENTITY: ${{ inputs.finding_identity }}
       run: python3 "$GITHUB_ACTION_PATH/review.py" publish

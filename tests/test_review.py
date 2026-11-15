@@ -8635,6 +8635,45 @@ class CableadoIdentidad(unittest.TestCase):
         self.assertIn("finding_identity:", yml)
         self.assertIn("FINDING_IDENTITY: ${{ inputs.finding_identity }}", yml)
 
+    def test_action_propaga_identidad_y_digest_a_cada_proceso(self):
+        action = (ROOT / "action.yml").read_text()
+        steps = re.split(r"(?m)^    - name: ", action.split("  steps:\n", 1)[1])[1:]
+        defaults = re.search(
+            r"(?m)^  finding_identity:\n(?:    .*\n)*?    default: (\w+)", action
+        )
+        self.assertIsNotNone(defaults)
+        for supplied in (None, "current", "anchors", "bogus"):
+            identity = supplied if supplied is not None else defaults.group(1)
+            policies = {}
+            for operation in ("prepare", "run", "publish"):
+                step = next(
+                    step for step in steps
+                    if f'review.py" {operation}' in step
+                    or f'review.py {operation}' in step
+                )
+                match = re.search(r"(?m)^        FINDING_IDENTITY: (.+)$", step)
+                env = {}
+                if match:
+                    env["FINDING_IDENTITY"] = match.group(1).replace(
+                        "${{ inputs.finding_identity }}", identity
+                    )
+                with mock.patch.dict(os.environ, env, clear=True):
+                    if supplied == "bogus":
+                        with self.assertRaises(SystemExit):
+                            review_config.politica_de_revision()
+                    else:
+                        policy = review_config.politica_de_revision()
+                        policies[operation] = (
+                            policy.finding_identity,
+                            review_context.digest_de_politica(policy),
+                        )
+            if supplied != "bogus":
+                expected = "anchors" if supplied == "anchors" else "titles"
+                self.assertEqual(
+                    policies,
+                    {name: (expected, policies["run"][1]) for name in policies},
+                )
+
     def test_f5_el_diferencial_del_digest_guardado(self):
         # endurecimiento AI F5: el test de r6 afirma el rojo diferencial
         # (sin el digest guardado, un previo con otro título NO matchea).

@@ -10,7 +10,7 @@ La comparación `git diff d1858c0c1dd67b5a726f9ec09318e88a778a6e08..origin/main 
 
 | Unidad | Commit | Comprobación | Resultado |
 | --- | --- | --- | --- |
-| C1 | pendiente | pendiente | pendiente |
+| C1 | `fix(action): mantener identidad entre pasos` | `PYTHONPATH=tests:. python3 -m unittest tests.test_review.CableadoIdentidad tests.test_review.Workflows`; `actionlint -color` | 74 tests y actionlint pasan. La prueba nueva falló antes del cambio porque `prepare` y `publish` elegían `titles` mientras `run` elegía `anchors`. |
 | C2 | pendiente | pendiente | pendiente |
 | C3 | pendiente | pendiente | pendiente |
 | C4 | pendiente | pendiente | pendiente |
