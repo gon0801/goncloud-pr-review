@@ -23,3 +23,26 @@ La comparación `git diff d1858c0c1dd67b5a726f9ec09318e88a778a6e08..origin/main 
 Código comprobado en `9f0b70e4c29a4961f7ac6c0793684b3fbdce94fa`. `bash scripts/check.sh` terminó en `check: OK`: pre-commit pasó gitleaks y conflictos, actionlint validó workflows y templates, la partición cubrió 425 + 425 pruebas sin duplicados y la batería completa pasó 850 pruebas. `ruff check --select F review*.py scripts/*.py` pasó. `python3 scripts/run_test_shard.py --verify-partition 2` confirmó los mismos 850 tests. `PYTHONPATH=tests:. python3 -m unittest tests.test_verify_sticky` pasó 10 tests del parser externo. Las nueve pruebas adicionales respecto de las 841 de base cubren defectos y caracterización; se actualizaron expectativas y fixtures existentes sin borrar tests.
 
 El código no cambió después de la batería. La única modificación posterior es este registro y `tn-fixes-pr.md`; pre-commit pasó de nuevo antes del commit documental. La revisión final de Codex sigue pendiente. No hubo merge, auto-merge, deploy ni cambio de pins.
+
+## Correcciones tras la revisión del PR #173
+
+El informe `docs/reviews/2026-11-15-tn-fixes-final.md` revisó
+`2396be5571d5c0ca2f584478f4f5a5c421ca9f34` y pidió tres correcciones.
+El informe y sus sondas permanecen en el checkout principal; esta sección
+registra las correcciones en la rama del PR.
+
+| Hallazgo | Commits | Comprobación y resultado |
+| --- | --- | --- |
+| R1 / C4 | `ad01778b11782fa635d497f4b8ba13a5b35139bf`, `4c76a82db16bb3a45fa8a13e37cac7b9f91946a6` | La prueba del `cmd_reconcile` real falló antes del cambio con un run histórico de otro PR. Ahora un listado íntegro con runs legacy terminados de otro PR y del PR actual permite recoger el resultado moderno tanto por callback como por recuperación posterior. Un run legacy propio aún activo, un título desconocido y una búsqueda incompleta conservan `RunSearchUnknown`. Los controles existentes mantienen la autenticación de artifact, ref, SHA y attempt, además del orden del run actual. Pasan 71 pruebas de coordinador. |
+| R2 / C6 | `5f154accedfe19bb0163f9b9d730a849eefb196d` | Se retiraron las cinco comprobaciones imposibles tras `_with_notice`. Pasan 69 pruebas de documento y capacidad. La matriz determinista de 48 casos del informe produjo cero diferencias de cuerpo, summary o resultado entre el SHA revisado y `4c76a82db16bb3a45fa8a13e37cac7b9f91946a6`. Los controles de presupuesto de `_render` y `_capacity` siguen intactos. |
+| R3 / C7 | `5e79a75f7ebbdc80824156eb6469f4db1b84dcb3` | `ERROR_KEY` y `PARTIAL` se importan de `review_config` y `review_domain`. El codemod obtiene propietarios de definiciones de primer nivel, no de imports transitivos. Dos pruebas nuevas fallaron antes del cambio y ahora comprueban propietario y segunda ejecución sin cambios. Pasan 62 pruebas de migración, cierre y documento. |
+
+La batería integrada sobre el código `4c76a82db16bb3a45fa8a13e37cac7b9f91946a6`
+terminó en `check: OK`: pre-commit, gitleaks, conflictos, actionlint,
+partición de 427 + 427 sin duplicados y 854 pruebas completas. Las cuatro
+pruebas añadidas respecto de las 850 previas cubren el historial mixto,
+incertidumbre y selección del dueño; no se eliminaron pruebas. Pasaron
+`ruff check --select F review*.py scripts/*.py`,
+`git diff --check d1858c0c1dd67b5a726f9ec09318e88a778a6e08..HEAD`
+y 10 pruebas del parser externo en `tests.test_verify_sticky`.
+El estado de CI para el nuevo SHA se comprueba después de publicar.

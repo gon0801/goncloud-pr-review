@@ -14,6 +14,14 @@ Corregir los siete defectos auditados del revisor de PR sin cambiar el esquema d
 
 Cada unidad tiene un commit separado. La [evidencia de C1–C7](https://github.com/gon0801/goncloud-pr-review/blob/fix/reviewer-tn1-tn7/docs/evidence/reviewer/tn-fixes.md) registra pruebas, decisiones y fallos corregidos.
 
+## Follow-up de la revisión final
+
+- C4 recoge el worker actual con historial legacy mezclado, sin aceptar runs
+  ajenos ni declarar completo un listado parcial.
+- C6 elimina las cinco ramas de capacidad inalcanzables restantes.
+- C7 migra dos consumidores y hace que el codemod elija definiciones propias.
+- La evidencia enlazada registra las pruebas de regresión y los commits nuevos.
+
 ## Scope
 
 Se mantienen schema 3, los lectores v1 y v2, los IDs, los presupuestos y la confirmación de publicación. No se actualizan pins, consumidores externos, permisos ni credenciales.
@@ -24,7 +32,7 @@ Los cambios tocan el action, la publicación directa, la recuperación coordinad
 
 ## Verification
 
-- `bash scripts/check.sh` ejecuta pre-commit, actionlint, partición y batería completa.
+- `bash scripts/check.sh` pasó pre-commit, actionlint, partición y 854 pruebas.
 - Las pruebas de E1 ejecutan el Python del workflow y comprueban IDs, modo y diff.
 - La evidencia enlazada detalla los gates por unidad.
 
