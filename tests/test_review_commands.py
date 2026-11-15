@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
+import review_commands
 import review_github
 import review_render
 import review_sticky
@@ -38,6 +39,8 @@ def comando(
         "login": login,
         "action": action,
         "arg": arg,
+        "ids": frozenset({arg}) if action == "descartar" and arg != "todo" else frozenset(),
+        "todo": action == "descartar" and arg == "todo",
         "creado": creado,
         "editado": editado,
     }
@@ -152,7 +155,9 @@ class CommandAdmission(unittest.TestCase):
             ["F1", "F2"],
             "F99 no existe: nada se descarta",
         )
-        self.assertIn("F99", efectos(snapshot)[5])
+        efecto = f"{domain.RECHAZO_HALLAZGO_INEXISTENTE}: F99"
+        self.assertEqual(efectos(snapshot)[5], efecto)
+        self.assertEqual(rechazos, ((5, efecto),))
 
     def test_editado_antes_de_admision_rechazado(self):
         out = domain.procesar_comandos(
@@ -778,8 +783,8 @@ class CoordinadorComandos(unittest.TestCase):
             "tests/test_tope_del_modelo.py"
         )
         self.assertEqual(
-            review_coordinator.parse_comando_reconcile(comando),
-            {"action": "descartar", "arg": "F1"},
+            review_commands.leer_comando(comando),
+            review_commands.Comando("descartar", frozenset({"F1"})),
         )
         self.assertEqual(review.parse_dismiss_command(comando), ({"F1"}, False))
         cuerpo = self._reconciliar_comentario(comando)
@@ -793,37 +798,35 @@ class CoordinadorComandos(unittest.TestCase):
 
     def test_el_primer_token_decide_el_objetivo_del_descarte(self):
         for texto, esperado in (
-            ("ai-review: descartar F4 — resuelto desde c2b1af7", "F4"),
-            ("ai-review: descartar f4: ya resuelto en abc1f23", "F4"),
-            ("ai-review: descartar todo — resuelto desde c2b1af7", "todo"),
-            ("ai-review: descartar F3 y todo lo demás (ver f12)", "todo"),
+            ("ai-review: descartar F4 — resuelto desde c2b1af7", review_commands.Comando("descartar", frozenset({"F4"}))),
+            ("ai-review: descartar f4: ya resuelto en abc1f23", review_commands.Comando("descartar", frozenset({"F4"}))),
+            ("ai-review: descartar todo — resuelto desde c2b1af7", review_commands.Comando("descartar", todo=True)),
+            ("ai-review: descartar F3 y todo lo demás (ver f12)", review_commands.Comando("descartar", todo=True)),
+            ("ai-review: descartar F1 y F2", review_commands.Comando("descartar", frozenset({"F1", "F2"}))),
         ):
             with self.subTest(texto=texto):
-                self.assertEqual(
-                    review_coordinator.parse_comando_reconcile(texto),
-                    {"action": "descartar", "arg": esperado},
-                )
+                self.assertEqual(review_commands.leer_comando(texto), esperado)
         for texto in (
             "ai-review: descartar el hallazgo F4",
-            "ai-review: descartar F1 y F2",
             "ai-review: descartar todo bien",
             "ai-review: descartar c2b1af7 F4",
         ):
             with self.subTest(texto=texto):
-                self.assertIsNone(review_coordinator.parse_comando_reconcile(texto))
+                self.assertEqual(
+                    review_commands.leer_comando(texto),
+                    review_commands.Comando(domain.ACCION_NO_ENTENDIDA),
+                )
 
-    def test_un_comando_ambiguo_deja_una_linea_visible(self):
+    def test_varios_ids_descartan_todos_sin_aviso_de_comando_no_entendido(self):
         cuerpo = self._reconciliar_comentario("ai-review: descartar F1 y F2")
         carga = domain.read_snapshot(cuerpo)
         self.assertEqual(carga.snapshot.command_cursor, 5, "el cursor avanza una vez")
         self.assertTrue(
-            all(isinstance(f.status, domain.StatusOpen) for f in carga.snapshot.findings),
-            "un comando que no se entiende no descarta nada",
+            all(isinstance(f.status, domain.StatusDismissed) for f in carga.snapshot.findings),
+            "el comando descarta todos los ids nombrados",
         )
         lineas = [l for l in cuerpo.split("\n") if l.startswith("> **Comando no entendido:**")]
-        self.assertEqual(len(lineas), 1)
-        self.assertIn("comentario 5", lineas[0])
-        self.assertIn("ai-review: descartar F3", lineas[0])
+        self.assertEqual(lineas, [])
         self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
 
     def test_el_aviso_de_comando_no_entendido_sobrevive_al_siguiente_re_render(self):
@@ -896,13 +899,19 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
         self.assertIn("comentario 7 ", cuerpo)
 
-    def test_comentarios_que_no_son_del_revisor_no_dejan_aviso(self):
-        for texto in ("descartar F1", "por favor ai-review: descartar F1x", "gracias"):
+    def test_comentarios_sin_ai_review_se_ignoran_y_mencion_es_no_entendida(self):
+        for texto in ("descartar F1", "gracias"):
             with self.subTest(texto=texto):
                 comandos = review_coordinator._comandos_de_comentarios(
                     [{"id": 5, "body": texto, "user": "jefe"}], login="bot", cursor=0
                 )
                 self.assertEqual(comandos, ())
+        comandos = review_coordinator._comandos_de_comentarios(
+            [{"id": 5, "body": "por favor ai-review: descartar F1x", "user": "jefe"}],
+            login="bot",
+            cursor=0,
+        )
+        self.assertEqual(comandos[0]["action"], domain.ACCION_NO_ENTENDIDA)
 
     def test_rerender_sin_cambios_reproduce_el_comentario(self):
         estado = snapshot_base()
@@ -1311,12 +1320,13 @@ class EndurecimientoFrontera(unittest.TestCase):
             permisos_ok,
             TARGET,
         )
-        snapshot, _, _ = out
+        snapshot, _, rechazos = out
         self.assertEqual(
             [f.status.__class__.__name__ for f in snapshot.findings],
             ["StatusDismissed", "StatusOpen"],
             "sólo el comando del humano aplica; el del bot (inyectado en la prosa) no",
         )
+        self.assertEqual(rechazos, ((6, domain.RECHAZO_NO_ENTENDIDO),))
 
     def test_resultado_de_explicacion_no_cambia_hallazgos(self):
         estado = snapshot_base()

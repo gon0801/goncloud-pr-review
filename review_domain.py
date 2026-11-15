@@ -2556,6 +2556,8 @@ def _consumido(current, cid, efecto=None, recibo=True):
 
 ACCION_NO_ENTENDIDA = "no-entendida"
 RECHAZO_NO_ENTENDIDO = "comando no entendido"
+RECHAZO_HALLAZGO_INEXISTENTE = "hallazgo inexistente"
+RECHAZO_COMANDO_EXTRA = "comando extra no aplicado"
 RECHAZO_TODO_TARDIO = (
     "descartar todo anterior a hallazgos nuevos; hay que repetir el comando"
 )
@@ -2605,47 +2607,52 @@ def procesar_comandos(current, comandos, permisos, target):
             rechazos.append((cid, "editado antes de la admisión; comenta de nuevo"))
             snapshot = _consumido(snapshot, cid, rechazos[-1][1])
             continue
+        if comando.get("extra"):
+            rechazos.append((cid, RECHAZO_COMANDO_EXTRA))
         action, arg = comando["action"], comando["arg"]
         if action == ACCION_NO_ENTENDIDA:
             rechazos.append((cid, RECHAZO_NO_ENTENDIDO))
             snapshot = _consumido(snapshot, cid, RECHAZO_NO_ENTENDIDO)
-        elif action == "descartar" and arg == "todo" and (
+        elif action == "descartar" and comando["todo"] and (
             cid <= snapshot.findings_born_after
         ):
             rechazos.append((cid, RECHAZO_TODO_TARDIO))
             snapshot = _consumido(snapshot, cid, RECHAZO_TODO_TARDIO)
         elif action == "descartar":
+            ids, todo = comando["ids"], comando["todo"]
             ids_hallazgos = {f.id for f in snapshot.findings}
-            if arg != "todo" and arg not in ids_hallazgos:
-                rechazos.append((cid, f"el hallazgo {arg} no existe"))
-                snapshot = _consumido(snapshot, cid, rechazos[-1][1])
+            if not todo and not ids <= ids_hallazgos:
+                faltantes = sorted(ids - ids_hallazgos, key=finding_number)
+                efecto = f"{RECHAZO_HALLAZGO_INEXISTENTE}: {', '.join(faltantes)}"
+                rechazos.append((cid, efecto))
+                snapshot = _consumido(snapshot, cid, efecto)
                 continue
             abiertos_antes = {
                 f.id for f in snapshot.findings if isinstance(f.status, StatusOpen)
             }
             snapshot = aplicar_descartes(
                 snapshot,
-                set() if arg == "todo" else {arg},
-                arg == "todo",
+                set() if todo else set(ids),
+                todo,
                 comment_id=cid,
             )
-            con_efecto = (
-                arg in abiertos_antes if arg != "todo" else bool(abiertos_antes)
-            )
+            con_efecto = bool(abiertos_antes if todo else ids & abiertos_antes)
             if con_efecto:
                 snapshot = _consumido(snapshot, cid)
             else:
                 sin_efecto = (
                     "descartar todo: sin hallazgos abiertos"
-                    if arg == "todo"
-                    else f"descartar {arg}: sin efecto (no estaba abierto)"
+                    if todo
+                    else f"descartar {', '.join(sorted(ids, key=finding_number))}: "
+                    "sin efecto (ninguno estaba abierto)"
                 )
                 snapshot = _consumido(snapshot, cid, sin_efecto)
         elif action == "explicar":
             hallazgo = next((f for f in snapshot.findings if f.id == arg), None)
             if hallazgo is None:
-                rechazos.append((cid, f"el hallazgo {arg} no existe"))
-                snapshot = _consumido(snapshot, cid, rechazos[-1][1])
+                efecto = f"{RECHAZO_HALLAZGO_INEXISTENTE}: {arg}"
+                rechazos.append((cid, efecto))
+                snapshot = _consumido(snapshot, cid, efecto)
                 continue
             nueva = WorkRequest(
                 id=snapshot.request_count + 1,

@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from review_commands import dismiss_targets
+from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
     IDENTIDADES,
@@ -53,33 +53,12 @@ from review_sticky import (
     sticky_from_comments,
 )
 from review_domain import (
-    FINDING_ID_DIGITS,
     leer_cierre,
     parse_model_findings,
     strip_findings_block,
     strip_model_findings_block,
 )
 from review_context import GitRepository, digest_de_politica
-
-
-def parse_comando_reconcile(body):
-    """Dict con acción y argumento del comentario-comando ai-review:, o None."""
-    texto = (body or "").strip()
-    m = re.match(
-        rf"ai-review:\s*explicar\s+(F{FINDING_ID_DIGITS})\b", texto, re.IGNORECASE
-    )
-    if m:
-        return {"action": "explicar", "arg": f"F{int(m.group(1)[1:])}"}
-    if re.fullmatch(r"ai-review:\s*revisar\s*", texto, re.IGNORECASE):
-        return {"action": "revisar", "arg": ""}
-    m = re.match(r"ai-review:\s*descartar\s+(.+)", texto, re.IGNORECASE)
-    if m:
-        ids, todo = dismiss_targets(m.group(1))
-        if todo:
-            return {"action": "descartar", "arg": "todo"}
-        if len(ids) == 1:
-            return {"action": "descartar", "arg": next(iter(ids))}
-    return None
 
 
 @dataclass
@@ -524,7 +503,7 @@ def _estado_actual(sticky):
 
 def _comandos_de_comentarios(comentarios, login, cursor):
     """El checkpoint es datos, nunca comandos: fuera los comentarios del
-    propio bot y el texto que no arranca con el comando."""
+    propio bot y el texto que no contiene un comando."""
 
     comandos = []
     for c in comentarios or []:
@@ -532,21 +511,26 @@ def _comandos_de_comentarios(comentarios, login, cursor):
         if not isinstance(cid, int) or cid <= cursor:
             continue
         autor = _login_de(c)
-        if login and autor == login:
+        if autor is None or (login and autor == login):
             continue
         cuerpo = c.get("body") or ""
-        parsed = parse_comando_reconcile(cuerpo)
+        parsed = leer_comando(cuerpo)
         if parsed is None:
-            if not re.match(r"\s*ai-review:", cuerpo, re.IGNORECASE):
-                continue
-            parsed = {"action": review_domain.ACCION_NO_ENTENDIDA, "arg": ""}
+            continue
+        comando = {
+            "action": parsed.accion,
+            "arg": next(iter(parsed.ids)) if parsed.accion == "explicar" else "",
+            "extra": parsed.extra,
+        }
+        if parsed.accion == "descartar":
+            comando.update(ids=parsed.ids, todo=parsed.todo)
         comandos.append(
             {
                 "cid": cid,
                 "login": autor,
                 "creado": c.get("created_at") or "",
                 "editado": c.get("updated_at") or "",
-                **parsed,
+                **comando,
             }
         )
     return tuple(comandos)
@@ -961,9 +945,9 @@ def cmd_reconcile(args):
     for cid, effect in rechazos:
         print(f"ai-review: comando {cid} rechazado ({effect})")
     avisos = tuple(
-        AVISOS_DE_RECHAZO[effect](cid)
+        aviso
         for cid, effect in rechazos
-        if effect in AVISOS_DE_RECHAZO
+        if (aviso := aviso_de_rechazo(cid, effect)) is not None
     )
 
     if event_name not in (
@@ -1035,6 +1019,9 @@ def cmd_reconcile(args):
         estado, trabajo = snapshot_ra or estado, tuple(despachables)
         for terminada in terminadas:
             print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
+
+    if sticky is None and admision is None:
+        avisos = ()
 
     if estado == current and not trabajo:
         print("ai-review: nada cambió; el sticky queda como está")
@@ -1310,16 +1297,41 @@ def es_aviso_de_comando(linea):
     """Solo la línea exacta que escribe el programa para un comentario real se
     conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
     m = re.search(r"el comentario (\d{1,19}) ", linea)
-    return bool(m) and any(
-        linea == aviso(int(m.group(1))) for aviso in AVISOS_DE_RECHAZO.values()
-    )
+    if not m:
+        return False
+    cid = int(m.group(1))
+    if any(linea == aviso(cid) for aviso in AVISOS_DE_RECHAZO.values()):
+        return True
+    ids = re.findall(r"\bF\d{1,9}\b", linea)
+    return bool(ids) and linea == aviso_de_hallazgo_inexistente(cid, ids)
 
 
 def aviso_de_comando_no_entendido(cid):
     return (
-        f"{AVISO_COMANDO_PREFIX}el comentario {cid} empieza con `ai-review:` pero no "
-        "es un comando que entienda; usa `ai-review: descartar F3`, "
+        f"{AVISO_COMANDO_PREFIX}el comentario {cid} menciona `ai-review:` pero no es un "
+        "comando que entienda; cada comando va al inicio de una línea: "
+        "`ai-review: descartar F3`, `ai-review: descartar F1, F2`, "
         "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
+    )
+
+
+def aviso_de_hallazgo_inexistente(cid, ids):
+    nombrados = (
+        f"el hallazgo {ids[0]}, que no existe"
+        if len(ids) == 1
+        else f"los hallazgos {', '.join(ids)}, que no existen"
+    )
+    return (
+        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra "
+        f"{nombrados}; no se aplicó nada."
+    )
+
+
+def aviso_de_comando_extra(cid):
+    return (
+        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} trae más de un "
+        "comando; solo se lee el primero. Escribe cada comando en su propio "
+        "comentario."
     )
 
 
@@ -1334,8 +1346,18 @@ def aviso_de_todo_tardio(cid):
 
 AVISOS_DE_RECHAZO = {
     review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
+    review_domain.RECHAZO_COMANDO_EXTRA: aviso_de_comando_extra,
     review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
 }
+
+
+def aviso_de_rechazo(cid, efecto):
+    if efecto in AVISOS_DE_RECHAZO:
+        return AVISOS_DE_RECHAZO[efecto](cid)
+    prefijo = f"{review_domain.RECHAZO_HALLAZGO_INEXISTENTE}: "
+    if efecto.startswith(prefijo):
+        return aviso_de_hallazgo_inexistente(cid, efecto[len(prefijo) :].split(", "))
+    return None
 
 
 def texto_de_explicacion(artifact):

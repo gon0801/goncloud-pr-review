@@ -4881,7 +4881,7 @@ class DismissCommands(unittest.TestCase):
         )
         self.assertEqual(
             review.parse_dismiss_command("ai-review: descartar F3 y todo lo demás"),
-            ({"F3"}, True),
+            (set(), True),
         )
 
     def test_todo_inside_prose_never_discards_everything(self):
@@ -4893,7 +4893,7 @@ class DismissCommands(unittest.TestCase):
             ("ai-review: descartar todo.", (set(), True)),
             ("ai-review: descartar todo lo demás", (set(), True)),
             ("ai-review: descartar TODO LO DEMAS", (set(), True)),
-            ("ai-review: descartar F1, F2 y todo", ({"F1", "F2"}, True)),
+            ("ai-review: descartar F1, F2 y todo", (set(), True)),
         ):
             with self.subTest(body=body):
                 self.assertEqual(review.parse_dismiss_command(body), expected)
