@@ -7,7 +7,7 @@ atómico; este documento fija el orden operativo. Instalar en repositorios
 reales pertenece a T16; aquí se ensaya primero con revisiones fijas en el
 repo central.
 
-> **Estado del modo coordinado (2026-10-10).** El piloto T16 pasó: rondas 2, 3
+> **Registro histórico del piloto (2026-10-10; pins ya sustituidos).** El piloto T16 pasó: rondas 2, 3
 > y 3b en `docs/evidence/reviewer/T16-piloto-2.md` (descarte concurrente,
 > explicación, re-revisión del mismo SHA, resolución vista en el central y
 > worker sin tronar con base desfasada). Los cuatro repos corren el modo
@@ -87,9 +87,38 @@ sin publicar. Consumidores sin configuración nueva se comportan igual que antes
    solo con la activación aprobada por el operador y con un SHA que ya corre
    en el repo central.
 
-## Retorno: del coordinador al escritor compatible
+## Retorno después de publicar el documento tipado
 
-El rollback operativo **no** es volver al binario `179e6a3`: ese escritor
+Desde `82b224c8f37b0b34bd712ab2635764a287a1bdc8`, el comentario contiene
+`ai-review:view` y slots con hashes además de la memoria schema 3. Publicador
+y worker deben fijar el mismo SHA; el worker exporta solo `result.json` cerrado.
+
+Después de publicar esa vista, no se debe restaurar `6eec25d` ni otro escritor
+anterior al puente. El retorno conservador es
+`4db77cc5ff984d54d7e0ed450456837204ed72af` (D3): reconoce el documento nuevo,
+conserva íntegro el comentario y rechaza modificarlo. Detiene escrituras y
+no promete continuar revisando. Para reanudar, se instala una versión que
+entienda la vista publicada; no se eliminan los marcadores ni se convierten
+comentarios a mano.
+
+Antes de activar o retornar, se detiene la admisión de nuevos eventos. Se pausa
+el workflow publicador durante el corte y se drenan workers y publicadores;
+si quedan resultados por recoger, se reconcilian explícitamente al reactivar.
+Se comprueba de nuevo que no queden ejecuciones activas antes de cambiar el pin.
+El central se comprueba primero: el comentario releído debe contener
+`<!-- ai-review:view=` y pasar `verify_sticky.py` con el SHA esperado, memoria
+válida y artifact que contenga exclusivamente `result.json`. Después
+se actualiza cada consumidor en un único commit para sus dos workflows,
+conservando sus ajustes. El procedimiento histórico de retorno que sigue no
+autoriza usar un escritor que desconozca `ai-review:view`.
+
+## Retorno histórico anterior a la vista tipada
+
+Los pasos siguientes documentan el retorno anterior a `ai-review:view`.
+No se ejecutan sobre comentarios tipados: para ellos rige exclusivamente el
+retorno conservador D3 de la sección anterior, sin actualizar ni avanzar la
+memoria. En este procedimiento histórico, el rollback **no** era volver al
+binario `179e6a3`: ese escritor
 congela v2 y no actualiza estados ampliados. El retorno habilita el escritor
 compatible probado (modo actual, `ai-review.yml` con `ACTION_SHA` fijado).
 
