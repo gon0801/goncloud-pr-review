@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
 import review_document
+import review_render
 import review_config
 import review_github
 import review_sticky
@@ -358,7 +359,7 @@ class ComandosEnCualquierEvento(unittest.TestCase):
             estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
         )
         self.assertEqual(github.estado().command_cursor, 30)
-        aviso = review_document._notice_text(
+        aviso = review_render.notice_text(
             review_document.Notice("todo-tardio", comment_id=20)
         )
         self.assertIn(aviso, github.sticky())

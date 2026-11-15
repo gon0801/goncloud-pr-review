@@ -24,12 +24,12 @@ from review_config import (
     secretos_del_entorno,
 )
 from review_context import GitRepository, digest_de_politica
-from review_document import PublishReceipt, Unconfirmed
 from review_domain import (
     leer_cierre,
     parse_model_findings,
     strip_model_findings_block,
 )
+from review_github import PublishReceipt, Unconfirmed
 from review_render import (
     caution_banner,
     neutralizar_marcadores,
@@ -875,7 +875,7 @@ def cmd_reconcile(args):
         plan.document, review_domain.StorageBudget(), secretos_del_entorno(),
     )
     if isinstance(prepared, review_domain.CapacityExceeded):
-        status = review_document.publish_capacity_notice(
+        status = review_github.publish_capacity_notice(
             sticky, adaptador, login=login, secrets=secretos_del_entorno(),
         )
         print(f"ai-review: {status.motivo}", file=sys.stderr)
@@ -883,7 +883,7 @@ def cmd_reconcile(args):
     if isinstance(prepared, review_document.DocumentBlocked):
         print("ai-review: documento inválido; se conserva sin tocar", file=sys.stderr)
         sys.exit(1)
-    resultado = review_document.publish_checkpoint(
+    resultado = review_github.publish_checkpoint(
         prepared, sticky or None, adaptador, login=login,
         work_after_commit=plan.trabajo,
     )

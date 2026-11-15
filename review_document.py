@@ -1,25 +1,20 @@
 """Codec del documento publicado; el estado y la vista se validan juntos."""
 
 import hashlib
-import html
 import json
 import math
 import re
-import subprocess
 from dataclasses import dataclass, replace
 
 import review_domain as domain
 from review_config import PROVIDERS
 from review_render import (
-    ALCANCE_INICIO,
-    aviso_md,
     estimate_cost,
     neutralizar_marcadores,
     prosa_del_modelo,
     redact,
-    sections_for,
+    render_document,
     strip_model_verdict,
-    verdict_for,
 )
 from review_sticky import (
     COMPLETION_PREFIX,
@@ -38,22 +33,6 @@ END_SLOT_PREFIX = "<!-- ai-review:end-slot="
 SUFFIX = " -->"
 RESERVED = re.compile(r"<!--\s*ai-review:(?:view|slot|end-slot)\b")
 SLOT_MARKER = re.compile(r"(?m)^<!-- ai-review:(slot|end-slot)=([a-zA-Z0-9-]+) -->$")
-NOTICE_TEXT = {
-    "incomplete": "El revisor no alcanzó a revisar todo.",
-    "capacity-exceeded": "desborde de memoria: se conserva el checkpoint previo.",
-    "max-turns": "el revisor se quedó sin turnos antes de terminar",
-    "missing-coverage": "el revisor no declaró su cobertura",
-    "partial-coverage": "el revisor no alcanzó a revisar todo",
-    "invalid-findings": (
-        "el revisor no entregó su bloque de hallazgos utilizable; "
-        "esta pasada no acredita cobertura y conserva los hallazgos anteriores"
-    ),
-    "prose-truncated": "El detalle se recortó para conservar el estado de la revisión.",
-    "history-truncated": "La revisión anterior se recortó para conservar el estado.",
-    "book-omitted": "El libro de cobertura no cupo en el comentario.",
-    "explanation-truncated": "Una explicación se recortó para conservar el estado.",
-    "failure-truncated": "El detalle del fallo se recortó para conservar el estado.",
-}
 
 
 def _valid_sha(value):
@@ -66,54 +45,6 @@ def _valid_id(value):
 
 def _valid_code(value):
     return isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", value) is not None
-
-
-def _warning_text(warning):
-    if warning.code == "budget-exclusions":
-        return f"{warning.count} archivo(s) quedaron fuera por tamaño del diff"
-    if warning.code == "encoding-exclusions":
-        return f"{warning.count} archivo(s) no se pudieron leer como UTF-8"
-    return NOTICE_TEXT.get(warning.code, warning.code)
-
-
-def _notice_text(notice):
-    cid = notice.comment_id
-    if cid is None:
-        if notice.kind == "capacity-exceeded":
-            return f"> [!CAUTION]\n> {NOTICE_TEXT[notice.kind]}"
-        return f"> [!NOTE]\n> {NOTICE_TEXT.get(notice.kind, notice.kind)}"
-    if notice.kind == "no-entendido":
-        return (
-            f"{aviso_md('Comando no entendido', '')}el comentario {cid} menciona `ai-review:` pero no es un "
-            "comando que entienda; cada comando va al inicio de una línea: "
-            "`ai-review: descartar F3`, `ai-review: descartar F1, F2`, "
-            "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
-        )
-    if notice.kind == "extra":
-        return (
-            f"{aviso_md('Comando no aplicado', '')}el comentario {cid} trae más de un "
-            "comando; solo se lee el primero. Escribe cada comando en su propio "
-            "comentario."
-        )
-    if notice.kind == "todo-tardio":
-        return (
-            f"{aviso_md('Comando no aplicado', '')}`ai-review: descartar todo` del "
-            f"comentario {cid} es de antes de la última revisión con hallazgos nuevos y "
-            "no se aplicó; si también quieres descartarlos, comenta de nuevo "
-            "`ai-review: descartar todo`."
-        )
-    if notice.kind == "inexistente" and notice.finding_ids:
-        ids = notice.finding_ids
-        nombrados = (
-            f"el hallazgo {ids[0]}, que no existe"
-            if len(ids) == 1
-            else f"los hallazgos {', '.join(ids)}, que no existen"
-        )
-        return (
-            f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra "
-            f"{nombrados}; no se aplicó nada."
-        )
-    return f"> [!NOTE]\n> {notice.kind}"
 
 
 @dataclass(frozen=True)
@@ -476,105 +407,12 @@ def _render(document, block, *, visible_only=False):
     }
     if not visible_only:
         lines.append(f"{VIEW_PREFIX}{_json(header)}{SUFFIX}")
-    if review:
-        merged = domain.hallazgos_legacy(memory)
-        title = f"### Revisión automática · {PROVIDERS.get(review.provider, {'label': review.provider})['label']} · {review.head_sha[:7]}"
-        if review.scope.mode == "incremental" and review.scope.prev_sha:
-            title += f" · incremental desde {review.scope.prev_sha[:7]}"
-        lines.extend([
-            title,
-            "",
-        ])
-        if review.warnings:
-            lines.extend(
-                aviso_md(
-                    "Revisión incompleta",
-                    "; ".join(_warning_text(warning) for warning in review.warnings) + ".",
-                    "WARNING",
-                ).split("\n")
-            )
-            lines.append("")
-        lines.extend([
-            verdict_for(merged),
-            "",
-            *sections_for(merged, review.new_ids, domain.resoluciones_sin_acreditar(memory)),
-            "",
-            "## Detalle del revisor",
-            "",
-        ])
-    elif document.historical and memory.findings:
-        merged = domain.hallazgos_legacy(memory)
-        lines.extend([
-            verdict_for(merged),
-            "",
-            *sections_for(merged, (), domain.resoluciones_sin_acreditar(memory)),
-            "",
-        ])
-    for name, text in slots:
-        if name == "history":
-            lines.append("#### Revisión anterior importada")
-        elif name.startswith("explanation-"):
-            fid = name.removeprefix("explanation-")
-            title = next((f.title for f in memory.findings if f.id == fid), "")
-            label = f"## Explicación de {fid}"
-            lines.extend(["", label + (f" · {html.escape(title, quote=False)}" if title else ""), ""])
-        elif name == "failure":
-            lines.extend([
-                "> [!CAUTION]",
-                f"#### No se pudo revisar el commit {document.failure.head_sha[:7]} · Revisión sin terminar",
-            ])
-        if visible_only:
-            lines.append(text)
-        else:
-            lines.extend([f"{SLOT_PREFIX}{name}{SUFFIX}", text, f"{END_SLOT_PREFIX}{name}{SUFFIX}"])
-    if review:
-        scope = review.scope
-        lines.extend([ALCANCE_INICIO, ""])
-        if scope.mode == "incremental" and scope.prev_sha:
-            delta = (
-                "delta no verificable" if scope.changed_count is None
-                else f"{scope.changed_count} archivo(s) cambiaron"
-            )
-            lines.append(f"- Modo: incremental desde {scope.prev_sha[:7]} ({delta})")
-        lines.append(f"- Revisados: {scope.reviewed_count} archivo(s)")
-        if scope.excluded_count:
-            lines.append(f"- Excluidos: {scope.excluded_count}")
-            lines.extend(f"  - {entry}" for entry in scope.exclusions)
-            if scope.excluded_count > len(scope.exclusions):
-                lines.append(f"  - … y {scope.excluded_count - len(scope.exclusions)} más")
-        if scope.usage:
-            usage = scope.usage
-            turns = str(usage.turns) if usage.turns is not None else "?"
-            if usage.max_turns:
-                turns += f"/{usage.max_turns}"
-            lines.append(
-                f"- Turnos: {turns} · tokens entrada {usage.input_tokens:,} "
-                f"(+{usage.cache_tokens:,} en caché) · salida {usage.output_tokens:,}"
-                + (f" · costo aprox ${usage.cost_usd:.3f}" if usage.cost_usd is not None else "")
-            )
-        lines.extend(["", "</details>"])
-    pending = next(
-        (
-            request for request in reversed(memory.pending_requests)
-            if request.kind == "review" and request.state == domain.PENDIENTE
-        ),
-        None,
-    )
-    if pending is not None:
-        head = pending.target.get("head_sha") or ""
-        target = f"el commit `{head[:7]}`" if _valid_sha(head) else "el PR"
-        lines.append(
-            f"{aviso_md('Revisión en curso', '')}el revisor está revisando {target}; "
-            "este comentario se actualiza cuando termine."
-        )
-    elif not (review or document.historical or document.failure):
-        lines.append(
-            f"{aviso_md('Sin revisión publicada', '')}este PR no tiene una revisión pendiente ni "
-            "publicada; la pide `ai-review: revisar`, o un push cuando el PR está "
-            "abierto y listo para revisión."
-        )
-    for entry in document.notices:
-        lines.append(_notice_text(entry))
+    contents = [
+        (name, text if visible_only else
+         f"{SLOT_PREFIX}{name}{SUFFIX}\n{text}\n{END_SLOT_PREFIX}{name}{SUFFIX}")
+        for name, text in slots
+    ]
+    lines.extend(render_document(document, memory, contents))
     return "\n".join(lines)
 
 
@@ -1094,98 +932,3 @@ def read_document(body):
     except (ValueError, TypeError, KeyError, IndexError) as exc:
         return DocumentBlocked(str(exc), body)
     return ReviewDocument(load.snapshot, reviewed, covered, review, explanations, notices, failure, historical)
-
-
-@dataclass(frozen=True)
-class PublishReceipt:
-    generacion: int
-    recibo: dict
-    trabajo: tuple
-
-
-@dataclass(frozen=True)
-class Unconfirmed:
-    motivo: str
-
-
-def _bot_comments(adapter, login):
-    comments = []
-    for comment in adapter.leer():
-        actor = comment.get("user")
-        if isinstance(actor, dict):
-            actor = actor.get("login")
-        if MARKER in (comment.get("body") or "") and (login is None or actor == login):
-            comments.append(comment)
-    return comments
-
-
-def publish_checkpoint(prepared, observed, adapter, login=None, work_after_commit=()):
-    document = read_document(prepared.body)
-    if (
-        not isinstance(document, ReviewDocument)
-        or _digest(prepared.body) != prepared.body_digest
-        or domain.read_snapshot(prepared.body).block != prepared.state_block
-    ):
-        return Unconfirmed("publicación inválida")
-    work = tuple(work_after_commit)
-    live = {request.id: request for request in document.memory.pending_requests if request.viva}
-    if any(live.get(request.id) != request for request in work):
-        return Unconfirmed("la publicación no contiene el trabajo solicitado")
-    found = _bot_comments(adapter, login)
-    if len(found) > 1:
-        return Unconfirmed("múltiples comentarios del bot")
-    current = found[0] if found else None
-    if (observed is None) != (current is None) or (
-        observed and (
-            observed.get("id"), observed.get("body")
-        ) != (current.get("id"), current.get("body"))
-    ):
-        return Unconfirmed("el comentario cambió desde la lectura")
-    if current and isinstance(read_document(current.get("body") or ""), DocumentBlocked):
-        return Unconfirmed("documento actual inválido o futuro")
-    if current and current.get("body") == prepared.body:
-        return PublishReceipt(
-            prepared.generation,
-            {"comentario_id": current["id"], "ya_aplicado": True},
-            work,
-        )
-    if current is None and not (
-        document.review or document.historical or document.explanations
-        or document.notices or document.failure or
-        any(
-            request.kind == "review" and request.state == domain.PENDIENTE
-            for request in document.memory.pending_requests
-        )
-    ):
-        return PublishReceipt(0, {"sin_texto_visible": True}, ())
-    try:
-        if current:
-            adapter.parchar(current["id"], prepared.body)
-        else:
-            adapter.crear(prepared.body)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return Unconfirmed(f"respuesta de escritura incierta: {exc}")
-    fresh = _bot_comments(adapter, login)
-    if len(fresh) != 1 or fresh[0].get("body") != prepared.body:
-        return Unconfirmed("la publicación no se confirmó por relectura")
-    return PublishReceipt(
-        prepared.generation, {"comentario_id": fresh[0]["id"]}, work,
-    )
-
-
-def publish_capacity_notice(observed, adapter, login=None, secrets=()):
-    reason = "desborde de memoria: se conserva el checkpoint previo"
-    if observed is None:
-        return Unconfirmed(reason)
-    document = read_document(observed.get("body") or "")
-    if isinstance(document, DocumentBlocked):
-        return Unconfirmed(f"{reason}; comentario previo inválido")
-    updated = update_presentation(
-        document, document.memory, notices=(Notice("capacity-exceeded"),),
-    )
-    prepared = prepare_publication(updated, domain.StorageBudget(), secrets)
-    if not isinstance(prepared, PreparedPublication):
-        return Unconfirmed(f"{reason}; el aviso no cabe")
-    receipt = publish_checkpoint(prepared, observed, adapter, login=login)
-    suffix = "aviso publicado" if isinstance(receipt, PublishReceipt) else "aviso no confirmado"
-    return Unconfirmed(f"{reason}; {suffix}")

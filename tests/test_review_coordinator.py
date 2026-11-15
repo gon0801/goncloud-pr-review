@@ -604,10 +604,10 @@ class CheckpointConservaLaCabecera(unittest.TestCase):
             review_document.update_presentation(document, decision.snapshot),
             domain.StorageBudget(), (),
         )
-        recibo = review_document.publish_checkpoint(
+        recibo = review_github.publish_checkpoint(
             prepared, falso.leer()[0], falso, work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(recibo, review_document.PublishReceipt)
+        self.assertIsInstance(recibo, review_github.PublishReceipt)
         cuerpo = falso.patches[-1][1]
         self.assertEqual(
             cuerpo.split("\n")[:3],
@@ -663,18 +663,18 @@ class CheckpointRecovery(unittest.TestCase):
         decision = decision_con_trabajo(estado)
         falso.perder_patch = True
         preparado = preparar_decision(decision, falso.leer()[0])
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             preparado, falso.leer()[0], falso,
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(resultado, review_document.Unconfirmed)
+        self.assertIsInstance(resultado, review_github.Unconfirmed)
 
         observado = falso.leer()[0]
-        confirmado = review_document.publish_checkpoint(
+        confirmado = review_github.publish_checkpoint(
             preparado, observado, falso,
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(confirmado, review_document.PublishReceipt)
+        self.assertIsInstance(confirmado, review_github.PublishReceipt)
         self.assertEqual(len(falso.patches), 1, "no reaplica el PATCH ya aplicado")
         self.assertEqual(confirmado.generacion, decision.snapshot.generation)
         self.assertEqual(len(confirmado.trabajo), 1)
@@ -683,11 +683,11 @@ class CheckpointRecovery(unittest.TestCase):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
         decision = decision_con_trabajo(estado)
-        recibo = review_document.publish_checkpoint(
+        recibo = review_github.publish_checkpoint(
             preparar_decision(decision, falso.leer()[0]), falso.leer()[0], falso,
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(recibo, review_document.PublishReceipt)
+        self.assertIsInstance(recibo, review_github.PublishReceipt)
 
         # caída antes de despachar: el próximo evento relee y recupera el trabajo
         despachados = []
@@ -698,7 +698,7 @@ class CheckpointRecovery(unittest.TestCase):
         estado = snapshot_base(generation=1)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado)}])
         decision = decision_con_trabajo(estado)
-        recibo = review_document.publish_checkpoint(
+        recibo = review_github.publish_checkpoint(
             preparar_decision(decision, falso.leer()[0]), falso.leer()[0], falso,
             work_after_commit=decision.work_after_commit,
         )
@@ -747,16 +747,16 @@ class CheckpointRecovery(unittest.TestCase):
         decision = decision_con_trabajo(estado)
         falso.perder_creacion = True
         preparado = preparar_decision(decision)
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             preparado, None, falso, login="bot",
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(resultado, review_document.Unconfirmed)
-        confirmado = review_document.publish_checkpoint(
+        self.assertIsInstance(resultado, review_github.Unconfirmed)
+        confirmado = review_github.publish_checkpoint(
             preparado, falso.leer()[0], falso, login="bot",
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(confirmado, review_document.PublishReceipt)
+        self.assertIsInstance(confirmado, review_github.PublishReceipt)
         self.assertEqual(len(falso.creaciones), 1, "no crea otro comentario")
 
         duplicados = _ComentarioFalso(
@@ -765,12 +765,12 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado)},
             ]
         )
-        detenido = review_document.publish_checkpoint(
+        detenido = review_github.publish_checkpoint(
             preparar_decision(decision, duplicados.leer()[0]),
             duplicados.leer()[0], duplicados,
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(detenido, review_document.Unconfirmed)
+        self.assertIsInstance(detenido, review_github.Unconfirmed)
         self.assertEqual(duplicados.patches, [])
         self.assertEqual(duplicados.creaciones, [])
 
@@ -780,12 +780,12 @@ class CheckpointRecovery(unittest.TestCase):
         citado = cuerpo_v3(snapshot_base(generation=9))
         cuerpo = f"{cuerpo_v3(estado)}\n\nLa prosa cita un bloque del PR:\n{citado}\n"
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo}])
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             preparar_decision(decision, falso.leer()[0]),
             falso.leer()[0], falso,
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(resultado, review_document.PublishReceipt)
+        self.assertIsInstance(resultado, review_github.PublishReceipt)
         self.assertEqual(len(falso.patches), 1)
         cuerpo_nuevo = falso.leer()[0]["body"]
         carga = review_document.read_document(cuerpo_nuevo)
@@ -802,12 +802,12 @@ class CheckpointRecovery(unittest.TestCase):
         estado = snapshot_base(generation=1)
         decision = decision_con_trabajo(estado)
         falso = _ComentarioFalso([{"id": 7, "body": cuerpo_v3(estado), "user": "bot"}])
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             preparar_decision(decision, falso.leer()[0]),
             falso.leer()[0], falso, login="bot",
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(resultado, review_document.PublishReceipt)
+        self.assertIsInstance(resultado, review_github.PublishReceipt)
 
     def test_otros_logins_no_cuentan_como_duplicados(self):
         estado = snapshot_base(generation=1)
@@ -818,12 +818,12 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado), "login": "intruso"},
             ]
         )
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             preparar_decision(decision, falso.leer()[0]),
             falso.leer()[0], falso, login="bot",
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(resultado, review_document.PublishReceipt)
+        self.assertIsInstance(resultado, review_github.PublishReceipt)
 
         dos_del_bot = _ComentarioFalso(
             [
@@ -831,12 +831,12 @@ class CheckpointRecovery(unittest.TestCase):
                 {"id": 2, "body": cuerpo_v3(estado), "login": "bot"},
             ]
         )
-        detenido = review_document.publish_checkpoint(
+        detenido = review_github.publish_checkpoint(
             preparar_decision(decision, dos_del_bot.leer()[0]),
             dos_del_bot.leer()[0], dos_del_bot, login="bot",
             work_after_commit=decision.work_after_commit,
         )
-        self.assertIsInstance(detenido, review_document.Unconfirmed)
+        self.assertIsInstance(detenido, review_github.Unconfirmed)
         self.assertEqual(dos_del_bot.patches, [])
 
     def test_request_de_la_solicitud_persistida_no_del_artifact(self):

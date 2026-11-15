@@ -23,7 +23,6 @@ from review_document import (
     FailureView,
     Notice,
     PreparedPublication,
-    PublishReceipt,
     ReviewDocument,
     ReviewedHeader,
     ReviewView,
@@ -31,15 +30,18 @@ from review_document import (
     SafeProse,
     ScopeUsage,
     ScopeView,
-    Unconfirmed,
     document_from_result,
     has_document_marker,
     prepare_publication,
-    publish_capacity_notice,
-    publish_checkpoint,
     read_document,
     safe_prose,
     update_presentation,
+)
+from review_github import (
+    PublishReceipt,
+    Unconfirmed,
+    publish_capacity_notice,
+    publish_checkpoint,
 )
 
 

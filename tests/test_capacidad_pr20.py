@@ -205,10 +205,10 @@ class ElCasoDelPr20Publica(unittest.TestCase):
             document, domain.StorageBudget(), (),
         )
         self.assertIsInstance(prepared, review_document.PreparedPublication)
-        recibo = review_document.publish_checkpoint(
+        recibo = review_github.publish_checkpoint(
             prepared, sticky, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(recibo, review_document.PublishReceipt)
+        self.assertIsInstance(recibo, review_github.PublishReceipt)
         self.assertEqual(falso.creaciones, [])
         cuerpo = falso.leer()[0]["body"]
         carga = domain.read_snapshot(cuerpo)
@@ -286,10 +286,10 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
             domain.StorageBudget(), (),
         )
         self.assertIsInstance(prepared, domain.CapacityExceeded)
-        resultado = review_document.publish_capacity_notice(
+        resultado = review_github.publish_capacity_notice(
             sticky, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(resultado, review_document.Unconfirmed)
+        self.assertIsInstance(resultado, review_github.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás crea un sticky sin bloque")
         self.assertEqual(len(falso.patches), 1, "el aviso va al sticky existente")
         cuerpo = falso.leer()[0]["body"]
@@ -311,10 +311,10 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
             domain.StorageBudget(), (),
         )
         self.assertIsInstance(prepared, review_document.PreparedPublication)
-        recibo = review_document.publish_checkpoint(
+        recibo = review_github.publish_checkpoint(
             prepared, sticky, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(recibo, review_document.PublishReceipt)
+        self.assertIsInstance(recibo, review_github.PublishReceipt)
 
 
 class RoundtripDelEstadoCompacto(unittest.TestCase):
@@ -967,10 +967,10 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
             self._documento(snapshot, sticky), limit, (),
         )
         self.assertIsInstance(prepared, domain.CapacityExceeded)
-        resultado = review_document.publish_capacity_notice(
+        resultado = review_github.publish_capacity_notice(
             sticky, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(resultado, review_document.Unconfirmed)
+        self.assertIsInstance(resultado, review_github.Unconfirmed)
         self.assertEqual(falso.creaciones, [])
         self.assertEqual(len(falso.patches), 1)
         cuerpo = falso.leer()[0]["body"]
@@ -989,10 +989,10 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
             self._documento(snapshot), limit, (),
         )
         self.assertIsInstance(prepared, domain.CapacityExceeded)
-        resultado = review_document.publish_capacity_notice(
+        resultado = review_github.publish_capacity_notice(
             None, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(resultado, review_document.Unconfirmed)
+        self.assertIsInstance(resultado, review_github.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás un sticky sin bloque")
         self.assertEqual(falso.comentarios, [])
 
@@ -1006,10 +1006,10 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
             ), domain.StorageBudget(), (),
         )
         self.assertIsInstance(prepared, review_document.PreparedPublication)
-        resultado = review_document.publish_checkpoint(
+        resultado = review_github.publish_checkpoint(
             prepared, sticky, falso, login="github-actions[bot]",
         )
-        self.assertIsInstance(resultado, review_document.PublishReceipt)
+        self.assertIsInstance(resultado, review_github.PublishReceipt)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(carga.block, domain.encode_snapshot(snapshot).block)

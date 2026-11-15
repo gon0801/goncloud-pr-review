@@ -987,7 +987,7 @@ def cmd_publish(args):
 
     adapter = review_coordinator.ComentariosGh(repo, pr)
     if isinstance(prepared, review_domain.CapacityExceeded):
-        status = review_document.publish_capacity_notice(
+        status = review_github.publish_capacity_notice(
             sticky, adapter, login=login, secrets=secretos_del_entorno(),
         )
         print(f"ai-review: {status.motivo}", file=sys.stderr)
@@ -1002,10 +1002,10 @@ def cmd_publish(args):
     body = prepared.body
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
-    receipt = review_document.publish_checkpoint(
+    receipt = review_github.publish_checkpoint(
         prepared, sticky, adapter, login=login,
     )
-    if isinstance(receipt, review_document.Unconfirmed):
+    if isinstance(receipt, review_github.Unconfirmed):
         print(f"ai-review: escritura incierta ({receipt.motivo})", file=sys.stderr)
         review_github.informar_revision(False)
         sys.exit(1)

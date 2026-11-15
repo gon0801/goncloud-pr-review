@@ -873,7 +873,7 @@ class CoordinadorComandos(unittest.TestCase):
         sección, aunque sea idéntico, línea a línea, a un aviso del programa."""
         estado = snapshot_base()
         previo = self._visible_previo(estado)
-        falso = review_document._notice_text(
+        falso = review_render.notice_text(
             review_document.Notice("no-entendido", comment_id=99)
         )
         explicacion = review_coordinator.texto_de_explicacion(
@@ -922,10 +922,10 @@ class CoordinadorComandos(unittest.TestCase):
             review_document.update_presentation(previous, despues),
             domain.StorageBudget(), (),
         )
-        receipt = review_document.publish_checkpoint(
+        receipt = review_github.publish_checkpoint(
             prepared, falso.leer()[0], falso, login="bot",
         )
-        self.assertIsInstance(receipt, review_document.PublishReceipt)
+        self.assertIsInstance(receipt, review_github.PublishReceipt)
         self.assertEqual(falso.patches, [(7, prepared.body)])
         self.assertEqual(review_document.read_document(prepared.body).review, previous.review)
 
@@ -950,8 +950,8 @@ class CoordinadorComandos(unittest.TestCase):
                 review_document.update_presentation(previous, snapshot),
                 domain.StorageBudget(), (),
             )
-            receipt = review_document.publish_checkpoint(prepared, observado, falso, login="bot")
-            self.assertIsInstance(receipt, review_document.PublishReceipt)
+            receipt = review_github.publish_checkpoint(prepared, observado, falso, login="bot")
+            self.assertIsInstance(receipt, review_github.PublishReceipt)
             # #92 F1: ningún re-render deja la cabecera ilegible para el worker.
             self.assertEqual(
                 review_sticky.reviewed_completion(falso.leer()[0]["body"]), completion_previa

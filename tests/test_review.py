@@ -8050,7 +8050,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
     def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
         for banner in (
             review_render.caution_banner("falló", "a" * 40, False),
-            review_document._notice_text(
+            review_render.notice_text(
                 review_document.Notice("no-entendido", comment_id=5)
             ),
         ):
