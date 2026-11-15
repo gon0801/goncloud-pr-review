@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -66,6 +67,71 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_salida_caracterizada_antes_de_reducir_prosa(self):
+        base = document()
+        findings = [
+            domain.Finding(
+                f"F{i}", f"Error {i}", "High", domain.StatusOpen(),
+                domain.AnchorLegacy(f"{i}.py", 1),
+            )
+            for i in (1, 2, 3)
+        ]
+        with_findings = replace(
+            base, memory=replace(base.memory, findings=findings, next_id=4)
+        )
+        notices = tuple(Notice("no-entendido", comment_id=i) for i in (1, 2, 3))
+        cases = {
+            "normal": (
+                base,
+                "d91fe297e8ab2ce6823916e7e540a2dd82ee886ca6a015af00a3475c3375b26b",
+                "3e771d97723fd6a221e932c65b80ebd2409b0cf0d55190b6adefda00092f4845",
+            ),
+            "review_multibyte": (
+                replace(with_findings, review=replace(base.review, prose=SafeProse("ñ漢" * 30000))),
+                "7cd0b45fab5c2cc26428b427af60f1de949db6eb970a82c68b9686235c141a75",
+                "3d5ce1f9f44980b4fdf41e4f1e0f2c2d6648becc4da690f3e1aebd33f962c246",
+            ),
+            "history": (
+                replace(with_findings, historical=SafeProse("previo ñ " * 9000),
+                        review=replace(base.review, prose=SafeProse("x" * 30000))),
+                "c8b58697529df24265ad2a4c8caf4b9f30552668b0707b26b12df0249eb842de",
+                "02d632954e6aae685f1f40dbbfcf3b07ede8d708fb37ee602aaf86d261c638be",
+            ),
+            "explanations": (
+                replace(
+                    with_findings,
+                    explanations=tuple(
+                        ExplanationView(f"F{i}", SafeProse("x" * 8001))
+                        for i in (1, 2, 3)
+                    ),
+                    notices=notices,
+                    review=replace(base.review, prose=SafeProse("x" * 80000)),
+                ),
+                "2d863caf2db21bd41db8952f4d0c087ec2420363d5c99ea7ba7831dae93496be",
+                "5e9bdeabf89c65077998d88d47dd944b76d46e9bbbb7c91d4dd32a204ea40f64",
+            ),
+            "failure_without_review": (
+                replace(base, review=None,
+                        failure=FailureView("b" * 40, "worker-failed", SafeProse("x" * 70000)),
+                        notices=notices),
+                "e0f41805097b7061e07e31dc997f127b0da5661a6f0baab6195874ffe29241a5",
+                "387398c8b1e326764c91ece5a42f9e61f282df30ea6c125516e827e53dab74ca",
+            ),
+            "book": (
+                replace(with_findings, covered=CoverageBook(
+                    "a" * 40, tuple((f"path{i}.py", "b" * 40) for i in range(401))
+                )),
+                "5f7dbbd2cb495c26b6faf790b4a36e1e93f9cb33aa1e395b4f63b90ac553f81a",
+                "bec9e76cd63960a3519a3af48ffb370b9d76e9a8d7efd5f042282144d0baaeca",
+            ),
+        }
+        for name, (current, body_hash, summary_hash) in cases.items():
+            with self.subTest(name=name):
+                prepared = prepare_publication(current)
+                self.assertIsInstance(prepared, PreparedPublication)
+                self.assertEqual(hashlib.sha256(prepared.body.encode()).hexdigest(), body_hash)
+                self.assertEqual(hashlib.sha256(prepared.summary.encode()).hexdigest(), summary_hash)
+
     def test_json_oculto_no_cierra_comentarios_y_conserva_rutas(self):
         path = "src/<!--a-->--!><h1>visible</h1>ñ\\u003e.py"
         finding = domain.Finding(
