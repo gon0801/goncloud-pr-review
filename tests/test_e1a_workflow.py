@@ -16,6 +16,7 @@ REVIEW_PY = ROOT / "review.py"
 MODULOS_REVISOR = (
     "review.py",
     "review_domain.py",
+    "review_document.py",
     "review_context.py",
     "review_config.py",
     "review_run.py",
@@ -225,14 +226,11 @@ class WorkflowE1Measure(unittest.TestCase):
 
     def test_mide_el_arbol_del_head_con_revisor_fuera(self):
         self.assertIn('git checkout --detach "${{ inputs.head }}"', self.texto)
-        self.assertIn(
-            "cp review.py review_domain.py review_context.py review_config.py review_run.py review_sticky.py review_render.py review_github.py review_commands.py review_coordinator.py prompt.md", self.texto
-        )
+        copiar = "cp " + " ".join(MODULOS_REVISOR)
+        self.assertIn(copiar, self.texto)
         self.assertIn("$RUNNER_TEMP/reviewer", self.texto)
         self.assertLess(
-            self.texto.index(
-                "cp review.py review_domain.py review_context.py review_config.py review_run.py review_sticky.py review_render.py review_github.py review_commands.py review_coordinator.py prompt.md"
-            ),
+            self.texto.index(copiar),
             self.texto.index("git checkout --detach"),
             "el revisor se copia del arbol de main antes de mover el arbol al head",
         )
@@ -285,10 +283,10 @@ class WorkflowE1Measure(unittest.TestCase):
         paso = self.bloque_paso("Construir prev.json del brazo delta")
         self.assertIn("if: inputs.prev_sha != ''", paso)
         self.assertIn("parse_model_findings", paso)
-        self.assertIn("merge_findings", paso)
-        self.assertIn('merged["seen"] = 0', paso)
+        self.assertIn("accept_report", paso)
+        self.assertNotIn("merge_findings", paso)
         self.assertIn("serialize_findings", paso)
-        self.assertIn("parse_findings_block", paso)
+        self.assertIn("read_snapshot", paso)
         self.assertIn('"sha": os.environ["PREV_SHA"]', paso)
         self.assertIn('"state": state', paso)
         self.assertIn('"completion": "complete"', paso)
@@ -332,6 +330,24 @@ class PrepararBrazoDelta(unittest.TestCase):
         self.assertEqual(manifest["mode"], "full")
         self.assertEqual(manifest["reason"], "no-prev")
         self.assertIsNone(manifest["prev_sha"])
+
+    def test_incremental_legacy_seed_delivers_only_new_push(self):
+        prev = {
+            "sha": self.previo,
+            "state": {"seen": 1, "findings": []},
+            "completion": "complete",
+        }
+        work = Path(self.tmp.name, "work-legacy-scope")
+        manifest = correr_prepare(
+            self.repo, self.base, self.cabeza, self.event, work, prev=prev,
+        )
+        patch = (work / "diff.patch").read_text()
+        self.assertEqual(manifest["mode"], "incremental")
+        self.assertEqual(manifest["changed_files"], ["cabeza.py"])
+        self.assertEqual(manifest["reviewed"], ["cabeza.py"])
+        self.assertIn("cabeza.py", patch)
+        self.assertNotIn("previo.py", patch)
+        self.assertEqual(manifest["diff_bytes"], len(patch.encode("utf-8")))
 
     def test_con_prev_json_sale_incremental_con_el_delta_real(self):
         prev = {

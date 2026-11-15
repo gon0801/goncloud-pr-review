@@ -2,14 +2,19 @@
 """Glue for the AI PR review action."""
 
 import argparse
-from dataclasses import replace
 import json
 import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
+import review_coordinator
+import review_document
+import review_domain
+import review_github
+import review_run
 from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
@@ -18,32 +23,42 @@ from review_config import (
     politica_de_revision,
     secretos_del_entorno,
 )
-import review_coordinator
-import review_domain
-import review_github
-import review_run
-from review_render import (
-    caution_banner,
-    compose,
-    cuerpo_publicable,
-    insert_caution_banner,
-    redact,
-)
-from review_sticky import (
-    COMPLETION_PREFIX,
-    COVERED_PREFIX,
-    MARKER,
-    SHA_PREFIX,
-    cobertura_declarada,
-    continuacion_terminal,
-    libro_de,
-    libro_fusionado,
-    modelo_utilizable,
-    prev_de_memoria,
-    recortes_del_manifest,
-    reviewed_sha,
-    sha_hexa,
-    sticky_from_comments,
+from review_context import (
+    CALLERS_MAX_BYTES,
+    CALLERS_MAX_MATCHES,
+    CONVENTIONS_MAX_BYTES,
+    DEFAULT_EXCLUDES,
+    DEFAULT_MAX_TURNS,
+    INCREMENTAL_MAX_TURNS,
+    INCREMENTAL_SMALL_BYTES,
+    INCREMENTAL_SMALL_FILES,
+    LARGE_DIFF_MAX_TURNS,
+    TESTS_MAX_BYTES,
+    TESTS_MAX_RESULTS,
+    GitRepository,
+    SearchComplete,
+    SearchFailed,
+    SearchTruncated,
+    blobs_de_head,
+    build_callers,
+    build_conventions,
+    build_tests,
+    changed_since,
+    decide_mode,
+    delta_real,
+    digest_de_politica,
+    excluded_by,
+    files_matching_base,
+    files_reverted,
+    grep_files,
+    is_ancestor,
+    looks_like_test,
+    max_turns_for_diff,
+    prepare_review,
+    prev_findings_markdown,
+    priority,
+    resolve_max_turns,
+    trim_utf8,
 )
 from review_domain import (
     DISMISSED,
@@ -69,42 +84,21 @@ from review_domain import (
     strip_model_findings_block,
     unique_paths,
 )
-from review_context import (
-    CALLERS_MAX_BYTES,
-    CALLERS_MAX_MATCHES,
-    CONVENTIONS_MAX_BYTES,
-    DEFAULT_EXCLUDES,
-    DEFAULT_MAX_TURNS,
-    GitRepository,
-    INCREMENTAL_MAX_TURNS,
-    INCREMENTAL_SMALL_BYTES,
-    INCREMENTAL_SMALL_FILES,
-    LARGE_DIFF_MAX_TURNS,
-    SearchComplete,
-    SearchFailed,
-    SearchTruncated,
-    TESTS_MAX_BYTES,
-    TESTS_MAX_RESULTS,
-    build_callers,
-    build_conventions,
-    build_tests,
-    blobs_de_head,
-    changed_since,
-    decide_mode,
-    delta_real,
-    digest_de_politica,
-    excluded_by,
-    files_matching_base,
-    files_reverted,
-    grep_files,
-    is_ancestor,
-    looks_like_test,
-    max_turns_for_diff,
-    prepare_review,
-    prev_findings_markdown,
-    priority,
-    resolve_max_turns,
-    trim_utf8,
+from review_render import (
+    caution_banner,
+    redact,
+)
+from review_sticky import (
+    cobertura_declarada,
+    continuacion_terminal,
+    libro_de,
+    libro_fusionado,
+    modelo_utilizable,
+    prev_de_memoria,
+    recortes_del_manifest,
+    reviewed_sha,
+    sha_hexa,
+    sticky_from_comments,
 )
 
 # Superficie de compatibilidad: los tests y el adaptador consumen estos nombres
@@ -116,13 +110,13 @@ __all__ = [
     "DEFAULT_EXCLUDES",
     "DEFAULT_MAX_TURNS",
     "DISMISSED",
-    "FINDING_FILES_MAX",
-    "FINDING_ID_RE",
     "FINDINGS_MAX_BYTES",
     "FINDINGS_MAX_COUNT",
     "FINDINGS_PREFIX",
     "FINDINGS_SUFFIX",
     "FINDINGS_TITLE_MAX",
+    "FINDING_FILES_MAX",
+    "FINDING_ID_RE",
     "INCREMENTAL_MAX_TURNS",
     "INCREMENTAL_SMALL_BYTES",
     "INCREMENTAL_SMALL_FILES",
@@ -130,11 +124,11 @@ __all__ = [
     "OPEN",
     "RESOLVED",
     "SEVERITIES",
+    "TESTS_MAX_BYTES",
+    "TESTS_MAX_RESULTS",
     "SearchComplete",
     "SearchFailed",
     "SearchTruncated",
-    "TESTS_MAX_BYTES",
-    "TESTS_MAX_RESULTS",
     "decide_mode",
     "derive_next",
     "digest_de_politica",
@@ -203,141 +197,6 @@ def serialize_findings(state):
     return review_domain.serialize_findings(state, max_bytes=FINDINGS_MAX_BYTES)
 
 
-def merge_findings(
-    prev, model, *, changed_files, reverted_files, dismiss_ids, dismiss_all
-):
-    """Join previous state with what the model reported. Pure; git stays outside.
-
-    - Ids from prev are stable, but only for the same primary file: a prev id the
-      model reuses for another file is a different finding and gets a new id.
-    - A finding flips to resolved only if one of its files (where the problem is or
-      where the fix lands) changed since the last review (B3 lock).
-    - A prev finding whose primary file changed in this push and is back to base
-      content auto-resolves (the change that caused it was reverted). New findings
-      never auto-resolve and never start resolved.
-    - Prev findings the model dropped stay with their old data, never vanish.
-    - Dismissed always wins, is sticky, and the model can't bring it back as new.
-    Returns (merged_state, new_ids).
-    """
-    prev_list = (prev or {}).get("findings", []) if prev else []
-    prev_by_id = {f["id"]: f for f in prev_list if f.get("id")}
-    changed = set(changed_files or ())
-    reverted = set(reverted_files or ())
-    dismissed = set(dismiss_ids or ())
-    if dismiss_all:
-        dismissed |= {f["id"] for f in prev_list if f["state"] == OPEN and f.get("id")}
-    gone = [f for f in prev_list if f["state"] == DISMISSED or f.get("id") in dismissed]
-
-    merged, new_ids, seen = [], [], set()
-    counter = (prev or {}).get("next") or derive_next(prev_list)
-    for entry in (model or {}).get("findings", []) if model else []:
-        fid = entry.get("id")
-        old = prev_by_id.get(fid) if fid else None
-        if old is None or old["file"] != entry["file"]:
-            # The model repeated a previous issue without its id (e.g. as F-new on a full review).
-            old = next(
-                (
-                    f
-                    for f in prev_list
-                    if f.get("id")
-                    and f["id"] not in seen
-                    and f["state"] != DISMISSED
-                    and same_issue(entry, f)
-                ),
-                None,
-            )
-            fid = old["id"] if old else fid
-        if old is not None and old["file"] == entry["file"]:
-            if fid in seen:
-                continue  # first wins: the model repeated a previous id
-            seen.add(fid)
-            if old["state"] == DISMISSED:
-                merged.append(dict(old))
-                continue
-            others = [
-                path
-                for path in old.get("files", [old["file"]]) + entry.get("files", [])
-                if path != old["file"]
-            ]
-            files = unique_paths(
-                [old["file"]]
-                + [path for path in others if path in changed]
-                + [path for path in others if path not in changed]
-            )
-            state = entry["state"]
-            # The lock guards the open -> resolved flip: one of the finding's files (registered
-            # before, or named now as where the fix landed) must have changed in this pass. Changed
-            # files are stored first, so the cap never drops the one that unlocks it.
-            if (
-                state == RESOLVED
-                and old["state"] != RESOLVED
-                and not changed.intersection(files)
-            ):
-                state = OPEN
-            if old["file"] in reverted:
-                state = RESOLVED
-            merged.append(
-                {
-                    "id": fid,
-                    "file": entry["file"],
-                    "files": files,
-                    "line": entry["line"],
-                    "severity": entry["severity"],
-                    "title": entry["title"],
-                    "state": state,
-                }
-            )
-            continue
-        if entry["state"] == RESOLVED or any(same_issue(entry, g) for g in gone):
-            continue  # a brand-new finding can't already be fixed, nor revive a dismissed one
-        fid = f"F{counter}"
-        counter += 1
-        new_ids.append(fid)
-        merged.append(
-            {
-                "id": fid,
-                "file": entry["file"],
-                "files": entry.get("files", [entry["file"]]),
-                "line": entry["line"],
-                "severity": entry["severity"],
-                "title": entry["title"],
-                "state": OPEN,
-            }
-        )
-    for old in prev_list:
-        if old.get("id") in seen or not old.get("id"):
-            continue
-        if old["state"] in (DISMISSED, RESOLVED):
-            merged.append(dict(old))
-        elif old["file"] in reverted:
-            merged.append(dict(old, state=RESOLVED))
-        else:
-            merged.append(dict(old, state=OPEN))
-    for finding in merged:
-        if finding["id"] in dismissed and finding["id"] in prev_by_id:
-            finding["state"] = DISMISSED
-    merged.sort(key=lambda f: finding_number(f["id"]) or 0)
-    counter = max(counter, derive_next(merged))
-    return {"findings": merged, "next": counter}, new_ids
-
-
-def apply_dismissals(state, dismiss_ids, dismiss_all):
-    """Mark prev findings dismissed before the review, so the model is told about them."""
-    if not state:
-        return state
-    findings = []
-    for finding in state["findings"]:
-        wanted = finding["id"] in dismiss_ids or (
-            dismiss_all and finding["state"] == OPEN
-        )
-        findings.append(
-            dict(finding, state=DISMISSED)
-            if wanted and finding.get("id")
-            else dict(finding)
-        )
-    return dict(state, findings=findings)
-
-
 def parse_dismiss_command(body):
     """Ids (normalized) and whether `todo` was asked in one comment body."""
     comando = leer_comando(body)
@@ -382,14 +241,21 @@ def _repo_actual():
 
 
 def _snapshot_previo(prev):
-    """El snapshot v2/v3 auténtico del sticky cuando prev.json lo transporta:
-    revisión (base, head, política), hallazgos y generación tal como quedaron
-    persistidos. None para memorias legadas sin bloque versionado."""
+    """Estado común de preparación, también si prev.json viene del legado o E1."""
     bloque = prev.get("snapshot") or ""
     if not bloque:
-        return None
-    load = review_domain.read_snapshot(bloque)
-    return load.snapshot if isinstance(load, review_domain.Valid) else None
+        if not prev.get("state"):
+            return None
+        state = prev["state"]
+        if "next" not in state:
+            state = {**state, "next": review_domain.derive_next(state["findings"])}
+        bloque = review_domain.serialize_findings(
+            state, max_bytes=review_domain.StorageBudget().max_bytes
+        )
+        if isinstance(bloque, review_domain.CapacityExceeded):
+            return None
+    memoria = review_domain.memoria_operativa(review_domain.read_snapshot(bloque))
+    return memoria.snapshot if isinstance(memoria, review_domain.MemoryReady) else None
 
 
 def cmd_gate(args):
@@ -397,17 +263,33 @@ def cmd_gate(args):
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
+    if sticky and isinstance(
+        review_document.read_document(sticky.get("body") or ""),
+        review_document.DocumentBlocked,
+    ):
+        review_github.set_output("skip", "true")
+        print("ai-review: vista de documento posterior; se omite la revisión")
+        return
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     prev = prev_de_memoria(sticky["body"] if sticky else None)
     if prev["state"]:
         try:
-            dismiss_ids, dismiss_all, _ = collect_dismissals(
-                repo, pr, login, comments, prev["state"].get("seen", 0)
+            memoria = review_domain.memoria_operativa(
+                review_domain.read_snapshot(sticky["body"])
             )
-            prev["state"] = apply_dismissals(prev["state"], dismiss_ids, dismiss_all)
-        except Exception as exc:
+            if not isinstance(memoria, review_domain.MemoryReady):
+                raise TypeError(memoria.reason)
+            dismiss_ids, dismiss_all, _ = collect_dismissals(
+                repo, pr, login, comments, memoria.snapshot.command_cursor
+            )
+            prev["state"] = review_domain._legacy_raw_of_snapshot(
+                review_domain.aplicar_descartes(
+                    memoria.snapshot, dismiss_ids, dismiss_all, permitir_resueltos=True,
+                )
+            )
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(
                 f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar",
                 file=sys.stderr,
@@ -496,22 +378,6 @@ def cmd_prepare(args):
             previo_snapshot,
             completion=review_domain.parse_coverage(prev.get("completion")),
         )
-    elif prev_sha and sha_hexa(prev_sha) and prev.get("state"):
-        current = review_domain.snapshot_a_v3(
-            review_domain.Snapshot(
-                schema=2,
-                generation=1,
-                revision=review_domain.Revision(
-                    base_sha=base,
-                    head_sha=prev_sha,
-                    policy_digest=digest,
-                ),
-                next_id=1,
-                completion=review_domain.parse_coverage(prev.get("completion")),
-                findings=[],
-                command_cursor=0,
-            )
-        )
     else:
         current = review_domain.Snapshot(
             schema=3,
@@ -552,7 +418,11 @@ def cmd_prepare(args):
         solicitante="",
     )
     preparacion = prepare_review(
-        repo, request, current, policy, cobertura_previa=prev.get("covered")
+        repo, request, current, policy,
+        cobertura_previa=prev.get("covered"),
+        alcance_legado=(mode, prev_sha)
+        if current.revision is None and mode in ("incremental", "continuation")
+        else None,
     )
 
     reviewed = [path.text for path in preparacion.entregados]
@@ -623,7 +493,7 @@ def _pr_via_api():
             check=False,
         )
         datos = json.loads(respuesta.stdout) if respuesta.returncode == 0 else {}
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, RuntimeError):
         return {}
     return datos if isinstance(datos, dict) else {}
 
@@ -648,6 +518,7 @@ def venv_ready(venv):
             [str(venv / "bin" / "python"), "-c", "import litellm"],
             capture_output=True,
             timeout=120,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -822,8 +693,9 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
             continue
         try:
             contenido = review_github.sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
-        except Exception:
-            continue
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"ai-review: no se pudo leer un blob ({exc})", file=sys.stderr)
+            contenido = ""
         if contenido:
             blobs[(ancla.path, ancla.blob_sha)] = tuple(contenido.splitlines())
     return blobs
@@ -846,19 +718,14 @@ def anclas_locadas(snapshot):
     return vistas
 
 
-def actualizar_memoria_valida(
-    load, result, manifest, repo, pr, login, comments, policy=None
+def aceptar_reporte_directo(
+    snapshot, bloque_original, result, manifest, repo, pr, login, comments, policy
 ):
-    """Escritor compatible: memoria v2/v3 válida, identidad de la política
-    normalizada.
+    """El publicador directo adapta los hechos a la aceptación del dominio.
 
-    Conserva el schema del estado, aplica los descartes de comentarios,
-    avanza la revisión a la del manifiesto cuando head y base son hex40, e
-    integra las observaciones del modelo por la aceptación del dominio con
-    los hechos reales (delta, blobs, reversiones). Desborde: Keep.
+    Aplica los descartes, actualiza la revisión y conserva la memoria previa
+    cuando no cabe el nuevo estado.
     """
-    policy = policy or politica_de_revision(manifest)
-    snapshot = load.snapshot
     model = parse_model_findings(
         (result or {}).get("result") or "",
         conservar_anclas=policy.finding_identity == review_domain.IDENTIDAD_ANCLAS,
@@ -870,14 +737,14 @@ def actualizar_memoria_valida(
         dismiss_ids, dismiss_all, seen = collect_dismissals(
             repo, pr, login, comments, snapshot.command_cursor
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(
             f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
             file=sys.stderr,
         )
         dismiss_ids, dismiss_all, seen = set(), False, snapshot.command_cursor
     snapshot = review_domain.aplicar_descartes(
-        snapshot, dismiss_ids, dismiss_all, comment_id=seen
+        snapshot, dismiss_ids, dismiss_all, comment_id=seen, permitir_resueltos=True,
     )
     snapshot = review_domain.avanzar_cursor(snapshot, seen)
     observaciones = [
@@ -943,7 +810,7 @@ def actualizar_memoria_valida(
                     manifest.get("prev_sha"),
                     head,
                 )
-            except Exception:
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError):
                 revertidas = set()
     facts = replace(
         facts,
@@ -966,7 +833,7 @@ def actualizar_memoria_valida(
         return {
             "merged": [],
             "new_ids": [],
-            "block": load.block,
+            "block": bloque_original,
             "model_ok": model_ok,
             "keep": decision.reason,
         }
@@ -982,7 +849,7 @@ def actualizar_memoria_valida(
         return {
             "merged": [],
             "new_ids": [],
-            "block": load.block,
+            "block": bloque_original,
             "model_ok": model_ok,
             "keep": motivo,
         }
@@ -990,7 +857,7 @@ def actualizar_memoria_valida(
     return {
         "merged": review_domain.hallazgos_legacy(decision.snapshot),
         "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
-        "block": encoded.block if snapshot.schema == 3 else encoded,
+        "block": encoded.block,
         "model_ok": model_ok,
         "completion": decision.snapshot.completion,
         "no_acreditados": review_domain.resoluciones_sin_acreditar(decision.snapshot),
@@ -998,144 +865,29 @@ def actualizar_memoria_valida(
 
 
 def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=None):
-    """Merge previous state with the model's block. Broken block: keep last parseable (B6).
-
-    Memoria v2/v3 válida pasa por la aceptación del dominio con la política
-    normalizada (`current` coincidencia compatible, `anchors` la de F0).
-    Versiones futuras y memoria inválida se conservan (Keep); el legado
-    sigue su propio camino de siempre.
-    """
+    """Acepta el resultado en v3 o conserva íntegra la memoria que no pueda migrar."""
     policy = policy or politica_de_revision(manifest)
-    load = (
-        review_domain.read_snapshot(sticky["body"])
-        if sticky
-        else review_domain.Missing()
-    )
-    if isinstance(load, review_domain.Valid):
-        return actualizar_memoria_valida(
-            load, result, manifest, repo, pr, login, comments, policy
+    load = review_domain.read_snapshot(sticky["body"] if sticky else "")
+    memoria = review_domain.memoria_operativa(load)
+    if isinstance(memoria, review_domain.MemoryReady):
+        return aceptar_reporte_directo(
+            memoria.snapshot, load.block, result, manifest, repo, pr, login, comments, policy
         )
-    model = parse_model_findings((result or {}).get("result") or "")
+    motivo = memoria.reason
+    print(
+        f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
+        file=sys.stderr,
+    )
     model_ok = modelo_utilizable(
         parse_model_findings((result or {}).get("result") or "", conservar_anclas=True)
     )
-    if isinstance(load, (review_domain.Valid, review_domain.Future)):
-        motivo = (
-            f"schema {load.snapshot.schema}"
-            if isinstance(load, review_domain.Valid)
-            else f"versión {load.version}"
-        )
-        print(
-            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
-            file=sys.stderr,
-        )
-        return {
-            "merged": [],
-            "new_ids": [],
-            "block": load.block,
-            "model_ok": model_ok,
-            "keep": motivo,
-        }
-    if isinstance(load, review_domain.Invalid):
-        motivo = f"inválida ({load.reason})"
-        print(
-            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
-            file=sys.stderr,
-        )
-        return {
-            "merged": [],
-            "new_ids": [],
-            "block": load.block,
-            "model_ok": model_ok,
-            "keep": motivo,
-        }
-    prev = load.raw if isinstance(load, review_domain.Legacy) else None
-    try:
-        dismiss_ids, dismiss_all, last_seen = collect_dismissals(
-            repo, pr, login, comments, (prev or {}).get("seen", 0)
-        )
-    except Exception as exc:
-        print(
-            f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
-            file=sys.stderr,
-        )
-        dismiss_ids, dismiss_all, last_seen = set(), False, (prev or {}).get("seen", 0)
-    has_previous_changes = manifest.get("mode") in (
-        "incremental",
-        "continuation",
-    ) or manifest.get("reason") == "incomplete-prev"
-    changed = review_domain.rutas_de_cambio(manifest)
-    watched = {
-        f["file"] for f in (prev or {}).get("findings", []) if f["state"] == OPEN
-    }
-    candidates = sorted(watched & set(changed)) if has_previous_changes else []
-    base, head = manifest.get("base"), manifest.get("head")
-    try:
-        reverted = (
-            files_reverted(
-                _repo_actual(), candidates, base, manifest.get("prev_sha"), head
-            )
-            if candidates and base and head
-            else set()
-        )
-    except Exception:
-        reverted = set()
-    merged, new_ids = merge_findings(
-        prev,
-        model,
-        changed_files=changed,
-        reverted_files=reverted,
-        dismiss_ids=dismiss_ids,
-        dismiss_all=dismiss_all,
-    )
-    merged["seen"] = last_seen
-    bloque = review_domain.serialize_findings(
-        merged, max_bytes=review_domain.StorageBudget().max_bytes
-    )
-    if isinstance(bloque, review_domain.CapacityExceeded):
-        motivo = f"desborde ({bloque.needed} bytes para {bloque.limit})"
-        print(
-            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
-            file=sys.stderr,
-        )
-        return {
-            "merged": [],
-            "new_ids": [],
-            "block": load.block,
-            "model_ok": model_ok,
-            "keep": motivo,
-        }
-    antes = {f["id"]: f["state"] for f in (prev or {}).get("findings", []) if f.get("id")}
-    resueltos_por_el_modelo = [
-        e for e in (model or {}).get("findings", []) if e.get("state") == RESOLVED
-    ]
     return {
-        "merged": merged["findings"],
-        "new_ids": new_ids,
-        "block": bloque,
+        "merged": [],
+        "new_ids": [],
+        "block": memoria.original_block,
         "model_ok": model_ok,
-        "no_acreditados": tuple(
-            f["id"]
-            for f in merged["findings"]
-            if f["state"] == OPEN
-            and antes.get(f["id"]) == OPEN
-            and any(
-                e.get("id") == f["id"] or same_issue(e, f)
-                for e in resueltos_por_el_modelo
-            )
-        ),
+        "keep": motivo,
     }
-
-
-def summary_of(body):
-    return "\n".join(
-        line
-        for line in body.split("\n")
-        if line != MARKER
-        and not line.startswith(
-            (SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX, COVERED_PREFIX)
-        )
-    )
 
 
 def cmd_publish(args):
@@ -1147,25 +899,35 @@ def cmd_publish(args):
     name = result.get("review_provider", name)
     review_github.avisar_bloque_sin_cierre(result.get("result") or "")
     manifest = json.loads((work / "manifest.json").read_text())
+
+    def guardar_summary(text):
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary, "a") as fh:
+                fh.write(text + "\n")
+
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
+    document = review_document.read_document(sticky["body"] if sticky else "")
+    if isinstance(document, review_document.DocumentBlocked):
+        print("ai-review: vista de documento posterior; se conserva sin tocar", file=sys.stderr)
+        review_github.informar_revision(False)
+        return
 
     revisado = False
-    escribir = True
     if ERROR_KEY in result:
         # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
         reason = result[ERROR_KEY]
         has_previous = bool(sticky and reviewed_sha(sticky.get("body") or ""))
+        failed = replace(
+            document,
+            failure=review_document.FailureView(
+                head, "worker-failed", review_document.SafeProse(reason)
+            ),
+        )
+        prepared = review_document.prepare_publication(
+            failed, review_domain.StorageBudget(), secretos_del_entorno()
+        )
         banner = caution_banner(reason, head, has_previous=has_previous)
-        body = (
-            insert_caution_banner(sticky["body"], banner)
-            if sticky
-            else f"{MARKER}\n{banner}"
-        )
-        body = redact(
-            body,
-            secretos_del_entorno(),
-        )
         summary_text = redact(
             banner,
             secretos_del_entorno(),
@@ -1173,106 +935,89 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2/v3, de versión futura, inválida o desbordada: se conserva
-            # el comentario sin modificar (o MARKER + banner si no hay sticky),
-            # el sha= y la cobertura no avanzan y se avisa en visible, como en
-            # la ruta de falla de infraestructura.
-            banner = caution_banner(
-                f"memoria de {findings['keep']} conservada; esta versión no la modifica",
-                head,
-                has_previous=bool(sticky),
+            reason = f"memoria de {findings['keep']} conservada; esta versión no la modifica"
+            if not sticky or not isinstance(
+                review_domain.read_snapshot(sticky["body"]),
+                (review_domain.Valid, review_domain.Legacy),
+            ):
+                print(f"ai-review: {reason}; no se escribe el sticky", file=sys.stderr)
+                guardar_summary(redact(
+                    caution_banner(reason, head, has_previous=bool(sticky)),
+                    secretos_del_entorno(),
+                ))
+                review_github.informar_revision(False)
+                return
+            failed = replace(
+                document,
+                failure=review_document.FailureView(
+                    head, "state-kept", review_document.SafeProse(reason),
+                ),
             )
-            if sticky:
-                body = insert_caution_banner(sticky["body"], banner)
-            else:
-                body = f"{MARKER}\n{banner}"
-            body = redact(
-                body,
-                secretos_del_entorno(),
+            prepared = review_document.prepare_publication(
+                failed, review_domain.StorageBudget(), secretos_del_entorno(),
             )
             summary_text = redact(
-                banner,
+                caution_banner(reason, head, has_previous=bool(sticky)),
                 secretos_del_entorno(),
             )
         else:
-            cuerpo = redact(
-                compose(
-                    result,
-                    manifest,
-                    sha=head,
-                    provider=name,
-                    findings=findings,
-                    libro=libro_actualizado(
-                        sticky,
-                        manifest,
-                        result,
-                        _repo_actual(),
-                        findings.get("model_ok", True),
-                    )
-                    if manifest.get("head")
-                    else None,
-                    budget=review_domain.StorageBudget(),
-                ),
-                secretos_del_entorno(),
+            candidate = review_document.document_from_result(
+                document,
+                review_domain.read_snapshot(findings["block"]).snapshot,
+                {**result, "model_ok": findings.get("model_ok", True)},
+                manifest,
+                name,
+                head,
+                findings["new_ids"],
+                libro_actualizado(
+                    sticky, manifest, result, _repo_actual(),
+                    findings.get("model_ok", True),
+                ) if manifest.get("head") else None,
             )
-            if not cuerpo_publicable(cuerpo, findings["block"]):
-                # El fijo del comentario no cabe (ni sin libro): el cuerpo no
-                # trae el bloque y escribirlo borraría la memoria. Keep + banner
-                # como en el desborde; sin sticky previo no se crea nada.
-                revisado = False
-                banner = caution_banner(
-                    "comentario sin espacio para el estado; el checkpoint "
-                    "previo se conserva y esta versión no la modifica",
-                    head,
-                    has_previous=bool(sticky),
+            prepared = review_document.prepare_publication(
+                candidate, review_domain.StorageBudget(), secretos_del_entorno()
+            )
+            if isinstance(prepared, (review_domain.CapacityExceeded, review_document.DocumentBlocked)):
+                summary_text = caution_banner(
+                    "comentario sin espacio para el estado; el checkpoint previo se conserva",
+                    head, has_previous=bool(sticky),
                 )
-                if sticky:
-                    cuerpo = insert_caution_banner(sticky["body"], banner)
-                else:
-                    escribir = False
-                    print(
-                        "ai-review: comentario sin espacio para el estado; "
-                        "no se crea sticky"
-                    )
-                body = cuerpo
-                summary_text = banner
             else:
-                revisado = True
-                body = cuerpo
-                summary_text = summary_of(body)
+                summary_text = prepared.summary
 
+    adapter = review_coordinator.ComentariosGh(repo, pr)
+    if isinstance(prepared, review_domain.CapacityExceeded):
+        status = review_github.publish_capacity_notice(
+            sticky, adapter, login=login, secrets=secretos_del_entorno(),
+        )
+        print(f"ai-review: {status.motivo}", file=sys.stderr)
+        guardar_summary(redact(summary_text, secretos_del_entorno()))
+        review_github.informar_revision(False)
+        sys.exit(1)
+    if isinstance(prepared, review_document.DocumentBlocked):
+        print(f"ai-review: documento inválido ({prepared.reason}); no se publica", file=sys.stderr)
+        guardar_summary(redact(summary_text, secretos_del_entorno()))
+        review_github.informar_revision(False)
+        sys.exit(1)
+    body = prepared.body
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
-
-    if not escribir:
-        print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
+    receipt = review_github.publish_checkpoint(
+        prepared, sticky, adapter, login=login,
+    )
+    if isinstance(receipt, review_github.Unconfirmed):
+        print(f"ai-review: escritura incierta ({receipt.motivo})", file=sys.stderr)
+        review_github.informar_revision(False)
+        sys.exit(1)
+    revisado = ERROR_KEY not in result and not findings.get("keep")
+    if receipt.recibo.get("sin_texto_visible"):
+        print("ai-review: nada visible que mostrar; no se crea sticky")
     elif sticky:
-        review_github.sh(
-            "gh",
-            "api",
-            "-X",
-            "PATCH",
-            f"repos/{repo}/issues/comments/{sticky['id']}",
-            "--input",
-            str(payload),
-        )
         print(f"ai-review: comentario {sticky['id']} actualizado")
     else:
-        review_github.sh(
-            "gh",
-            "api",
-            "-X",
-            "POST",
-            f"repos/{repo}/issues/{pr}/comments",
-            "--input",
-            str(payload),
-        )
         print("ai-review: comentario creado")
 
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as fh:
-            fh.write(summary_text + "\n")
+    guardar_summary(summary_text)
     review_github.informar_revision(revisado)
 
 

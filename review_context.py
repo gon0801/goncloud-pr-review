@@ -716,6 +716,7 @@ def prepare_review(
     current,
     policy,
     cobertura_previa=None,
+    alcance_legado=None,
 ):
     target = request.target or {}
     head = target.get("head_sha", "")
@@ -725,9 +726,12 @@ def prepare_review(
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
 
-    modo, _, previous_head = decidir_modo(
-        repo, current, head, base, digest, cobertura_previa
-    )
+    if alcance_legado is None:
+        modo, _, previous_head = decidir_modo(
+            repo, current, head, base, digest, cobertura_previa
+        )
+    else:
+        modo, previous_head = alcance_legado
     delta_rutas, _, _ = delta_desde_previo(repo, previous_head, head)
 
     historicas = []
@@ -759,9 +763,8 @@ def prepare_review(
     previa = cobertura_previa or {}
     base_movida = False
     if modo in ("incremental", "continuation"):
-        merge_base_previo = repo.merge_base(
-            current.revision.base_sha or base, previous_head
-        )
+        previous_base = current.revision.base_sha if current.revision else None
+        merge_base_previo = repo.merge_base(previous_base or base, previous_head)
         base_movida = merge_base_previo != merge_base
         alcance_previo = {
             path.label()

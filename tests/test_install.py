@@ -1064,10 +1064,10 @@ class CompatibleRollback(InstaladorTest):
             "reviewed": ["src/app.py"],
             "excluded": [],
         }
-        salida = review.actualizar_memoria_valida(
-            load,
+        salida = review.build_findings(
             resultado_modelo,
             manifiesto,
+            {"body": cuerpo},
             "o/r",
             "1",
             "github-actions[bot]",

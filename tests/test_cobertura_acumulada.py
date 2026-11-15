@@ -26,8 +26,7 @@ sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 
 import review_github
-
-import review_render
+import review_document
 
 import review_sticky
 import review_run
@@ -99,9 +98,16 @@ def publicar(work, head, manifest, result, body=None, repo=None):
     def run_command(*args, **kwargs):
         if args[0] == "git":
             return real_sh(*args, cwd=repo, **kwargs)
+        if "-X" in args and "--input" in args:
+            new_body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+            if args[args.index("-X") + 1] == "PATCH":
+                comments[0]["body"] = new_body
+            else:
+                comments.append({"id": 1, "user": "github-actions[bot]", "body": new_body})
         return mock.Mock(returncode=0)
 
     with (
+        contextlib.chdir(repo) if repo else contextlib.nullcontext(),
         mock.patch.dict(
             os.environ,
             {
@@ -157,12 +163,7 @@ def libro_del(cuerpo):
 
 
 def bloque_del(cuerpo):
-    for linea in cuerpo.splitlines():
-        if linea.startswith(review.FINDINGS_PREFIX):
-            return json.loads(
-                linea[len(review.FINDINGS_PREFIX) : -len(review.FINDINGS_SUFFIX)]
-            )
-    return None
+    return domain.estado_legado_de_memoria(cuerpo)
 
 
 def texto_pasada(claim, unreviewed=None, hallazgos=None):
@@ -243,14 +244,18 @@ class LibroPublicado(unittest.TestCase):
                 {f"{f}.py": blob(repo, head1, f"{f}.py") for f in "abcd"},
             )
 
-    def test_compose_sin_libro_no_renderiza_linea(self):
+    def test_documento_sin_libro_no_renderiza_linea(self):
         result = {"result": texto_pasada("complete"), "subtype": "success"}
-        cuerpo = review_render.compose(
+        memory = domain.Snapshot(3, 1, None, 1, domain.UNKNOWN, [], 0)
+        document = review_document.document_from_result(
+            review_document.read_document(""), memory,
             result,
             {"reviewed": ["a.py"], "excluded": [], "mode": "full"},
-            sha="a" * 40,
-            provider="opencode-go",
+            "opencode-go", "a" * 40, (),
         )
+        cuerpo = review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        ).body
         self.assertIsNone(linea_del_libro(cuerpo))
 
 

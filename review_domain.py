@@ -321,6 +321,17 @@ class Legacy:
     block: str = ""
 
 
+@dataclass(frozen=True)
+class MemoryReady:
+    snapshot: Snapshot
+
+
+@dataclass(frozen=True)
+class MemoryBlocked:
+    reason: str
+    original_block: str | None
+
+
 @dataclass
 class Replace:
     snapshot: Snapshot
@@ -1180,7 +1191,7 @@ def rutas_de_cambio(manifest):
     return tuple(manifest.get("reviewed", []))
 
 
-def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
+def aplicar_descartes(snapshot, ids, todos=False, comment_id=None, permitir_resueltos=False):
     """Descarta hallazgos ABIERTOS por comando (escritor compatible, T04).
 
     El command_id de cada descarte es el id del comentario que lo ordenó: el
@@ -1194,7 +1205,9 @@ def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
     hallazgos = list(snapshot.findings)
     descartados = []
     for i, f in enumerate(hallazgos):
-        if not isinstance(f.status, StatusOpen):
+        if not isinstance(f.status, StatusOpen) and not (
+            permitir_resueltos and f.id in ids and isinstance(f.status, StatusResolved)
+        ):
             continue
         if not todos and f.id not in ids:
             continue
@@ -1260,6 +1273,79 @@ def snapshot_a_v3(snapshot):
         pending_requests=solicitudes,
         receipts=snapshot.receipts,
     )
+
+
+def _legado_fiel(load):
+    original = json.loads(
+        load.block[len(FINDINGS_PREFIX) : -len(FINDINGS_SUFFIX)]
+    )
+    if original != _sin_surrogates(original):
+        return False
+    entries = original.get("findings")
+    if not isinstance(entries, list) or len(entries) != len(load.raw["findings"]):
+        return False
+    ids = [entry["id"] for entry in load.raw["findings"]]
+    if any(
+        fid is None or fid != f"F{finding_number(fid)}" for fid in ids
+    ) or len(ids) != len({finding_number(fid) for fid in ids}):
+        return False
+    if any(
+        not isinstance(original[key], int) or isinstance(original[key], bool)
+        for key in ("next", "seen") if key in original
+    ):
+        return False
+    if (
+        ("next" in original and original["next"] != load.raw["next"])
+        or ("seen" in original and original["seen"] != load.raw["seen"])
+    ):
+        return False
+    for entry, limpio in zip(entries, load.raw["findings"]):
+        if not isinstance(entry, dict) or set(entry) - {
+            "id", "file", "files", "line", "severity", "title", "state"
+        }:
+            return False
+        if "line" in entry and (
+            not isinstance(entry["line"], int) or isinstance(entry["line"], bool)
+        ):
+            return False
+        if any(
+            key in entry and entry[key] != limpio[key]
+            for key in ("id", "file", "line", "severity", "title", "state")
+        ):
+            return False
+        files = entry.get("files", [])
+        if not isinstance(files, list):
+            return False
+        expected = [limpio["file"]] + [
+            path for path in files if path != limpio["file"]
+        ]
+        if expected != limpio["files"]:
+            return False
+    return True
+
+
+def memoria_operativa(load):
+    """Convierte memoria leída a v3 o conserva el bloque íntegro si perdería datos."""
+    if isinstance(load, Missing):
+        return MemoryReady(
+            Snapshot(
+                schema=3,
+                generation=1,
+                revision=None,
+                next_id=1,
+                completion=UNKNOWN,
+                findings=[],
+                command_cursor=0,
+            )
+        )
+    if isinstance(load, Future):
+        return MemoryBlocked(f"versión {load.version}", load.block)
+    if isinstance(load, Invalid):
+        return MemoryBlocked(f"inválida ({load.reason})", load.block)
+    if isinstance(load, Legacy):
+        if not _legado_fiel(load):
+            return MemoryBlocked("inválida (legado con pérdida)", load.block)
+    return MemoryReady(snapshot_a_v3(load.snapshot))
 
 
 def normalize_policy(boot):
@@ -1548,7 +1634,7 @@ class Observation:
     # acreditan el cambio pertinente que resuelve.
     archivos: tuple = ()
     # Id de un previo que el modelo repite (lo ve en prev_findings.md); solo
-    # decide la identidad fuera de `anchors`, como en merge_findings.
+    # decide la identidad de la política por títulos fuera de `anchors`.
     claimed_id: str | None = None
 
 
@@ -2098,8 +2184,8 @@ def _cobertura_persistida(report, plan):
     return resultado
 
 
-def _match_como_merge_findings(previos, por_id, obs):
-    """Identidad fuera de `anchors`, la misma de la ruta directa (merge_findings):
+def _match_por_titulos(previos, por_id, obs):
+    """Identidad fuera de `anchors`, por título y ruta:
     el id que el modelo repite para un previo del mismo archivo; si no, el mismo
     título en el mismo archivo, prefiriendo el vivo (un descartado solo gana si
     es el único, y entonces no reaparece); si no, nuevo.
@@ -2125,7 +2211,7 @@ def _match_como_merge_findings(previos, por_id, obs):
 def accept_report(current, plan, report):
     """Acepta el reporte validado y devuelve la Transition del estado.
 
-    Requiere estado v2 o v3 (schema 2/3): en legado devuelve Keep. El programa asigna
+    Requiere estado v2 o v3 (schema 2/3). El programa asigna
     los ids; título y causa son mutables. Resolver exige cambio pertinente o
     reversión exacta: cambió un archivo ancla del hallazgo o uno que la
     observación del modelo nombra (ancla, ancla relacionada o `files`), siempre
@@ -2155,7 +2241,7 @@ def accept_report(current, plan, report):
     for obs in report.observations:
         severidad, marca_severidad = _severidad_de(obs.severity)
         match = (
-            _match_como_merge_findings(previos, por_id, obs)
+            _match_por_titulos(previos, por_id, obs)
             if honra_ids
             else match_finding(previos, obs, facts)
         )
@@ -2228,6 +2314,11 @@ def accept_report(current, plan, report):
             ancla = (
                 obs.primary_anchor
                 if isinstance(obs.primary_anchor, AnchorLocated)
+                or (
+                    isinstance(obs.primary_anchor, AnchorLegacy)
+                    and isinstance(previo.primary_anchor, AnchorLegacy)
+                    and obs.primary_anchor.path == previo.primary_anchor.path
+                )
                 else previo.primary_anchor
             )
             relacionadas = tuple(obs.related_anchors) or previo.related_anchors
@@ -2267,7 +2358,7 @@ def accept_report(current, plan, report):
         next_id += 1
         findings.append(nueva)
     for i, f in enumerate(findings):
-        if f.id in tocados or isinstance(f.status, StatusDismissed):
+        if f.id not in por_id or f.id in tocados or isinstance(f.status, StatusDismissed):
             continue
         if _sin_cambio_pertinente(f):
             # la nota fecha de un reclamo anterior: esta pasada no lo repitió

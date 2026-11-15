@@ -1,5 +1,20 @@
 # Plans — goncloud-pr-review
 
+## Simplificación posterior a la revisión de calidad (2026-11-15)
+
+Implementación y revisión terminadas. Contrato: [diseño](docs/reviewer-simplification-design.md),
+[plan](docs/plans/2026-11-15-reviewer-simplification.md) y
+[evidencia de cierre](docs/evidence/reviewer/simplificacion-cierre.md).
+
+| Entrega | Resultado | Estado |
+| --- | --- | --- |
+| D1 | Artifact del worker limitado al resultado final saneado. | cc:done — a962156 |
+| D2 | Una aceptación de hallazgos para memoria v1/v2/v3. | cc:done — e0211e5 |
+| D3 | Codec y versión puente que conserva vistas nuevas. | cc:done — 4db77cc |
+| D4 | Presentación tipada y publicación íntegra. | cc:done — 20e59f0 |
+| R1–R6 | Regresiones de descarte, alcance, secretos, HTML, histórico y capacidad. | cc:done — b54e752..ce33dc3 |
+| Cierre | Solicitud completa, retiro de aviso obsoleto y separación de responsabilidades. | cc:done — 4d5db60..c84317b; 841 pruebas y revisión independiente OK |
+
 Plan de mejoras del revisor automático de PRs. PR A implementado y medido el 2026-09-26 (PR #9); PR B implementado y probado en real el 2026-09-26 (PR #13).
 
 ## Diagnóstico (medido el 2026-09-25)

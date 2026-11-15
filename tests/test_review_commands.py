@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
+import review_document
 import review_commands
 import review_github
 import review_render
@@ -677,11 +678,24 @@ class CoordinadorComandos(unittest.TestCase):
         "model_ok": True,
     }
 
+    def _render_review(self, estado, artifact=None, previos=(), head="a" * 40):
+        artifact = artifact or self.REVISION_PREVIA
+        document = review_document.document_from_result(
+            review_document.read_document(""),
+            estado,
+            artifact,
+            artifact["manifest"],
+            artifact.get("review_provider", "opencode-go"),
+            head,
+            tuple(f.id for f in estado.findings if f.id not in previos),
+        )
+        return review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        ).body
+
     def _visible_previo(self, estado):
         # Comentario de la última revisión, en el SHA a…a; el head vivo es c…c.
-        return review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
-            domain.encode_snapshot(estado).block, ""
-        )
+        return self._render_review(estado)
 
     def _pr_api(self, *args, **kw):
         if any("commits/" in str(a) for a in args):
@@ -717,7 +731,11 @@ class CoordinadorComandos(unittest.TestCase):
             "- 🟠 High · `a.py:1` · Fuga A · F1",
             cuerpo,
         )
-        self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
+        self.assertIn("## Detalle del revisor", cuerpo)
+        self.assertEqual(
+            review_document.read_document(cuerpo).review.prose.text,
+            "Texto original del revisor.",
+        )
 
     def _reconciliar_comentario(self, texto):
         falso = self._falso(self._visible_previo(snapshot_base()), [(5, texto)])
@@ -751,9 +769,7 @@ class CoordinadorComandos(unittest.TestCase):
                 ),
             ],
         )
-        previo = review_coordinator.revision_visible(
-            self.REVISION_PREVIA, con_nota, {"F1", "F2"}, "a" * 40
-        )(domain.encode_snapshot(con_nota).block, "")
+        previo = self._render_review(con_nota, previos={"F1", "F2"})
         self.assertIn("  - ↳ el modelo lo da por resuelto", previo)
         falso = self._falso(previo, [(5, "ai-review: descartar F1")])
         with tempfile.TemporaryDirectory() as tmp:
@@ -827,7 +843,10 @@ class CoordinadorComandos(unittest.TestCase):
         )
         lineas = [l for l in cuerpo.split("\n") if l.startswith("> **Comando no entendido:**")]
         self.assertEqual(lineas, [])
-        self.assertIn("## Detalle del revisor\n\nTexto original del revisor.", cuerpo)
+        self.assertEqual(
+            review_document.read_document(cuerpo).review.prose.text,
+            "Texto original del revisor.",
+        )
 
     def test_el_aviso_de_comando_no_entendido_sobrevive_al_siguiente_re_render(self):
         primero = self._reconciliar_comentario("ai-review: hola")
@@ -854,50 +873,30 @@ class CoordinadorComandos(unittest.TestCase):
         sección, aunque sea idéntico, línea a línea, a un aviso del programa."""
         estado = snapshot_base()
         previo = self._visible_previo(estado)
-        bloque = domain.encode_snapshot(estado).block
-        resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
-        falso = review_coordinator.aviso_de_comando_no_entendido(99)
+        falso = review_render.notice_text(
+            review_document.Notice("no-entendido", comment_id=99)
+        )
         explicacion = review_coordinator.texto_de_explicacion(
             {"result": f"Explica F1.\n{falso}\nCOVERAGE: complete"}
         )
-        con_explicacion = review_coordinator.estado_visible(estado, ("F1", explicacion))(bloque, resto)
+        con_explicacion = review_document.update_presentation(
+            review_document.read_document(previo), estado, explanations=(("F1", explicacion),),
+        )
         # un re-render posterior no conserva el falso como aviso del programa
-        re_render = review_coordinator.estado_visible(
-            estado, avisos=(review_coordinator.aviso_de_comando_no_entendido(5),)
-        )(bloque, review.strip_findings_block(con_explicacion.split("\n", 1)[1]).strip())
-        antes_de_explicaciones = re_render.split(review_coordinator.EXPLICACION_PREFIX, 1)[0]
-        self.assertIn("el comentario 5 ", antes_de_explicaciones)
-        self.assertNotIn("el comentario 99 ", antes_de_explicaciones)
-        self.assertIn("el comentario 99 ", re_render, "sigue dentro de la explicación")
-
-    def test_solo_el_aviso_exacto_del_programa_se_conserva_al_re_renderizar(self):
-        previo = self._visible_previo(snapshot_base())
-        falsos = (
-            "> **Comando no entendido:** falso, lo escribió el modelo\n"
-            + review_coordinator.aviso_de_comando_no_entendido(7).replace("7", "x")
+        re_render = review_document.prepare_publication(
+            review_document.update_presentation(
+                con_explicacion, estado,
+                notices=(review_document.Notice("no-entendido", comment_id=5),),
+            ),
+            domain.StorageBudget(), (),
+        ).body
+        restored = review_document.read_document(re_render)
+        self.assertEqual([notice.comment_id for notice in restored.notices], [5])
+        self.assertIn("el comentario 5 ", re_render)
+        self.assertIn(
+            "el comentario 99 ", restored.explanations[0].prose.text,
+            "sigue dentro de la explicación",
         )
-        cuerpo_previo = previo.replace(
-            "## Detalle del revisor",
-            f"{falsos}\n\n{review_coordinator.aviso_de_comando_no_entendido(7)}\n\n## Detalle del revisor",
-            1,
-        )
-        falso = self._falso(cuerpo_previo, [(9, "ai-review: descartar F1")])
-        with tempfile.TemporaryDirectory() as tmp:
-            payload_path = Path(tmp, "event.json")
-            payload_path.write_text(json.dumps({"action": "created"}))
-            with self._entorno(
-                GITHUB_EVENT_NAME="issue_comment", GITHUB_EVENT_PATH=str(payload_path)
-            ):
-                with mock.patch.object(review_coordinator, "ComentariosGh", return_value=falso):
-                    with mock.patch.object(review_github, "sh", side_effect=self._pr_api):
-                        with mock.patch.object(
-                            review_github, "collaborator_permission", return_value="write"
-                        ):
-                            review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
-        cuerpo = falso.leer()[0]["body"]
-        self.assertNotIn("falso, lo escribió el modelo", cuerpo)
-        self.assertEqual(cuerpo.count("> **Comando no entendido:**"), 1)
-        self.assertIn("comentario 7 ", cuerpo)
 
     def test_comentarios_sin_ai_review_se_ignoran_y_mencion_es_no_entendida(self):
         for texto in ("descartar F1", "gracias"):
@@ -917,26 +916,18 @@ class CoordinadorComandos(unittest.TestCase):
         estado = snapshot_base()
         original = self._visible_previo(estado)
         despues = domain.replace(estado, command_cursor=9)
-        decision = domain.Commit(snapshot=despues)
         falso = self._falso(original, [])
-        review_coordinator.publish_checkpoint(
-            decision,
-            {"id": 7, "body": original},
-            falso,
-            visible=review_coordinator.estado_visible(despues),
+        previous = review_document.read_document(original)
+        prepared = review_document.prepare_publication(
+            review_document.update_presentation(previous, despues),
+            domain.StorageBudget(), (),
         )
-        self.assertEqual(
-            falso.patches,
-            [
-                (
-                    7,
-                    original.replace(
-                        domain.encode_snapshot(estado).block,
-                        review_coordinator._cuerpo_con_checkpoint(decision),
-                    ),
-                )
-            ],
+        receipt = review_github.publish_checkpoint(
+            prepared, falso.leer()[0], falso, login="bot",
         )
+        self.assertIsInstance(receipt, review_github.PublishReceipt)
+        self.assertEqual(falso.patches, [(7, prepared.body)])
+        self.assertEqual(review_document.read_document(prepared.body).review, previous.review)
 
     def test_fallo_tras_rerender_reemplaza_el_aviso_anterior(self):
         estados = [domain.replace(snapshot_base(), command_cursor=n) for n in range(4)]
@@ -945,29 +936,30 @@ class CoordinadorComandos(unittest.TestCase):
         completion_previa = review_sticky.reviewed_completion(falso.leer()[0]["body"])
         self.assertIsNotNone(completion_previa)
 
-        def publicar(snapshot, visible):
+        def publicar(snapshot, reason=None):
             observado = falso.leer()[0]
-            review_coordinator.publish_checkpoint(
-                domain.Commit(snapshot=snapshot), observado, falso, visible=visible
+            previous = review_document.read_document(observado["body"])
+            if reason:
+                previous = domain.replace(
+                    previous,
+                    failure=review_document.FailureView(
+                        "c" * 40, "worker-failed", review_document.SafeProse(reason),
+                    ),
+                )
+            prepared = review_document.prepare_publication(
+                review_document.update_presentation(previous, snapshot),
+                domain.StorageBudget(), (),
             )
+            receipt = review_github.publish_checkpoint(prepared, observado, falso, login="bot")
+            self.assertIsInstance(receipt, review_github.PublishReceipt)
             # #92 F1: ningún re-render deja la cabecera ilegible para el worker.
             self.assertEqual(
                 review_sticky.reviewed_completion(falso.leer()[0]["body"]), completion_previa
             )
 
-        publicar(
-            estados[1],
-            review_coordinator.revision_visible(
-                {review_config.ERROR_KEY: "motivo uno"}, estados[1], set(), "c" * 40
-            ),
-        )
-        publicar(estados[2], review_coordinator.estado_visible(estados[2]))
-        publicar(
-            estados[3],
-            review_coordinator.revision_visible(
-                {review_config.ERROR_KEY: "motivo dos"}, estados[3], set(), "c" * 40
-            ),
-        )
+        publicar(estados[1], "motivo uno")
+        publicar(estados[2])
+        publicar(estados[3], "motivo dos")
         cuerpo = falso.leer()[0]["body"]
         self.assertEqual(cuerpo.count("> [!CAUTION]"), 1)
         self.assertIn("motivo dos", cuerpo)
@@ -976,28 +968,38 @@ class CoordinadorComandos(unittest.TestCase):
     def test_explicacion_y_cuerpo_sin_revision_conservan_la_cabecera(self):
         estado = snapshot_base()
         previo = self._visible_previo(estado)
-        bloque = domain.encode_snapshot(estado).block
-        resto = review.strip_findings_block(previo.split("\n", 1)[1]).strip()
-        con_explicacion = review_coordinator.estado_visible(estado, ("F1", "Causa real."))(
-            bloque, resto
+        con_explicacion = review_document.prepare_publication(
+            review_document.update_presentation(
+                review_document.read_document(previo),
+                estado,
+                explanations=(("F1", "Causa real."),),
+            ),
+            domain.StorageBudget(), (),
+        ).body
+        self.assertEqual(
+            review_document.read_document(con_explicacion).explanations[0].prose.text,
+            "Causa real.",
         )
         self.assertEqual(
             review_sticky.reviewed_completion(con_explicacion),
             review_sticky.reviewed_completion(previo),
         )
-        sin_forma = review_coordinator.estado_visible(estado)(
-            bloque,
-            f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
-            f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n\ntexto libre",
+        sin_forma = review_document.prepare_publication(
+            review_document.update_presentation(
+                review_document.read_document(
+                    f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+                    f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
+                    f"{domain.encode_snapshot(estado).block}\n\ntexto libre"
+                ),
+                estado,
+            ),
+            domain.StorageBudget(), (),
+        ).body
+        self.assertEqual(
+            review_document.read_document(sin_forma).historical.text,
+            "texto libre",
         )
         self.assertEqual(review_sticky.reviewed_completion(sin_forma), "complete")
-        self.assertTrue(sin_forma.endswith("texto libre"))
-
-    def test_cuerpo_sin_forma_de_revision_queda_en_el_limite(self):
-        cuerpo = review_coordinator.estado_visible(snapshot_base(), ("F1", "e" * 8000))(
-            "bloque", "x" * review_render.GITHUB_COMMENT_MAX
-        )
-        self.assertEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
 
     def test_explicacion_no_puede_imitar_marcadores_ni_secciones(self):
         texto = review_coordinator.texto_de_explicacion(
@@ -1025,8 +1027,7 @@ class CoordinadorComandos(unittest.TestCase):
     )
 
     def _sin_marcadores_vivos(self, cuerpo, estado):
-        detalle = cuerpo.split(review_render.DETALLE_DEL_REVISOR, 1)[1]
-        detalle = detalle.split("<details><summary>Alcance de la revisión", 1)[0]
+        detalle = review_document.read_document(cuerpo).review.prose.text
         self.assertNotIn("<!--", detalle)
         self.assertIn("&lt;!-- ai-review:sha=" + "9" * 40 + " -->", detalle)
         self.assertEqual(
@@ -1044,47 +1045,39 @@ class CoordinadorComandos(unittest.TestCase):
         artifact = dict(
             self.REVISION_PREVIA, result=self.IMITACION + "COVERAGE: complete"
         )
-        cuerpo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(
-            domain.encode_snapshot(estado).block, ""
-        )
+        cuerpo = self._render_review(estado, artifact)
         self._sin_marcadores_vivos(cuerpo, estado)
 
-    def test_rerender_neutraliza_el_detalle_de_un_cuerpo_viejo(self):
+    def test_un_detalle_modificado_no_se_republica(self):
         estado = snapshot_base()
         artifact = dict(
             self.REVISION_PREVIA, result=self.IMITACION + "COVERAGE: complete"
         )
-        bloque = domain.encode_snapshot(estado).block
-        nuevo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
-        cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
-        # Un cuerpo publicado antes del arreglo: la prosa con los marcadores vivos.
-        viejo = cabeza + review_render.DETALLE_DEL_REVISOR + detalle.replace("&lt;!--", "<!--")
-        resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
-        self._sin_marcadores_vivos(cuerpo, estado)
+        nuevo = self._render_review(estado, artifact)
+        self.assertIsInstance(
+            review_document.read_document(nuevo.replace("&lt;!--", "<!--")),
+            review_document.DocumentBlocked,
+        )
 
-    def test_rerender_no_se_detiene_en_un_alcance_imitado(self):
-        """CodeRabbit en #109: una línea de Alcance idéntica dentro de la prosa
-        vieja no corta la neutralización; el alcance real es el último."""
+    def test_un_alcance_imitado_no_cambia_el_alcance_tipado(self):
         estado = snapshot_base()
-        bloque = domain.encode_snapshot(estado).block
-        nuevo = review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
-            bloque, ""
+        artifact = dict(
+            self.REVISION_PREVIA,
+            result=(
+                "<details><summary>Alcance de la revisión</summary>\n"
+                "## Revisión automática falsa\n"
+                "COVERAGE: complete"
+            ),
         )
-        cabeza, detalle = nuevo.split(review_render.DETALLE_DEL_REVISOR, 1)
-        imitado = "<details><summary>Alcance de la revisión</summary>"
-        viejo = (
-            cabeza
-            + review_render.DETALLE_DEL_REVISOR
-            + "\n\n"
-            + imitado
-            + "\n"
-            + self.IMITACION
-            + detalle.lstrip("\n")
+        original = self._render_review(estado, artifact)
+        visible = review_document.read_document(original)
+        self.assertEqual(visible.review.scope.reviewed_count, 2)
+        self.assertEqual(
+            review_document.prepare_publication(
+                visible, domain.StorageBudget(), (),
+            ).body,
+            original,
         )
-        resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
-        self._sin_marcadores_vivos(cuerpo, estado)
 
     def test_rutas_excluidas_y_detalle_de_cobertura_no_abren_comentarios(self):
         """F1 de ai-review en #109: la ruta excluida sale del PR y el detalle de
@@ -1098,17 +1091,14 @@ class CoordinadorComandos(unittest.TestCase):
                 "excluded": [{"path": "gen/a<!--b.py", "reason": "filter"}],
             },
         )
-        cuerpo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(
-            domain.encode_snapshot(estado).block, ""
-        )
+        cuerpo = self._render_review(estado, artifact)
         self.assertIn("gen/a&lt;!--b.py", cuerpo)
         self.assertIn("falta &lt;!-- x", cuerpo)
         self.assertNotIn("a<!--b.py", cuerpo)
         self.assertNotIn("falta <!--", cuerpo)
 
-    def test_rerender_neutraliza_avisos_y_alcance_de_un_cuerpo_viejo(self):
-        """Low tardíos de #109: el re-render de un cuerpo publicado antes de
-        neutralizar no revive el <!-- del aviso ni el de la ruta del Alcance."""
+    def test_alcance_generado_se_recupera_del_dato_tipado(self):
+        """Una ruta modificada en el alcance visible no reemplaza la vista tipada."""
         estado = snapshot_base()
         artifact = dict(
             self.REVISION_PREVIA,
@@ -1118,33 +1108,32 @@ class CoordinadorComandos(unittest.TestCase):
                 "excluded": [{"path": "gen/a<!--b.py", "reason": "filter"}],
             },
         )
-        bloque = domain.encode_snapshot(estado).block
-        nuevo = review_coordinator.revision_visible(artifact, estado, set(), "a" * 40)(bloque, "")
-        viejo = nuevo.replace("&lt;!--", "<!--")
-        resto = review.strip_findings_block(viejo.split("\n", 1)[1]).strip()
-        cuerpo = review_coordinator.estado_visible(estado)(bloque, resto)
-        self.assertNotIn("a<!--b.py", cuerpo)
-        self.assertNotIn("falta <!--", cuerpo)
-        self.assertIn("gen/a&lt;!--b.py", cuerpo)
-        self.assertIn(review_render.ALCANCE_INICIO, cuerpo)
-        self.assertTrue(cuerpo.rstrip().endswith("</details>"))
+        original = self._render_review(estado, artifact)
+        altered = original.replace("gen/a&lt;!--b.py", "gen/a<!--b.py")
+        restored = review_document.read_document(altered)
+        cuerpo = review_document.prepare_publication(
+            restored, domain.StorageBudget(), (),
+        ).body
+        self.assertEqual(cuerpo, original)
         self.assertEqual(
-            review_sticky.reviewed_completion(cuerpo), review_sticky.reviewed_completion(nuevo)
+            review_sticky.reviewed_completion(cuerpo),
+            review_sticky.reviewed_completion(original),
         )
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(carga.snapshot, estado)
 
-    def test_rerender_neutraliza_el_aviso_de_fallo_de_un_cuerpo_viejo(self):
+    def test_importar_un_aviso_de_fallo_legado_sanea_su_prosa(self):
         estado = snapshot_base()
         bloque = domain.encode_snapshot(estado).block
-        nuevo = review_coordinator.revision_visible(self.REVISION_PREVIA, estado, set(), "a" * 40)(
-            bloque, ""
+        legacy = (
+            f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
+            f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:partial -->\n{bloque}\n"
+            "> [!CAUTION]\n> **No se pudo revisar:** motivo <!-- y"
         )
-        resto = review.strip_findings_block(nuevo.split("\n", 1)[1]).strip()
-        aviso = review_render.caution_banner("motivo <!-- y", "c" * 40, has_previous=True)
-        viejo = review_render.insert_caution_banner(resto, aviso)
-        cuerpo = review_coordinator.estado_visible(estado)(bloque, viejo)
+        cuerpo = review_document.prepare_publication(
+            review_document.read_document(legacy), domain.StorageBudget(), (),
+        ).body
         self.assertNotIn("motivo <!--", cuerpo)
         self.assertIn("motivo &lt;!-- y", cuerpo)
 
@@ -1220,12 +1209,14 @@ class CoordinadorComandos(unittest.TestCase):
                     with mock.patch.object(review_github, "sh", side_effect=gh_falso):
                         review_coordinator.cmd_reconcile(argparse.Namespace(work=tmp))
         cuerpo = falso.leer()[0]["body"]
-        self.assertIn(
-            "## Explicación de F1 · Fuga A\n\n"
-            "La fuga ocurre porque el token se registra.\n#### Detalle del revisor\nimitado"
-            "\n\n## Detalle del revisor\n\nTexto original del revisor.",
-            cuerpo,
+        visible = review_document.read_document(cuerpo)
+        self.assertIn("## Explicación de F1 · Fuga A", cuerpo)
+        self.assertEqual(visible.explanations[0].finding_id, "F1")
+        self.assertEqual(
+            visible.explanations[0].prose.text,
+            "La fuga ocurre porque el token se registra.\n#### Detalle del revisor\nimitado",
         )
+        self.assertEqual(visible.review.prose.text, "Texto original del revisor.")
         self.assertIn(f"<!-- ai-review:sha={'a' * 40} -->", cuerpo)
         self.assertEqual(
             [

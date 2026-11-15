@@ -154,7 +154,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-review-result-request-${{ inputs.request_id }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: "${{ runner.temp }}/ai-review"
+          path: "${{ runner.temp }}/ai-review/result.json"
+          if-no-files-found: error
           retention-days: 7
 
   # Un run despachado con GITHUB_TOKEN no dispara workflow_run al terminar, así

@@ -8,8 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import review_coordinator
-
-import review_render
+import review_document
 import review_domain as domain  # noqa: E402
 from review_context import (  # noqa: E402
     GitRepository,
@@ -88,19 +87,14 @@ def coordinador_acepta(creada, facts, artifact, policy):
 
 
 def comentario_publico(artifact, decision, head):
-    return review_render.compose(
-        artifact,
-        artifact["manifest"],
-        sha=head,
-        provider="opencode-go",
-        findings={
-            "merged": domain.hallazgos_legacy(decision.snapshot),
-            "new_ids": [],
-            "block": artifact["block"],
-            "model_ok": True,
-            "completion": decision.snapshot.completion,
-        },
+    document = review_document.document_from_result(
+        review_document.read_document(""), decision.snapshot,
+        {**artifact, "model_ok": True},
+        artifact["manifest"], "opencode-go", head, (),
     )
+    return review_document.prepare_publication(
+        document, domain.StorageBudget(), (),
+    ).body
 
 
 class RecorteBudgetDegradaLaMarca(unittest.TestCase):

@@ -110,7 +110,9 @@ class GitHubFalso:
 
     def crear(self, body):
         self.escrituras += 1
-        self.comentarios.append({"id": 100 + self.escrituras, "body": body})
+        self.comentarios.append(
+            {"id": 100 + self.escrituras, "body": body, "user": BOT}
+        )
 
     def comentar(self, cid, texto):
         self.comentarios.append(
@@ -244,7 +246,7 @@ def sticky_con_hallazgo():
         command_cursor=0,
     )
     bloque = domain.encode_snapshot(estado).block
-    return {"id": 7, "body": review_coordinator.cuerpo_con_cabecera(bloque, ""), "user": BOT}
+    return {"id": 7, "body": f"{review_sticky.MARKER}\n{bloque}", "user": BOT}
 
 
 class PushNuevoCancelaAlWorkerAnterior(unittest.TestCase):
