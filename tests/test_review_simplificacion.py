@@ -1,8 +1,10 @@
 import json
 import unittest
+from unittest import mock
 
 import review
 import review_domain as domain
+import review_github
 
 
 def bloque(findings, *, next_id=2, seen=0):
@@ -25,6 +27,30 @@ def previo(estado=domain.RESOLVED):
 
 
 class MemoriaOperativa(unittest.TestCase):
+    def test_explicit_dismiss_resolved_finding_wins_over_reopen(self):
+        old = previo(domain.RESOLVED)
+        model = bloque([previo(domain.OPEN)])
+        manifest = {
+            "base": "base", "head": "head", "prev_sha": "prev",
+            "mode": "incremental", "changed_files": ["src/a.py"],
+            "reviewed": ["src/a.py"], "excluded": [],
+        }
+        comment = {"id": 10, "user": "writer", "body": "ai-review: descartar F1"}
+        with mock.patch.object(review_github, "collaborator_permission", return_value="write"):
+            first = review.build_findings(
+                {"result": model}, manifest, {"body": bloque([old])},
+                "o/r", 1, "bot", [comment],
+            )
+            second = review.build_findings(
+                {"result": model}, manifest, {"body": first["block"]},
+                "o/r", 1, "bot", [comment],
+            )
+        for output in (first, second):
+            state = domain.read_snapshot(output["block"]).snapshot
+            self.assertEqual(state.command_cursor, 10)
+            self.assertIsInstance(state.findings[0].status, domain.StatusDismissed)
+        self.assertEqual(len(second["merged"]), 1)
+
     def test_missing_and_valid_memories_are_ready_as_v3(self):
         missing = domain.memoria_operativa(domain.Missing())
         self.assertIsInstance(missing, domain.MemoryReady)

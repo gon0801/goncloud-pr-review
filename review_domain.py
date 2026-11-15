@@ -1191,7 +1191,7 @@ def rutas_de_cambio(manifest):
     return tuple(manifest.get("reviewed", []))
 
 
-def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
+def aplicar_descartes(snapshot, ids, todos=False, comment_id=None, permitir_resueltos=False):
     """Descarta hallazgos ABIERTOS por comando (escritor compatible, T04).
 
     El command_id de cada descarte es el id del comentario que lo ordenó: el
@@ -1205,7 +1205,9 @@ def aplicar_descartes(snapshot, ids, todos=False, comment_id=None):
     hallazgos = list(snapshot.findings)
     descartados = []
     for i, f in enumerate(hallazgos):
-        if not isinstance(f.status, StatusOpen):
+        if not isinstance(f.status, StatusOpen) and not (
+            permitir_resueltos and f.id in ids and isinstance(f.status, StatusResolved)
+        ):
             continue
         if not todos and f.id not in ids:
             continue

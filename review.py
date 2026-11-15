@@ -285,7 +285,9 @@ def cmd_gate(args):
                 repo, pr, login, comments, memoria.snapshot.command_cursor
             )
             prev["state"] = review_domain._legacy_raw_of_snapshot(
-                review_domain.aplicar_descartes(memoria.snapshot, dismiss_ids, dismiss_all)
+                review_domain.aplicar_descartes(
+                    memoria.snapshot, dismiss_ids, dismiss_all, permitir_resueltos=True,
+                )
             )
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(
@@ -738,7 +740,7 @@ def aceptar_reporte_directo(
         )
         dismiss_ids, dismiss_all, seen = set(), False, snapshot.command_cursor
     snapshot = review_domain.aplicar_descartes(
-        snapshot, dismiss_ids, dismiss_all, comment_id=seen
+        snapshot, dismiss_ids, dismiss_all, comment_id=seen, permitir_resueltos=True,
     )
     snapshot = review_domain.avanzar_cursor(snapshot, seen)
     observaciones = [
