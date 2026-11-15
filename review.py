@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import review_coordinator
@@ -718,8 +718,15 @@ def anclas_locadas(snapshot):
     return vistas
 
 
+@dataclass(frozen=True)
+class DirectAccepted:
+    snapshot: review_domain.Snapshot
+    new_ids: tuple[str, ...]
+    model_ok: bool
+
+
 def aceptar_reporte_directo(
-    snapshot, bloque_original, result, manifest, repo, pr, login, comments, policy
+    snapshot, result, manifest, repo, pr, login, comments, policy
 ):
     """El publicador directo adapta los hechos a la aceptación del dominio.
 
@@ -830,38 +837,13 @@ def aceptar_reporte_directo(
     )
     decision = review_domain.accept_report(snapshot, plan, report)
     if isinstance(decision, review_domain.Keep):
-        return {
-            "merged": [],
-            "new_ids": [],
-            "block": bloque_original,
-            "model_ok": model_ok,
-            "keep": decision.reason,
-        }
-    encoded = review_domain.encode_snapshot(
-        decision.snapshot, review_domain.StorageBudget()
-    )
-    if isinstance(encoded, review_domain.CapacityExceeded):
-        motivo = f"desborde ({encoded.needed} bytes para {encoded.limit})"
-        print(
-            f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
-            file=sys.stderr,
-        )
-        return {
-            "merged": [],
-            "new_ids": [],
-            "block": bloque_original,
-            "model_ok": model_ok,
-            "keep": motivo,
-        }
+        return decision
     previos = {f.id for f in snapshot.findings}
-    return {
-        "merged": review_domain.hallazgos_legacy(decision.snapshot),
-        "new_ids": [f.id for f in decision.snapshot.findings if f.id not in previos],
-        "block": encoded.block,
-        "model_ok": model_ok,
-        "completion": decision.snapshot.completion,
-        "no_acreditados": review_domain.resoluciones_sin_acreditar(decision.snapshot),
-    }
+    return DirectAccepted(
+        decision.snapshot,
+        tuple(f.id for f in decision.snapshot.findings if f.id not in previos),
+        model_ok,
+    )
 
 
 def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=None):
@@ -871,23 +853,14 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     memoria = review_domain.memoria_operativa(load)
     if isinstance(memoria, review_domain.MemoryReady):
         return aceptar_reporte_directo(
-            memoria.snapshot, load.block, result, manifest, repo, pr, login, comments, policy
+            memoria.snapshot, result, manifest, repo, pr, login, comments, policy
         )
     motivo = memoria.reason
     print(
         f"ai-review: memoria {motivo} conservada sin modificar (Keep)",
         file=sys.stderr,
     )
-    model_ok = modelo_utilizable(
-        parse_model_findings((result or {}).get("result") or "", conservar_anclas=True)
-    )
-    return {
-        "merged": [],
-        "new_ids": [],
-        "block": memoria.original_block,
-        "model_ok": model_ok,
-        "keep": motivo,
-    }
+    return review_domain.Keep(motivo)
 
 
 def cmd_publish(args):
@@ -934,8 +907,39 @@ def cmd_publish(args):
         )
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
-        if findings.get("keep"):
-            reason = f"memoria de {findings['keep']} conservada; esta versión no la modifica"
+        if isinstance(findings, DirectAccepted):
+            candidate = review_document.document_from_result(
+                document,
+                findings.snapshot,
+                {**result, "model_ok": findings.model_ok},
+                manifest,
+                name,
+                head,
+                findings.new_ids,
+                libro_actualizado(
+                    sticky, manifest, result, _repo_actual(),
+                    findings.model_ok,
+                ) if manifest.get("head") else None,
+            )
+            prepared = review_document.prepare_publication(
+                candidate, review_domain.StorageBudget(), secretos_del_entorno()
+            )
+            if isinstance(prepared, review_document.StateCapacityExceeded):
+                reason = f"desborde ({prepared.needed} bytes para {prepared.limit})"
+                print(
+                    f"ai-review: memoria {reason} conservada sin modificar (Keep)",
+                    file=sys.stderr,
+                )
+                findings = review_domain.Keep(reason)
+            elif isinstance(prepared, (review_domain.CapacityExceeded, review_document.DocumentBlocked)):
+                summary_text = caution_banner(
+                    "comentario sin espacio para el estado; el checkpoint previo se conserva",
+                    head, has_previous=bool(sticky),
+                )
+            else:
+                summary_text = prepared.summary
+        if isinstance(findings, review_domain.Keep):
+            reason = f"memoria de {findings.reason} conservada; esta versión no la modifica"
             if not sticky or not isinstance(
                 review_domain.read_snapshot(sticky["body"]),
                 (review_domain.Valid, review_domain.Legacy),
@@ -960,30 +964,6 @@ def cmd_publish(args):
                 caution_banner(reason, head, has_previous=bool(sticky)),
                 secretos_del_entorno(),
             )
-        else:
-            candidate = review_document.document_from_result(
-                document,
-                review_domain.read_snapshot(findings["block"]).snapshot,
-                {**result, "model_ok": findings.get("model_ok", True)},
-                manifest,
-                name,
-                head,
-                findings["new_ids"],
-                libro_actualizado(
-                    sticky, manifest, result, _repo_actual(),
-                    findings.get("model_ok", True),
-                ) if manifest.get("head") else None,
-            )
-            prepared = review_document.prepare_publication(
-                candidate, review_domain.StorageBudget(), secretos_del_entorno()
-            )
-            if isinstance(prepared, (review_domain.CapacityExceeded, review_document.DocumentBlocked)):
-                summary_text = caution_banner(
-                    "comentario sin espacio para el estado; el checkpoint previo se conserva",
-                    head, has_previous=bool(sticky),
-                )
-            else:
-                summary_text = prepared.summary
 
     adapter = review_coordinator.ComentariosGh(repo, pr)
     if isinstance(prepared, review_domain.CapacityExceeded):
@@ -1009,7 +989,7 @@ def cmd_publish(args):
         print(f"ai-review: escritura incierta ({receipt.motivo})", file=sys.stderr)
         review_github.informar_revision(False)
         sys.exit(1)
-    revisado = ERROR_KEY not in result and not findings.get("keep")
+    revisado = ERROR_KEY not in result and isinstance(findings, DirectAccepted)
     if receipt.recibo.get("sin_texto_visible"):
         print("ai-review: nada visible que mostrar; no se crea sticky")
     elif sticky:

@@ -1193,8 +1193,8 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertNotIn("keep", out, "el perfil ampliado evita el Keep")
-        bloque = out["block"]
+        self.assertIsInstance(out, review.DirectAccepted)
+        bloque = domain.encode_snapshot(out.snapshot).block
         self.assertGreater(len(bloque.encode("utf-8")), 8000, "ayer no cabía")
         self.assertLessEqual(
             len(bloque.encode("utf-8")), domain.StorageBudget().max_bytes

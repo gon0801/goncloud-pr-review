@@ -383,22 +383,20 @@ class RutaDePublicacion(unittest.TestCase):
         out = review.build_findings(
             result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
         )
-        self.assertFalse(out.get("keep"), "el escritor compatible actualiza")
-        self.assertNotEqual(out["block"], sticky_body, "la revisión avanza")
-        de_vuelta = domain.read_snapshot(out["block"])
-        self.assertIsInstance(de_vuelta, domain.Valid)
-        self.assertEqual(de_vuelta.snapshot.schema, 3, "se migra a v3 sin pérdida")
-        ids = [f.id for f in de_vuelta.snapshot.findings]
+        self.assertIsInstance(out, review.DirectAccepted)
+        de_vuelta = out.snapshot
+        self.assertEqual(de_vuelta.schema, 3, "se migra a v3 sin pérdida")
+        ids = [f.id for f in de_vuelta.findings]
         self.assertIn("F1", ids)
         self.assertIn("F2", ids)
         self.assertIn("F3", ids, "lo nuevo del modelo se integra con id asignado")
-        self.assertIn("Hallazgo F-new", [f.title for f in de_vuelta.snapshot.findings])
+        self.assertIn("Hallazgo F-new", [f.title for f in de_vuelta.findings])
         self.assertEqual(
-            next(f.status for f in de_vuelta.snapshot.findings if f.id == "F1"),
+            next(f.status for f in de_vuelta.findings if f.id == "F1"),
             domain.StatusDismissed(command_id=7),
             "un descarte confirmado no reaparece",
         )
-        self.assertEqual(de_vuelta.snapshot.command_cursor, 7)
+        self.assertEqual(de_vuelta.command_cursor, 7)
 
     def test_sticky_de_version_futura_se_conserva(self):
         sticky_body = (
@@ -410,8 +408,8 @@ class RutaDePublicacion(unittest.TestCase):
         out = review.build_findings(
             result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
         )
-        self.assertEqual(out["block"], sticky_body)
-        self.assertTrue(out.get("keep"))
+        self.assertIsInstance(out, domain.Keep)
+        self.assertIsInstance(domain.read_snapshot(sticky_body), domain.Future)
 
     def test_b2_null_en_claves_v2_da_invalid_y_no_trona(self):
         for clave in ("pending_requests", "related_anchors", "evidence"):
@@ -2135,10 +2133,9 @@ class ObservacionDeEntrada(unittest.TestCase):
             {"base": "b" * 40, "head": "c" * 40, "reviewed": ["a.py"], "mode": "full"},
             None, "o/r", "1", "bot", [],
         )
-        loaded = domain.read_snapshot(result["block"])
-        self.assertIsInstance(loaded, domain.Valid)
-        self.assertEqual([f.title for f in loaded.snapshot.findings], ["otro"])
-        self.assertEqual(loaded.snapshot.completion, domain.PARTIAL)
+        self.assertIsInstance(result, review.DirectAccepted)
+        self.assertEqual([f.title for f in result.snapshot.findings], ["otro"])
+        self.assertEqual(result.snapshot.completion, domain.PARTIAL)
 
     def test_bloque_con_anclas_se_parsea_a_located(self):
         entrada = {
@@ -2198,9 +2195,10 @@ class ObservacionDeEntrada(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertIsInstance(directo["block"], str)
+        self.assertIsInstance(directo, review.DirectAccepted)
         self.assertEqual(
-            [(f["id"], f["title"], f["file"]) for f in directo["merged"]], esperados
+            [(f.id, f.title, f.primary_anchor.path) for f in directo.snapshot.findings],
+            esperados,
         )
 
         revision = domain.Revision(
@@ -3826,7 +3824,7 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
             "o/r", 1, "bot", [],
         )
         self.assertEqual(
-            [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
+            [(f.id, f.severity, f.title) for f in directa.snapshot.findings],
             self._resumen(coordinada),
         )
 
@@ -3855,7 +3853,7 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
                     None, "o/r", 1, "bot", [],
                 )
                 self.assertEqual(
-                    [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
+                    [(f.id, f.severity, f.title) for f in directa.snapshot.findings],
                     self._resumen(coordinada),
                 )
 

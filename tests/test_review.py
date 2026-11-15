@@ -3946,12 +3946,13 @@ class Workflows(unittest.TestCase):
             artefacto = Path(tmp) / "result.json"
             rid = json.loads(artefacto.read_text()).get("request_id") if corrida else 0
             nombre = f"ai-review-result-request-{rid}-run-{corrida}-attempt-1"
-            if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+            if "/actions/workflows/ai-review-worker.yml/runs" in ruta or ruta.endswith(f"/actions/runs/{corrida}"):
                 runs = []
                 if corrida:
                     runs.append(
                         {
                             "id": corrida,
+                            "event": "workflow_dispatch",
                             "display_title": f"PR 1 solicitud {rid}",
                             "path": ".github/workflows/"
                             + ("otro.yml" if corrida == 78 else "ai-review-worker.yml"),
@@ -3963,7 +3964,9 @@ class Workflows(unittest.TestCase):
                             "status": "completed",
                         }
                     )
-                return mock.Mock(stdout=json.dumps({"workflow_runs": runs}))
+                if ruta.endswith(f"/actions/runs/{corrida}"):
+                    return mock.Mock(stdout=json.dumps(runs[0]))
+                return mock.Mock(stdout=json.dumps([{"total_count": len(runs), "workflow_runs": runs}]))
             if ruta.endswith(f"/actions/runs/{corrida}/artifacts?per_page=100"):
                 return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
             if args[:3] == ("gh", "run", "download"):
@@ -6918,8 +6921,8 @@ class BlockingFixes(unittest.TestCase):
             "el chequeo de reversión sólo mira los archivos cambiados en este push",
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]],
-            [("F1", "open"), ("F2", "resolved")],
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusOpen), ("F2", review_domain.StatusResolved)],
         )
 
     def test_empty_detail_with_a_valid_block_says_nothing_new(self):
@@ -6980,12 +6983,12 @@ class BlockingFixes(unittest.TestCase):
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", comments
             )
             self.assertEqual(
-                [(f["id"], f["state"]) for f in first["merged"]],
-                [("F1", "dismissed"), ("F2", "open")],
+                [(f.id, type(f.status)) for f in first.snapshot.findings],
+                [("F1", review_domain.StatusDismissed), ("F2", review_domain.StatusOpen)],
             )
             sticky2 = dict(
                 sticky,
-                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
+                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{review_domain.encode_snapshot(first.snapshot).block}\nx",
             )
             again = review.build_findings(
                 {
@@ -7000,8 +7003,8 @@ class BlockingFixes(unittest.TestCase):
                 [sticky2, comments[1]],
             )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in again["merged"]],
-            [("F1", "dismissed"), ("F2", "open")],
+            [(f.id, type(f.status)) for f in again.snapshot.findings],
+            [("F1", review_domain.StatusDismissed), ("F2", review_domain.StatusOpen)],
         )
 
     def test_rerun_of_the_same_commit_can_not_resolve(self):
@@ -7024,7 +7027,8 @@ class BlockingFixes(unittest.TestCase):
             result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky]
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")]
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusOpen)],
         )
 
     def test_repeated_prev_issue_as_new_keeps_its_old_id(self):
@@ -7085,8 +7089,8 @@ class BlockingFixes(unittest.TestCase):
             result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky]
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]],
-            [("F1", "resolved"), ("F2", "open")],
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusResolved), ("F2", review_domain.StatusOpen)],
         )
 
     def test_unverified_dismiss_is_retried_on_the_next_push(self):
@@ -7589,10 +7593,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 )
                 bloque0 = original.block if schema == 3 else original
                 r1 = publicar(bloque0, schema, {"F1"}, "e" * 40)
-                self.assertIsNone(r1.get("keep"), f"schema {schema}: no debe ser Keep")
-                carga1 = domain.read_snapshot(r1["block"])
-                self.assertIsInstance(carga1, domain.Valid)
-                s1 = carga1.snapshot
+                self.assertIsInstance(r1, review.DirectAccepted)
+                s1 = r1.snapshot
                 self.assertEqual(s1.schema, 3)
                 self.assertEqual(s1.revision.head_sha, "e" * 40)
                 f1 = next(f for f in s1.findings if f.id == "F1")
@@ -7607,11 +7609,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     any(r.command_id == 99 for r in s1.receipts),
                     "el descarte deja su recibo en schema 3",
                 )
-                r2 = publicar(r1["block"], schema, set(), "f" * 40)
-                self.assertIsNone(r2.get("keep"))
-                carga2 = domain.read_snapshot(r2["block"])
-                self.assertIsInstance(carga2, domain.Valid)
-                s2 = carga2.snapshot
+                r2 = publicar(domain.encode_snapshot(s1).block, schema, set(), "f" * 40)
+                self.assertIsInstance(r2, review.DirectAccepted)
+                s2 = r2.snapshot
                 self.assertEqual(s2.schema, 3)
                 self.assertEqual(s2.revision.head_sha, "f" * 40)
                 f1b = next(f for f in s2.findings if f.id == "F1")
@@ -7709,8 +7709,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         "bot",
                         [],
                     )
-                self.assertIsNone(r.get("keep"))
-                snapshot = domain.read_snapshot(r["block"]).snapshot
+                self.assertIsInstance(r, review.DirectAccepted)
+                snapshot = r.snapshot
                 f1 = next(f for f in snapshot.findings if f.id == "F1")
                 f2 = next(f for f in snapshot.findings if f.id == "F2")
                 self.assertIsInstance(
@@ -7819,10 +7819,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     "bot",
                     [],
                 )
-            self.assertIsNone(r.get("keep"))
+            self.assertIsInstance(r, review.DirectAccepted)
             return next(
                 f
-                for f in domain.read_snapshot(r["block"]).snapshot.findings
+                for f in r.snapshot.findings
                 if f.id == fid
             )
 
@@ -7913,14 +7913,12 @@ class PersistenciaSinPerdida(unittest.TestCase):
             findings = review.build_findings(
                 {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
             )
-        self.assertIsNone(findings.get("keep"))
-        loaded = domain.read_snapshot(findings["block"])
-        self.assertIsInstance(loaded, domain.Valid)
+        self.assertIsInstance(findings, review.DirectAccepted)
         document = review_document.document_from_result(
-            review_document.read_document(previo), loaded.snapshot,
-            {"result": modelo, "model_ok": findings.get("model_ok", True)},
+            review_document.read_document(previo), findings.snapshot,
+            {"result": modelo, "model_ok": findings.model_ok},
             {"reviewed": delta, "excluded": [], **manifest},
-            "opencode-go", "e" * 40, tuple(findings["new_ids"]),
+            "opencode-go", "e" * 40, findings.new_ids,
         )
         prepared = review_document.prepare_publication(
             document, domain.StorageBudget(), (),
@@ -7936,7 +7934,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 findings, cuerpo = self._publicar_resuelto(
                     ["README.md"], [], "F1 quedó resuelto.", modo=modo
                 )
-                self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+                self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
                 siguen = cuerpo[cuerpo.index("## Siguen abiertos") :]
                 self.assertIn(
                     f"· F1\n  - ↳ {self.MOTIVO}\n", siguen.split("## Detalle")[0]
@@ -8084,17 +8082,18 @@ class PersistenciaSinPerdida(unittest.TestCase):
         findings, cuerpo = self._publicar_resuelto(
             ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], "F1 quedó resuelto."
         )
-        self.assertEqual(tuple(findings["no_acreditados"]), ())
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ())
         self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
         self.assertIn("**Veredicto:** sin problemas abiertos (1 resuelto).", cuerpo)
 
     def test_el_motivo_no_sobrevive_a_una_pasada_que_no_repite_el_reclamo(self):
         findings, _ = self._publicar_resuelto(["README.md"], [], "F1 resuelto.")
-        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
         siguiente, cuerpo = self._publicar_resuelto(
-            ["README.md"], [], "F1 sigue.", previo=findings["block"], estado="open"
+            ["README.md"], [], "F1 sigue.",
+            previo=review_domain.encode_snapshot(findings.snapshot).block, estado="open"
         )
-        self.assertEqual(tuple(siguiente["no_acreditados"]), ())
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(siguiente.snapshot), ())
         self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
 
     def test_camino_legado_tambien_explica_la_resolucion_no_aceptada(self):
@@ -8119,7 +8118,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         findings, cuerpo = self._publicar_resuelto(
             ["README.md"], [], "F1 resuelto.", previo=previo
         )
-        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
         self.assertIn(f"· F1\n  - ↳ {self.MOTIVO}\n", cuerpo)
 
     def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
@@ -8202,25 +8201,21 @@ class PersistenciaSinPerdida(unittest.TestCase):
         for schema in (2, 3):
             with self.subTest(schema=schema):
                 r = publicar(estado(schema), schema, True)
-                self.assertIsNone(r.get("keep"))
+                self.assertIsInstance(r, review.DirectAccepted)
                 self.assertEqual(
-                    r["new_ids"],
-                    ["F2"],
+                    r.new_ids,
+                    ("F2",),
                     "lo nuevo del modelo se marca como nuevo",
                 )
-                carga = domain.read_snapshot(r["block"])
-                self.assertIsInstance(carga, domain.Valid)
-                self.assertEqual(carga.snapshot.revision.head_sha, "e" * 40)
+                self.assertEqual(r.snapshot.revision.head_sha, "e" * 40)
 
                 sin_base = publicar(estado(schema), schema, False)
-                self.assertIsNone(
-                    sin_base.get("keep"),
+                self.assertIsInstance(
+                    sin_base, review.DirectAccepted,
                     "sin base válida la revisión no avanza pero se publica",
                 )
-                carga = domain.read_snapshot(sin_base["block"])
-                self.assertIsInstance(carga, domain.Valid)
                 self.assertEqual(
-                    carga.snapshot.revision.head_sha,
+                    sin_base.snapshot.revision.head_sha,
                     "c" * 40,
                     "la revisión previa se conserva",
                 )
@@ -8298,8 +8293,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         "bot",
                         [],
                     )
-                self.assertIsNone(r.get("keep"), "el re-run del mismo sha sí publica")
-                snapshot = domain.read_snapshot(r["block"]).snapshot
+                self.assertIsInstance(r, review.DirectAccepted, "el re-run del mismo sha sí publica")
+                snapshot = r.snapshot
                 f1 = next(f for f in snapshot.findings if f.id == "F1")
                 self.assertIsInstance(
                     f1.status,
@@ -8429,10 +8424,15 @@ class PersistenciaSinPerdida(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertTrue(out.get("keep"), "desborde -> Keep")
-        self.assertIn("desborde", out["keep"])
-        self.assertEqual(out["block"], bloque_sticky, "bloque anterior idéntico")
-        load_back = __import__("review_domain").read_snapshot(out["block"])
+        self.assertIsInstance(out, review.DirectAccepted)
+        candidate = review_document.document_from_result(
+            review_document.read_document(sticky_body), out.snapshot, result,
+            dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+            "opencode-go", "c" * 40, out.new_ids,
+        )
+        overflow = review_document.prepare_publication(candidate)
+        self.assertIsInstance(overflow, review_document.StateCapacityExceeded)
+        load_back = review_domain.read_snapshot(bloque_sticky)
         por_id = {f["id"]: f for f in load_back.raw["findings"]}
         self.assertEqual(por_id["F1"]["state"], "dismissed")
         self.assertEqual(
@@ -8459,6 +8459,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         review_github, "fetch_all_comments", return_value=[sticky]
                     ),
                     mock.patch.object(review_github, "sh") as shell,
+                    mock.patch.object(review, "libro_actualizado", return_value=None),
+                    mock.patch.object(review, "_repo_actual", return_value=None),
                 ):
                     with self.assertRaises(SystemExit) as caught:
                         review.cmd_publish(argparse.Namespace(work=str(work)))
@@ -8579,6 +8581,8 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                         review_github, "fetch_all_comments", return_value=comments
                     ),
                     mock.patch.object(review_github, "sh") as writes,
+                    mock.patch.object(review, "libro_actualizado", return_value=None),
+                    mock.patch.object(review, "_repo_actual", return_value=None),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
                     writes.assert_not_called()
@@ -8604,12 +8608,11 @@ class CableadoIdentidad(unittest.TestCase):
     """F0 r7 R-C: env finding_identity validado antes del modelo."""
 
     def _cuerpo_de_aceptacion(self, accepted, result, manifest, head):
-        loaded = review_domain.read_snapshot(accepted["block"])
-        self.assertIsInstance(loaded, review_domain.Valid)
+        self.assertIsInstance(accepted, review.DirectAccepted)
         document = review_document.document_from_result(
-            review_document.read_document(""), loaded.snapshot,
-            {**result, "model_ok": accepted.get("model_ok", True)},
-            manifest, "opencode-go", head, tuple(accepted.get("new_ids", ())),
+            review_document.read_document(""), accepted.snapshot,
+            {**result, "model_ok": accepted.model_ok},
+            manifest, "opencode-go", head, accepted.new_ids,
         )
         prepared = review_document.prepare_publication(
             document, review_domain.StorageBudget(), (),
@@ -8867,17 +8870,13 @@ class CableadoIdentidad(unittest.TestCase):
                     hechos = review.hechos_de_repo(manifest, set())
                 finally:
                     os.chdir(cwd)
-            self.assertIsNone(
-                out.get("keep"), "anchors pasa por la aceptación del dominio"
-            )
+            self.assertIsInstance(out, review.DirectAccepted)
             self.assertEqual(
                 hechos.changed_paths,
                 ("app.py",),
                 "los hechos usan el delta real, no `reviewed`",
             )
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
-            snap = carga.snapshot
+            snap = out.snapshot
             por_id = {f.id: f for f in snap.findings}
             self.assertEqual(
                 [f.id for f in snap.findings], ["F1", "F2", "F3"], "IDs estables"
@@ -8902,7 +8901,7 @@ class CableadoIdentidad(unittest.TestCase):
                 "el resultado conserva su SHA real",
             )
             self.assertEqual(
-                out["completion"],
+                out.snapshot.completion,
                 domain.COMPLETE_CLAIM,
             )
             cuerpo = self._cuerpo_de_aceptacion(
@@ -8962,7 +8961,7 @@ class CableadoIdentidad(unittest.TestCase):
                     finally:
                         os.chdir(cwd)
                     self.assertEqual(
-                        out["completion"],
+                        out.snapshot.completion,
                         domain.PARTIAL,
                         "archivo excluido: omisión obligatoria, no complete",
                     )
@@ -8987,8 +8986,8 @@ class CableadoIdentidad(unittest.TestCase):
             "excluded": [],
         }
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
-        self.assertFalse(out["model_ok"])
-        self.assertEqual(out["completion"], domain.PARTIAL)
+        self.assertFalse(out.model_ok)
+        self.assertEqual(out.snapshot.completion, domain.PARTIAL)
         cuerpo = self._cuerpo_de_aceptacion(
             out, resultado, manifest, "c" * 40,
         )
@@ -9130,14 +9129,12 @@ class CableadoIdentidad(unittest.TestCase):
                 out = review.build_findings(
                     {"result": modelo}, manifest, sticky, "o/r", 1, "bot", []
                 )
-                self.assertIsNone(out.get("keep"))
-                carga = domain.read_snapshot(out["block"])
-                self.assertIsInstance(carga, domain.Valid)
+                self.assertIsInstance(out, review.DirectAccepted)
                 self.assertEqual(
-                    [f.title for f in carga.snapshot.findings],
+                    [f.title for f in out.snapshot.findings],
                     ["Dependencia sin fijar"],
                 )
-                self.assertIsNone(carga.snapshot.findings[0].primary_anchor.line)
+                self.assertIsNone(out.snapshot.findings[0].primary_anchor.line)
 
     def test_runtime_cortado_degrada_la_cobertura(self):
         import review_domain as domain
@@ -9178,7 +9175,7 @@ class CableadoIdentidad(unittest.TestCase):
                 )
             finally:
                 os.chdir(cwd)
-        self.assertEqual(out["completion"], domain.PARTIAL)
+        self.assertEqual(out.snapshot.completion, domain.PARTIAL)
         cuerpo = self._cuerpo_de_aceptacion(
             out, resultado, manifest, base,
         )
@@ -9261,10 +9258,8 @@ class CableadoIdentidad(unittest.TestCase):
                 )
             finally:
                 os.chdir(cwd)
-            self.assertIsNone(out.get("keep"))
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
-            f1 = {f.id: f for f in carga.snapshot.findings}["F1"]
+            self.assertIsInstance(out, review.DirectAccepted)
+            f1 = {f.id: f for f in out.snapshot.findings}["F1"]
             self.assertIsInstance(f1.status, domain.StatusOpen)
 
     def test_el_marcador_visible_nace_de_la_cobertura_persistida(self):
@@ -9370,16 +9365,14 @@ class CableadoIdentidad(unittest.TestCase):
                     )
                 finally:
                     os.chdir(cwd)
-            self.assertIsNone(out.get("keep"))
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
+            self.assertIsInstance(out, review.DirectAccepted)
             self.assertEqual(
-                [f.id for f in carga.snapshot.findings],
+                [f.id for f in out.snapshot.findings],
                 ["F1"],
                 "la cita sobre la ruta del delta verifica aunque el manifiesto no la liste",
             )
             self.assertIsInstance(
-                carga.snapshot.findings[0].status,
+                out.snapshot.findings[0].status,
                 domain.StatusDismissed,
                 "el descartado se reconoce por digest y no revive ni se duplica",
             )
@@ -10116,17 +10109,18 @@ class ConservacionAlDesbordar(unittest.TestCase):
                 "bot",
                 [],
             )
-        self.assertEqual(
-            out.get("keep") and "desborde" in out["keep"],
-            True,
-            "el desborde conserva la memoria (Keep)",
+        self.assertIsInstance(out, review.DirectAccepted)
+        candidate = review_document.document_from_result(
+            review_document.read_document(sticky_body), out.snapshot,
+            self.modelo_de_60(),
+            dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+            "opencode-go", "c" * 40, out.new_ids,
         )
-        self.assertEqual(
-            out["block"],
-            domain.encode_snapshot(snapshot),
-            "el bloque previo queda byte-idéntico (conservación)",
+        self.assertIsInstance(
+            review_document.prepare_publication(candidate),
+            review_document.StateCapacityExceeded,
         )
-        de_vuelta = domain.read_snapshot(out["block"])
+        de_vuelta = domain.read_snapshot(sticky_body)
         self.assertIsInstance(de_vuelta, domain.Valid)
         confirmado = de_vuelta.snapshot
         self.assertEqual(confirmado.revision.head_sha, "d" * 40)

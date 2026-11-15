@@ -1178,6 +1178,7 @@ class CoordinadorComandos(unittest.TestCase):
         }
         corrida = {
             "id": 77,
+            "event": "workflow_dispatch",
             "display_title": f"PR 1 solicitud {work[0].id}",
             "path": ".github/workflows/ai-review-worker.yml",
             "head_branch": "main",
@@ -1194,7 +1195,9 @@ class CoordinadorComandos(unittest.TestCase):
                 (destino / "result.json").write_text(json.dumps(artifact))
                 return mock.Mock(stdout="")
             if "/actions/workflows/ai-review-worker.yml/runs" in args[2]:
-                return mock.Mock(stdout=json.dumps({"workflow_runs": [corrida]}))
+                return mock.Mock(stdout=json.dumps([{"total_count": 1, "workflow_runs": [corrida]}]))
+            if args[2].endswith("/actions/runs/77"):
+                return mock.Mock(stdout=json.dumps(corrida))
             if args[2].endswith("/actions/runs/77/artifacts?per_page=100"):
                 return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
             return self._pr_api(*args, **kw)

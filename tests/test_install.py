@@ -1073,10 +1073,8 @@ class CompatibleRollback(InstaladorTest):
             "github-actions[bot]",
             comentarios,
         )
-        self.assertNotIn(
-            "keep", salida, f"la actualización del retorno no fue Keep: {salida}"
-        )
-        bloque = salida["block"]
+        self.assertIsInstance(salida, review.DirectAccepted)
+        bloque = domain.encode_snapshot(salida.snapshot).block
         recarga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
         self.assertIsInstance(recarga, domain.Valid)
         final = recarga.snapshot

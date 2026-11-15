@@ -457,12 +457,17 @@ def _with_notice(document, kind):
     return replace(document, notices=document.notices + (notice,))
 
 
+@dataclass
+class StateCapacityExceeded(domain.CapacityExceeded):
+    pass
+
+
 def prepare_publication(document, budget=None, secrets=()):
     budget = budget or domain.StorageBudget()
     snapshot = domain.snapshot_a_v3(document.memory)
     encoded = domain.encode_snapshot(snapshot, budget=budget)
     if isinstance(encoded, domain.CapacityExceeded):
-        return encoded
+        return StateCapacityExceeded(encoded.limit, encoded.needed)
     block = encoded.block
     if secrets:
         source = json.loads(block[len(domain.FINDINGS_PREFIX):-len(domain.FINDINGS_SUFFIX)])
