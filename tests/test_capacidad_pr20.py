@@ -1118,8 +1118,8 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
         cuerpo, llamadas, revisado = self._correr([sticky], cuantos=3)
         self.assertEqual(len(llamadas), 1)
         carga = domain.read_snapshot(cuerpo)
-        self.assertIsInstance(carga, domain.Legacy)
-        self.assertEqual(len(carga.raw["findings"]), 3)
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(len(carga.snapshot.findings), 3)
         self.assertEqual(carga.snapshot.findings[-1].id, "F3")
         self.assertNotIn(review_render.CAUTION_MARK, cuerpo)
         self.assertIn("reviewed=true", revisado)
@@ -1192,9 +1192,9 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
             len(bloque.encode("utf-8")), domain.StorageBudget().max_bytes
         )
         carga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
-        self.assertIsInstance(carga, domain.Legacy)
-        self.assertEqual(len(carga.raw["findings"]), 62)
-        self.assertEqual(carga.raw["next"], 63)
+        self.assertIsInstance(carga, domain.Valid)
+        self.assertEqual(len(carga.snapshot.findings), 62)
+        self.assertEqual(carga.snapshot.next_id, 63)
 
 
 class ElArmadorDelStickyRechazaElDesborde(unittest.TestCase):

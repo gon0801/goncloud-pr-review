@@ -323,7 +323,7 @@ class VueltaDeCierre(unittest.TestCase):
         self.assertAlmostEqual(revision["total_cost_usd"], 0.004)
         self.assertEqual(revision["usage"], {"input_tokens": 400, "output_tokens": 80})
 
-    def test_el_artifact_no_lleva_la_llave_en_la_salida_cruda_de_las_vueltas(self):
+    def test_el_resultado_exportado_no_lleva_la_llave_de_las_vueltas(self):
         llave = "sk-go-key-123"
         con_llave = dict(CIERRE, result=f"la llave es {llave}\n" + CIERRE["result"])
         self.correr([(900, SIN_TURNOS), (40, con_llave)])
@@ -332,11 +332,9 @@ class VueltaDeCierre(unittest.TestCase):
         )
         with mock.patch.dict(os.environ, {"API_KEY": llave}):
             self.cerrar_para_el_coordinador()
-        for cruda in ("cierre.json", "repair.json"):
-            with self.subTest(archivo=cruda):
-                texto = (self.work / cruda).read_text()
-                self.assertNotIn(llave, texto)
-                self.assertIn("[REDACTED]", json.loads(texto)["result"])
+        texto = (self.work / "result.json").read_text()
+        self.assertNotIn(llave, texto)
+        self.assertIn("[REDACTED]", json.loads(texto)["result"])
 
     def test_una_vuelta_que_tambien_agota_turnos_suma_su_consumo(self):
         otra_vez = dict(SIN_TURNOS, num_turns=3, total_cost_usd=0.43)

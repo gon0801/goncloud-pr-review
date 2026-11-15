@@ -473,34 +473,10 @@ def _estado_actual(sticky):
     """Estado migrado a v3 para el coordinador; None sólo con memoria
     inválida o de versión futura (se conserva, como en cmd_publish). Un
     sticky sin bloque de memoria es ausencia real: arranca vacío."""
-    if sticky:
-        load = review_domain.read_snapshot(sticky["body"])
-        if isinstance(load, review_domain.Valid):
-            if load.snapshot.schema == 3:
-                return load.snapshot
-            return review_domain.snapshot_a_v3(load.snapshot)
-        if isinstance(load, review_domain.Legacy):
-            return review_domain.snapshot_a_v3(load.snapshot)
-        if isinstance(load, review_domain.Missing):
-            return review_domain.Snapshot(
-                schema=3,
-                generation=1,
-                revision=None,
-                next_id=1,
-                completion=review_domain.UNKNOWN,
-                findings=[],
-                command_cursor=0,
-            )
-        return None
-    return review_domain.Snapshot(
-        schema=3,
-        generation=1,
-        revision=None,
-        next_id=1,
-        completion=review_domain.UNKNOWN,
-        findings=[],
-        command_cursor=0,
+    memoria = review_domain.memoria_operativa(
+        review_domain.read_snapshot(sticky["body"] if sticky else "")
     )
+    return memoria.snapshot if isinstance(memoria, review_domain.MemoryReady) else None
 
 
 def _comandos_de_comentarios(comentarios, login, cursor):

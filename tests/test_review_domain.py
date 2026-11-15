@@ -387,7 +387,7 @@ class RutaDePublicacion(unittest.TestCase):
         self.assertNotEqual(out["block"], sticky_body, "la revisión avanza")
         de_vuelta = domain.read_snapshot(out["block"])
         self.assertIsInstance(de_vuelta, domain.Valid)
-        self.assertEqual(de_vuelta.snapshot.schema, 2, "no se degrada a legacy")
+        self.assertEqual(de_vuelta.snapshot.schema, 3, "se migra a v3 sin pérdida")
         ids = [f.id for f in de_vuelta.snapshot.findings]
         self.assertIn("F1", ids)
         self.assertIn("F2", ids)
@@ -567,7 +567,7 @@ class PublicacionConMemoriaV2(unittest.TestCase):
             body,
             "sin cobertura declarada no se confirma complete",
         )
-        self.assertIn('"schema":2', body, "la memoria v2 se conserva en schema 2")
+        self.assertIn('"schema":3', body, "la memoria v2 se migra a schema 3")
         self.assertIn("bug nuevo z", body, "lo nuevo del modelo se integra")
         self.assertIn('"command_id":7', body, "el descarte F1 conserva su command_id")
         self.assertIn("bug x", body, "el descartado sigue listado como descartado")
@@ -3900,24 +3900,18 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
     def test_el_mismo_reporte_con_ids_equivale_a_la_ruta_directa(self):
         primero = self._aceptar(self._vacio(), "38017166195")
         coordinada = self._aceptar_entradas(primero, self._segundo_push_con_ids())
-        previo_directo, _ = review.merge_findings(
-            None,
-            {"findings": OBSERVACIONES_PILOTO2["38017166195"]},
-            changed_files=["piloto/caso_t16.py"],
-            reverted_files=[],
-            dismiss_ids=[],
-            dismiss_all=False,
-        )
-        directa, _ = review.merge_findings(
-            previo_directo,
-            {"findings": self._segundo_push_con_ids()},
-            changed_files=["piloto/caso_t16.py"],
-            reverted_files=[],
-            dismiss_ids=[],
-            dismiss_all=False,
+        bloque = domain.encode_snapshot(primero)
+        modelo = domain.FINDINGS_PREFIX + json.dumps(
+            {"findings": self._segundo_push_con_ids(), "next": 1}
+        ) + domain.FINDINGS_SUFFIX
+        directa = review.build_findings(
+            {"result": modelo},
+            {"mode": "incremental", "changed_files": ["piloto/caso_t16.py"], "reviewed": ["piloto/caso_t16.py"]},
+            {"body": bloque.block if isinstance(bloque, domain.EncodedCheckpoint) else bloque},
+            "o/r", 1, "bot", [],
         )
         self.assertEqual(
-            [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
+            [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
             self._resumen(coordinada),
         )
 
@@ -3937,16 +3931,16 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
         for run in ("38017166195", "38017336748"):
             with self.subTest(run=run):
                 coordinada = self._aceptar(self._vacio(), run)
-                directa, _ = review.merge_findings(
-                    None,
-                    {"findings": OBSERVACIONES_PILOTO2[run]},
-                    changed_files=["piloto/caso_t16.py"],
-                    reverted_files=[],
-                    dismiss_ids=[],
-                    dismiss_all=False,
+                modelo = domain.FINDINGS_PREFIX + json.dumps(
+                    {"findings": OBSERVACIONES_PILOTO2[run], "next": 1}
+                ) + domain.FINDINGS_SUFFIX
+                directa = review.build_findings(
+                    {"result": modelo},
+                    {"mode": "full", "changed_files": ["piloto/caso_t16.py"], "reviewed": ["piloto/caso_t16.py"]},
+                    None, "o/r", 1, "bot", [],
                 )
                 self.assertEqual(
-                    [(f["id"], f["severity"], f["title"]) for f in directa["findings"]],
+                    [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
                     self._resumen(coordinada),
                 )
 

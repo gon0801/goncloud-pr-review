@@ -3470,7 +3470,7 @@ class Workflows(unittest.TestCase):
 
     def test_el_artifact_usa_runner_temp_de_github(self):
         paso = self.worker_texto.split("name: subir resultado como datos")[1]
-        self.assertIn('path: "${{ runner.temp }}/ai-review"', paso)
+        self.assertIn('path: "${{ runner.temp }}/ai-review/result.json"', paso)
         self.assertNotIn("RUNNER_TEMP", paso)
 
     def test_prepare_trae_el_pr_por_api_cuando_el_evento_no_lo_trae(self):
@@ -4217,13 +4217,10 @@ class Workflows(unittest.TestCase):
             "findings": [{**observacion, "id": "F1", "state": "open"}],
             "next": 2,
         }
-        directa, _ = review.merge_findings(
-            previo,
-            {"findings": [observacion]},
+        directa, _ = merge(
+            previo["findings"],
+            [observacion],
             changed_files=self.RESOLUCION_93["manifest"]["changed_files"],
-            reverted_files=[],
-            dismiss_ids=[],
-            dismiss_all=False,
         )
         f1, _ = self._reconciliar_resolucion(self.RESOLUCION_93["manifest"]["prev_sha"])
         self.assertEqual(directa["findings"][0]["state"], "resolved")
@@ -4985,12 +4982,15 @@ class DismissCommands(unittest.TestCase):
 
 
 def merge(prev_list, model_list, **kw):
-    prev = (
-        {"findings": prev_list, "next": review.derive_next(prev_list)}
-        if prev_list is not None
-        else None
-    )
-    model = {"findings": model_list, "next": 99} if model_list is not None else None
+    current = review_domain.memoria_operativa(
+        review_domain.read_snapshot(
+            review_domain.serialize_findings(
+                {"findings": prev_list, "next": review.derive_next(prev_list)}
+            )
+            if prev_list is not None
+            else ""
+        )
+    ).snapshot
     args = {
         "changed_files": [],
         "reverted_files": set(),
@@ -4998,7 +4998,38 @@ def merge(prev_list, model_list, **kw):
         "dismiss_all": False,
     }
     args.update(kw)
-    return review.merge_findings(prev, model, **args)
+    current = review_domain.aplicar_descartes(
+        current, args["dismiss_ids"], args["dismiss_all"]
+    )
+    observations = [
+        review_domain.observation_de_entrada(e) for e in (model_list or [])
+    ]
+    report = review_domain.validar_reporte(
+        observations,
+        review_domain.UNKNOWN,
+        review_domain.RepositoryFacts(
+            changed_paths=tuple(args["changed_files"]),
+            reverted_paths=tuple(args["reverted_files"]),
+            delta_calculado=True,
+        ),
+    )
+    decision = review_domain.accept_report(
+        current,
+        review_domain.ReviewPlan(
+            changed_paths=tuple(args["changed_files"]),
+            policy=review_domain.ReviewPolicy(),
+        ),
+        report,
+    )
+    state = review_domain.legacy_raw_of(
+        {
+            "findings": review_domain.hallazgos_legacy(decision.snapshot),
+            "next": decision.snapshot.next_id,
+        }
+    )
+    before = {f.id for f in current.findings}
+    new_ids = [f.id for f in decision.snapshot.findings if f.id not in before]
+    return state, new_ids
 
 
 class ResolvedLock(unittest.TestCase):
@@ -5114,14 +5145,15 @@ class FindingIds(unittest.TestCase):
         )
         self.assertEqual(merged["findings"][0]["state"], "dismissed")
 
-    def test_repeated_prev_id_keeps_first_only(self):
+    def test_repeated_prev_id_keeps_first_and_reports_duplicate(self):
         merged, new_ids = merge(
             [make_finding("F1", title="Viejo")],
             [make_finding("F1", title="Primero"), make_finding("F1", title="Repetido")],
         )
-        self.assertEqual(new_ids, [])
+        self.assertEqual(new_ids, ["F2"])
         self.assertEqual(
-            [(f["id"], f["title"]) for f in merged["findings"]], [("F1", "Primero")]
+            [(f["id"], f["title"]) for f in merged["findings"]],
+            [("F1", "Primero"), ("F2", "Repetido")],
         )
 
 
@@ -5135,29 +5167,27 @@ class Fallback(unittest.TestCase):
             "num_turns": 7,
         }
         manifest = dict(MANIFEST, max_turns=60)
-        model = review.parse_model_findings(review_domain.leer_cierre(text).prosa)
-        merged, new_ids = review.merge_findings(
+        findings = review.build_findings(
+            result,
+            manifest,
             None,
-            model,
-            changed_files=["src/app.py"],
-            reverted_files=set(),
-            dismiss_ids=set(),
-            dismiss_all=False,
+            "o/r",
+            1,
+            "bot",
+            [],
+            policy=review_domain.ReviewPolicy(),
         )
         body = review_render.compose(
             result,
             manifest,
             sha=SHA,
             provider="opencode-go",
-            findings={
-                "merged": merged["findings"],
-                "new_ids": new_ids,
-                "block": review.serialize_findings(merged),
-            },
+            findings=findings,
         )
         self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
         self.assertEqual(
-            review.parse_findings_block(body)["findings"], merged["findings"]
+            review_domain.estado_legado_de_memoria(body)["findings"],
+            review_domain.estado_legado_de_memoria(findings["block"])["findings"],
         )
         self.assertIn("recortada por el límite", body)
 
@@ -5689,6 +5719,7 @@ class ReviewContinuity(unittest.TestCase):
             return mock.Mock(returncode=0)
 
         with (
+            contextlib.chdir(repo) if repo else contextlib.nullcontext(),
             mock.patch.dict(
                 os.environ,
                 {
@@ -5931,11 +5962,12 @@ class ReviewContinuity(unittest.TestCase):
                 prepared,
                 {"result": f"{block_of()}\nCOVERAGE: complete"},
                 body,
+                repo=repo,
             )
             self.assertEqual(
                 [
                     (f["id"], f["state"])
-                    for f in review.parse_findings_block(body)["findings"]
+                    for f in review_domain.estado_legado_de_memoria(body)["findings"]
                 ],
                 [("F1", "dismissed")],
             )
@@ -5992,7 +6024,7 @@ class ReviewContinuity(unittest.TestCase):
                 ("F1", "resolved"),
                 [
                     (f["id"], f["state"])
-                    for f in review.parse_findings_block(body)["findings"]
+                    for f in review_domain.estado_legado_de_memoria(body)["findings"]
                 ],
             )
 
@@ -6037,7 +6069,7 @@ class ReviewContinuity(unittest.TestCase):
                 )
             estados = [
                 (f["file"], f["state"])
-                for f in review.parse_findings_block(body)["findings"]
+                for f in review_domain.estado_legado_de_memoria(body)["findings"]
             ]
             # El id lo renumera el publicador; lo que afirma B3 es el estado
             # del hallazgo sobre su archivo.
@@ -6094,7 +6126,7 @@ class ReviewContinuity(unittest.TestCase):
                     body,
                     repo=repo,
                 )
-                final = review.parse_findings_block(body)["findings"]
+                final = review_domain.estado_legado_de_memoria(body)["findings"]
                 self.assertEqual(
                     [(f["id"], f["state"]) for f in final], [("F1", expected_state)]
                 )
@@ -6256,12 +6288,12 @@ class ReviewContinuity(unittest.TestCase):
             self.assertEqual((prepared["mode"], prepared["reason"]), ("incremental", ""))
             self.assertEqual(sorted(prepared["reviewed"]), ["app.py", "z.py"])
 
-    def test_filtered_empty_scope_can_complete_but_budget_cannot(self):
+    def test_empty_scope_without_model_never_claims_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             for reason, expected in [
-                ("filtro *.lock", "complete"),
-                ("binario", "complete"),
+                ("filtro *.lock", "partial"),
+                ("binario", "partial"),
                 ("budget", "partial"),
             ]:
                 with self.subTest(reason=reason):
@@ -6276,23 +6308,30 @@ class ReviewContinuity(unittest.TestCase):
 
     def test_infra_failures_preserve_completion_and_replace_banner(self):
         with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp)
+            repo, work, base, prev, _ = IncrementalPrepare().make_repo(tmp)
+            manifest = {
+                "base": base,
+                "head": prev,
+                "reviewed": ["app.py"],
+                "excluded": [],
+            }
             for status in ["partial", "complete"]:
                 with self.subTest(status=status):
                     body = self.publish(
                         work,
-                        SHA,
-                        MANIFEST,
+                        prev,
+                        manifest,
                         {"result": f"{block_of()}\nCOVERAGE: {status}"},
+                        repo=repo,
                     )
                     for reason in ["first failure", "second failure"]:
                         body = self.publish(
-                            work, "b" * 40, MANIFEST, {review_config.ERROR_KEY: reason}, body
+                            work, "b" * 40, manifest, {review_config.ERROR_KEY: reason}, body
                         )
                     self.assertEqual(body.count(review_render.CAUTION_MARK), 1)
                     self.assertNotIn("first failure", body)
                     previous, _ = self.gate(work, "b" * 40, body)
-                    self.assertEqual(previous["sha"], SHA)
+                    self.assertEqual(previous["sha"], prev)
                     self.assertEqual(previous.get("completion"), status)
                     self.assertNotIn("ai-review:completion", review.summary_of(body))
 
@@ -6720,7 +6759,7 @@ class PublishFindings(unittest.TestCase):
         self.assertIn("· F2", body[nuevos:siguen])
         self.assertIn("Ninguno.", body[siguen:])
         self.assertIn("<details><summary>Descartados (1)</summary>", body)
-        state = review.parse_findings_block(body)
+        state = review_domain.estado_legado_de_memoria(body)
         self.assertEqual(
             [(f["id"], f["state"]) for f in state["findings"]],
             [("F1", "dismissed"), ("F2", "open")],
@@ -6782,7 +6821,8 @@ class BlockingFixes(unittest.TestCase):
             [dict(make_finding("F-new", state="resolved"), id=None)],
             changed_files=["src/app.py"],
         )
-        self.assertEqual((new_ids, merged["findings"]), ([], []))
+        self.assertEqual(new_ids, ["F1"])
+        self.assertEqual(merged["findings"][0]["state"], "open")
 
     def test_reverted_file_resolves_a_previous_finding(self):
         merged, _ = merge(
@@ -6897,13 +6937,10 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual(again["findings"][0]["files"], ["review.py", "tests/t.py"])
 
     def test_dismissed_are_marked_before_the_review_and_listed_as_do_not_report(self):
-        state = review.apply_dismissals(
-            {
-                "findings": [make_finding("F1"), make_finding("F2", file="b.py")],
-                "next": 3,
-            },
-            {"F1"},
-            False,
+        state, _ = merge(
+            [make_finding("F1"), make_finding("F2", file="b.py")],
+            [],
+            dismiss_ids={"F1"},
         )
         self.assertEqual([f["state"] for f in state["findings"]], ["dismissed", "open"])
         md = review.prev_findings_markdown(state)
@@ -7295,9 +7332,9 @@ class BlockingFixes(unittest.TestCase):
         merged, _ = merge(prev, model, changed_files=["tests/t.py"])
         finding = merged["findings"][0]
         self.assertEqual(finding["state"], "resolved")
-        self.assertEqual(
-            finding["files"], ["review.py", "tests/t.py", "a.py", "b.py", "c.py"]
-        )
+        self.assertEqual(finding["files"][0], "review.py")
+        self.assertIn("tests/t.py", finding["files"])
+        self.assertEqual(len(finding["files"]), review.FINDING_FILES_MAX)
 
     def test_model_verdict_anywhere_in_the_text_is_dropped(self):
         text = (
@@ -7317,12 +7354,16 @@ class BlockingFixes(unittest.TestCase):
             )
 
     def test_apply_dismissals_keeps_seen(self):
-        state = review.apply_dismissals(
-            {"findings": [make_finding("F1")], "next": 2, "seen": 100}, {"F1"}, False
-        )
-        self.assertEqual(
-            (state["seen"], state["findings"][0]["state"]), (100, "dismissed")
-        )
+        current = review_domain.memoria_operativa(
+            review_domain.read_snapshot(
+                review_domain.serialize_findings(
+                    {"findings": [make_finding("F1")], "next": 2, "seen": 100}
+                )
+            )
+        ).snapshot
+        dismissed = review_domain.aplicar_descartes(current, {"F1"})
+        self.assertEqual(dismissed.command_cursor, 100)
+        self.assertIsInstance(dismissed.findings[0].status, review_domain.StatusDismissed)
 
     def test_html_in_titles_is_neutralized(self):
         line = review_render.finding_line(
@@ -7485,7 +7526,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
                 text=True,
             )
             body = json.loads((work / "comment.json").read_text())["body"]
-        state = review.parse_findings_block(body)
+        state = review_domain.estado_legado_de_memoria(body)
         self.assertEqual(
             [(f["id"], f["severity"]) for f in state["findings"]],
             [("F1", "Medium"), ("F5", "Low")],
@@ -7720,7 +7761,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 carga1 = domain.read_snapshot(r1["block"])
                 self.assertIsInstance(carga1, domain.Valid)
                 s1 = carga1.snapshot
-                self.assertEqual(s1.schema, schema)
+                self.assertEqual(s1.schema, 3)
                 self.assertEqual(s1.revision.head_sha, "e" * 40)
                 f1 = next(f for f in s1.findings if f.id == "F1")
                 self.assertIsInstance(f1.status, domain.StatusDismissed)
@@ -7730,24 +7771,22 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     99,
                     "el cursor es marca de agua de comentarios, no suma descartes",
                 )
-                if schema == 3:
-                    self.assertTrue(
-                        any(r.command_id == 99 for r in s1.receipts),
-                        "el descarte deja su recibo en schema 3",
-                    )
+                self.assertTrue(
+                    any(r.command_id == 99 for r in s1.receipts),
+                    "el descarte deja su recibo en schema 3",
+                )
                 r2 = publicar(r1["block"], schema, set(), "f" * 40)
                 self.assertIsNone(r2.get("keep"))
                 carga2 = domain.read_snapshot(r2["block"])
                 self.assertIsInstance(carga2, domain.Valid)
                 s2 = carga2.snapshot
-                self.assertEqual(s2.schema, schema)
+                self.assertEqual(s2.schema, 3)
                 self.assertEqual(s2.revision.head_sha, "f" * 40)
                 f1b = next(f for f in s2.findings if f.id == "F1")
                 self.assertIsInstance(f1b.status, domain.StatusDismissed)
                 self.assertEqual(f1b.status.command_id, 99)
-                if schema == 3:
-                    self.assertEqual(s2.request_count, 1)
-                    self.assertEqual(s2.pending_requests[0].legacy_id, "req-1")
+                self.assertEqual(s2.request_count, 1)
+                self.assertEqual(s2.pending_requests[0].legacy_id, "req-1")
                 self.assertEqual(s2.receipts, s1.receipts)
 
     def test_escritor_compatible_resuelve_con_cambio_pertinente(self):

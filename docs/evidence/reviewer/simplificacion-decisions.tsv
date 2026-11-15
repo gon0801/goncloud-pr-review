@@ -1,0 +1,5 @@
+ts	phase	decision	why	evidence	result
+2026-11-15T18:46:34Z	frame	Trabajar en worktree separado desde bad212f	El checkout original contiene cambios del usuario y el diseño fija esa base	git rev-parse main; git status --short	base limpia y cambios del usuario intactos
+2026-11-15T18:48:17Z	D1	Restringir upload-artifact al resultado saneado	Una selección real del directorio incluía logs y contexto con datos no publicados	a962156545e37d1856d33bc343f39b27784a99d3; tests/test_worker_artifact.py	2 pruebas de artifact, 21 de instalación, 35 del coordinador y actionlint OK
+2026-11-15T18:55:05Z	D2	Ejecutar tests de revisión desde el repositorio Git que simulan	El adaptador obtiene el delta del cwd; el fixture lo ejecutaba desde el repo del revisor y producía parciales ficticias	tests/test_review.py:5689; /tmp/goncloud-simplificacion-d2-real-repo.log	tres pruebas de delta real OK
+2026-11-15T19:09:10Z	D2	Retirar el motor legado tras migrar callers	El dominio ahora valida pérdidas antes de convertir memoria y acepta todos los reportes con reglas v3	docs/evidence/reviewer/simplificacion-D2.md	813 pruebas y actionlint OK

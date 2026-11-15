@@ -102,6 +102,7 @@ def publicar(work, head, manifest, result, body=None, repo=None):
         return mock.Mock(returncode=0)
 
     with (
+        contextlib.chdir(repo) if repo else contextlib.nullcontext(),
         mock.patch.dict(
             os.environ,
             {
@@ -157,12 +158,7 @@ def libro_del(cuerpo):
 
 
 def bloque_del(cuerpo):
-    for linea in cuerpo.splitlines():
-        if linea.startswith(review.FINDINGS_PREFIX):
-            return json.loads(
-                linea[len(review.FINDINGS_PREFIX) : -len(review.FINDINGS_SUFFIX)]
-            )
-    return None
+    return domain.estado_legado_de_memoria(cuerpo)
 
 
 def texto_pasada(claim, unreviewed=None, hallazgos=None):
