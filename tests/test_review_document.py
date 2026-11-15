@@ -62,6 +62,20 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_known_secret_not_published_in_coverage(self):
+        secret = "FAKE_AUDIT_" + "SECRET_123456789"
+        current = replace(
+            document(),
+            covered=CoverageBook("a" * 40, ((f"src/{secret}.py", "b" * 40),)),
+        )
+        prepared = prepare_publication(current, secrets=(secret,))
+        self.assertIsInstance(prepared, PreparedPublication)
+        self.assertNotIn(secret, prepared.body)
+        decoded = read_document(prepared.body)
+        self.assertIsInstance(decoded, ReviewDocument)
+        self.assertIsNone(decoded.covered)
+        self.assertEqual(decoded.memory, current.memory)
+
     def test_verificador_rechaza_vista_con_slot_alterado(self):
         prepared = prepare_publication(document(), domain.StorageBudget(), ())
         with tempfile.TemporaryDirectory() as path:

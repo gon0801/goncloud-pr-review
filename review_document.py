@@ -631,8 +631,14 @@ def prepare_publication(document, budget=None, secrets=()):
         if isinstance(encoded, domain.CapacityExceeded):
             return encoded
         block = encoded.block
+    omit_book = bool(
+        document.covered and secrets and any(
+            redact(path, secrets) != path for path, _ in document.covered.entries
+        )
+    )
     current = replace(
         document,
+        covered=None if omit_book else document.covered,
         review=replace(
             document.review,
             provider=safe_prose(document.review.provider, secrets).text,
@@ -651,6 +657,10 @@ def prepare_publication(document, budget=None, secrets=()):
             document.failure, prose=safe_prose(document.failure.prose.text, secrets)
         ) if document.failure else None,
     )
+    if omit_book:
+        current = _with_notice(current, "book-omitted")
+        if isinstance(current, domain.CapacityExceeded):
+            return current
     if len(current.explanations) > 3 or len(current.notices) > 3:
         return DocumentBlocked("demasiadas explicaciones o avisos", "")
     capped = tuple(
