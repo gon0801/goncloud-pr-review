@@ -374,7 +374,7 @@ def _run_valido(run):
 def corridas_por_solicitud(repo, pr):
     """Los runs del worker de este PR por solicitud, del más nuevo al más viejo.
     El título moderno identifica la solicitud; el antiguo solo identifica el
-    PR y no puede acreditar una solicitud propia."""
+    PR. Un run antiguo terminado ya no puede retener un despacho propio."""
     try:
         paginas = json.loads(
             review_github.sh(
@@ -410,7 +410,9 @@ def corridas_por_solicitud(repo, pr):
             titulo = TITULO_DEL_WORKER.fullmatch(run["display_title"])
             if titulo is None:
                 legacy = TITULO_LEGACY_DEL_WORKER.fullmatch(run["display_title"])
-                if legacy and int(legacy.group()) != int(pr):
+                if legacy and (
+                    int(legacy.group()) != int(pr) or run["status"] == "completed"
+                ):
                     continue
                 return RunSearchUnknown("run del worker sin solicitud atribuible")
             if int(titulo.group(1)) == int(pr):

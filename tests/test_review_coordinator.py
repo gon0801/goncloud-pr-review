@@ -122,11 +122,11 @@ class RunHistory(unittest.TestCase):
 
     def test_historial_legacy_del_mismo_pr_no_demuestra_ausencia(self):
         run = self._run(10)
-        for title in ("1", "worker desconocido"):
+        for title, status in (("1", "in_progress"), ("worker desconocido", "completed")):
             with self.subTest(title=title), mock.patch.object(
                 review_github, "sh", return_value=mock.Mock(stdout=json.dumps([
                     {"total_count": 1, "workflow_runs": [
-                        dict(run, display_title=title, status="completed"),
+                        dict(run, display_title=title, status=status),
                     ]},
                 ])),
             ):
@@ -134,6 +134,14 @@ class RunHistory(unittest.TestCase):
                     review_coordinator.corridas_por_solicitud("o/r", 1),
                     review_coordinator.RunSearchUnknown,
                 )
+        with mock.patch.object(review_github, "sh", return_value=mock.Mock(
+            stdout=json.dumps([{"total_count": 1, "workflow_runs": [
+                dict(run, display_title="1", status="completed"),
+            ]}])
+        )):
+            self.assertEqual(
+                review_coordinator.corridas_por_solicitud("o/r", 1).by_request, {},
+            )
 
     def test_historial_desconocido_mantiene_la_solicitud_pendiente(self):
         state = snapshot_base()

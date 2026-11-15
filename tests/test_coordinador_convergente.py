@@ -504,6 +504,8 @@ class CosechaDeResultados(unittest.TestCase):
                 github.worker(1, resultado(1, A, ["Fuga 1"]))
                 github.worker(1, run_id=400, pr=155)
                 github.corridas[-1]["display_title"] = "155"
+                github.worker(1, run_id=399)
+                github.corridas[-1]["display_title"] = "12"
 
                 codigo, despachos, _ = correr(
                     github, "workflow_dispatch" if aviso else "issue_comment",
