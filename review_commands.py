@@ -52,6 +52,19 @@ def dismiss_targets(rest):
     return ids, todo
 
 
+def _sangria(linea):
+    """Columnas de sangría al inicio de la línea, con tabuladores de 4."""
+    columna = 0
+    for caracter in linea:
+        if caracter == " ":
+            columna += 1
+        elif caracter == "\t":
+            columna += 4 - columna % 4
+        else:
+            break
+    return columna
+
+
 def _lineas_utiles(cuerpo):
     cerca = None
     for linea in (cuerpo or "").splitlines():
@@ -60,7 +73,7 @@ def _lineas_utiles(cuerpo):
             if m:
                 cerca = (m.group(1)[0], len(m.group(1)))
                 continue
-            if linea.lstrip().startswith(">") or re.match(r"(?: {4}|\t)", linea):
+            if linea.lstrip().startswith(">") or _sangria(linea) >= 4:
                 continue
             yield linea
         elif (
