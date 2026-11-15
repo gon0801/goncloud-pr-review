@@ -162,7 +162,7 @@ el diseño y la medición históricos del piloto.
 - Preparación de D0: `review_context.py` con `prepare_review`, `cmd_prepare`
   como adaptador con el manifiesto históricamente idéntico.
 - C0: el contexto selectivo nunca se activó en producción; su código se retiró
-  en el paso 7 (#167) y queda en el historial de git hasta `745ddd0`.
+  en el paso 7 (#167) y queda en el historial de git hasta `ade258f`.
 - `e1-measure.yml` corregido en el candidato: el paso "Revisor fijo fuera del
   árbol medido" copia `review.py review_domain.py review_context.py
   review_config.py review_run.py review_sticky.py review_render.py
