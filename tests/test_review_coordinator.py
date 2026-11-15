@@ -94,6 +94,9 @@ class RunHistory(unittest.TestCase):
         cases = (
             "[",
             json.dumps([{"total_count": 2, "workflow_runs": [run]}]),
+            json.dumps([{"total_count": 3, "workflow_runs": [
+                dict(run, id=12, display_title="99"), run,
+            ]}]),
             json.dumps([
                 {"total_count": 1, "workflow_runs": [run]},
                 {"total_count": 2, "workflow_runs": []},
@@ -116,6 +119,21 @@ class RunHistory(unittest.TestCase):
             self.assertEqual(
                 review_coordinator.corridas_por_solicitud("o/r", 1).by_request, {}
             )
+
+    def test_historial_legacy_del_mismo_pr_no_demuestra_ausencia(self):
+        run = self._run(10)
+        for title in ("1", "worker desconocido"):
+            with self.subTest(title=title), mock.patch.object(
+                review_github, "sh", return_value=mock.Mock(stdout=json.dumps([
+                    {"total_count": 1, "workflow_runs": [
+                        dict(run, display_title=title, status="completed"),
+                    ]},
+                ])),
+            ):
+                self.assertIsInstance(
+                    review_coordinator.corridas_por_solicitud("o/r", 1),
+                    review_coordinator.RunSearchUnknown,
+                )
 
     def test_historial_desconocido_mantiene_la_solicitud_pendiente(self):
         state = snapshot_base()

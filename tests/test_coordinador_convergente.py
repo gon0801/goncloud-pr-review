@@ -496,6 +496,24 @@ class AdmisionDelHeadVivo(unittest.TestCase):
 
 
 class CosechaDeResultados(unittest.TestCase):
+    def test_historial_legacy_ajeno_no_bloquea_resultado_actual(self):
+        for aviso in ((900, 1), None):
+            with self.subTest(aviso=aviso):
+                github = GitHubFalso()
+                correr(github, "pull_request_target")
+                github.worker(1, resultado(1, A, ["Fuga 1"]))
+                github.worker(1, run_id=400, pr=155)
+                github.corridas[-1]["display_title"] = "155"
+
+                codigo, despachos, _ = correr(
+                    github, "workflow_dispatch" if aviso else "issue_comment",
+                    aviso=aviso,
+                )
+                self.assertEqual((codigo, despachos), (0, []))
+                self.assertEqual(github.estado().pending_requests, [])
+                self.assertEqual(estados(github), {"F1": "StatusOpen"})
+                self.assertIn("Fuga 1", github.visible())
+
     def test_un_aviso_perdido_lo_cosecha_el_siguiente_evento(self):
         github = GitHubFalso()
         correr(github, "pull_request_target")

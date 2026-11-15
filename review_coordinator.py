@@ -307,6 +307,7 @@ def fallo_de_resultado(artifact, run_id, attempt):
 
 
 TITULO_DEL_WORKER = re.compile(r"PR ([0-9]{1,9}) solicitud ([0-9]{1,9})")
+TITULO_LEGACY_DEL_WORKER = re.compile(r"[0-9]{1,9}")
 CONCLUSIONES_DE_GITHUB = frozenset(
     {
         "action_required",
@@ -372,8 +373,8 @@ def _run_valido(run):
 
 def corridas_por_solicitud(repo, pr):
     """Los runs del worker de este PR por solicitud, del más nuevo al más viejo.
-    El run-name del worker es `PR <n> solicitud <id>`: así se atribuye también
-    un run que terminó sin artifact."""
+    El título moderno identifica la solicitud; el antiguo solo identifica el
+    PR y no puede acreditar una solicitud propia."""
     try:
         paginas = json.loads(
             review_github.sh(
@@ -408,6 +409,9 @@ def corridas_por_solicitud(repo, pr):
                 continue
             titulo = TITULO_DEL_WORKER.fullmatch(run["display_title"])
             if titulo is None:
+                legacy = TITULO_LEGACY_DEL_WORKER.fullmatch(run["display_title"])
+                if legacy and int(legacy.group()) != int(pr):
+                    continue
                 return RunSearchUnknown("run del worker sin solicitud atribuible")
             if int(titulo.group(1)) == int(pr):
                 corridas.setdefault(int(titulo.group(2)), []).append(run)
