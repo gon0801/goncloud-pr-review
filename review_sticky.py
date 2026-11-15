@@ -207,7 +207,7 @@ def cobertura_declarada(texto, modelo):
     return review_domain.UNKNOWN if modelo is None else mapeada
 
 
-def recortes_de_continuacion(manifest):
+def recortes_del_manifest(manifest):
     """Las entradas de excluded que degradan: presupuesto o encoding."""
     return [
         e
@@ -222,5 +222,5 @@ def continuacion_terminal(manifest):
     return (
         manifest.get("mode") == "continuation"
         and not manifest.get("reviewed")
-        and not recortes_de_continuacion(manifest)
+        and not recortes_del_manifest(manifest)
     )

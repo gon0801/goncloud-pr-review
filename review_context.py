@@ -1,11 +1,10 @@
 """Preparación del contexto de revisión sobre un repositorio Git.
 
-Construye el PreparedReview (modo, delta real, alcance histórico, entregados
-y omisiones) que el revisor incremental consume, y reúne los ayudantes de
+Construye el PreparedReview (archivos entregados, omisiones y partes del diff)
+que el revisor incremental consume, y reúne los ayudantes de
 contexto que la fase 2 de T14 eliminará de review.py.
 """
 
-import ast
 import dataclasses
 import fnmatch
 import hashlib
@@ -19,7 +18,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import review_domain as domain
 from review_domain import (
     DISMISSED,
     OPEN,
@@ -77,7 +75,6 @@ TESTS_MAX_RESULTS = 40
 TESTS_MAX_BYTES = 20000
 CONVENTIONS_MAX_BYTES = 8000
 CONVENTION_FILES = ("CLAUDE.md", "AGENTS.md")
-CONTEXTO_SELECTIVO_MAX_BYTES = 6000
 
 GREP_MAX_EXAMINED_BYTES = 8_000_000
 GREP_MAX_SECONDS = 15
@@ -165,30 +162,6 @@ class Omission:
 
 
 @dataclasses.dataclass(frozen=True)
-class Obligation:
-    ruta: str
-
-
-@dataclasses.dataclass(frozen=True)
-class ContextRef:
-    """Pista con procedencia hacia un archivo relacionado con el diff (C0).
-
-    `relacion` distingue "sintactica" (un ast.Call al símbolo, verificado
-    con ast.parse del archivo .py tal como está en HEAD) de "textual"
-    (comentarios, strings, prosa, otros lenguajes o .py que no parsean).
-    `papel` distingue pruebas de consumidores. `busqueda` declara el estado
-    de la búsqueda que produjo la referencia: "completa", "truncada: <motivo>"
-    o "falló: <motivo>".
-    """
-
-    archivo: str
-    simbolo: str
-    relacion: str
-    papel: str
-    busqueda: str
-
-
-@dataclasses.dataclass(frozen=True)
 class GitRepository:
     """Ventana a Git: todo comando corre con cwd explícito en root.
 
@@ -248,16 +221,11 @@ class GitRepository:
 
 @dataclasses.dataclass(frozen=True)
 class PreparedReview:
-    plan: domain.ReviewPlan
-    hechos: domain.RepositoryFacts
     entregados: tuple
     omisiones: tuple
-    modo: str
-    motivo: str
     partes: dict = dataclasses.field(default_factory=dict)
     sin_codificar: tuple = ()
     over_budget_bytes: int = 0
-    avisos: tuple = ()
 
 
 def matches(path, pattern):
@@ -742,142 +710,12 @@ def decidir_modo(repo, current, head, base_sha, digest, cobertura_previa=None):
     return "incremental", motivo_base, previous_head
 
 
-def rutas_abiertas(current):
-    """Rutas de los hallazgos abiertos cuya ancla primaria trae ruta."""
-    rutas = []
-    for hallazgo in current.findings if current is not None else []:
-        if not isinstance(hallazgo.status, domain.StatusOpen):
-            continue
-        ancla = hallazgo.primary_anchor
-        ruta = getattr(ancla, "path", "") if ancla is not None else ""
-        if ruta:
-            rutas.append(ruta)
-    return rutas
-
-
-def estado_de_busqueda(result):
-    if isinstance(result, SearchComplete):
-        return "completa"
-    if isinstance(result, SearchTruncated):
-        return f"truncada: {result.reason}"
-    return f"falló: {result.reason}"
-
-
-def nombres_invocados(repo, head, archivo, cache):
-    if archivo in cache:
-        return cache[archivo]
-    nombres = None
-    if archivo.endswith(".py"):
-        sha = repo.blob_at(head, archivo)
-        if sha:
-            try:
-                arbol = ast.parse(repo.cat_file_text(sha))
-            except (SyntaxError, ValueError, RecursionError, MemoryError):
-                arbol = None
-            if arbol is not None:
-                llamadas = set()
-                for nodo in ast.walk(arbol):
-                    if isinstance(nodo, ast.Call):
-                        if isinstance(nodo.func, ast.Name):
-                            llamadas.add(nodo.func.id)
-                        elif isinstance(nodo.func, ast.Attribute):
-                            llamadas.add(nodo.func.attr)
-                nombres = frozenset(llamadas)
-    cache[archivo] = nombres
-    return nombres
-
-
-def contexto_selectivo(
-    repo, head, entregados, partes, contexto_max_bytes, busqueda_max_bytes
-):
-    fuentes = {}
-    for path in entregados:
-        for simbolo in changed_symbols(partes.get(path.text, "")):
-            fuentes.setdefault(simbolo, []).append(path.text)
-    refs, avisos = {}, []
-    if len(fuentes) > CALLERS_MAX_SYMBOLS:
-        avisos.append(f"símbolos recortados: {CALLERS_MAX_SYMBOLS} de {len(fuentes)}")
-    cache = {}
-    for simbolo in list(fuentes)[:CALLERS_MAX_SYMBOLS]:
-        propias = set(fuentes[simbolo])
-        simple = grep_files(
-            repo,
-            [simbolo],
-            CALLERS_MAX_MATCHES + 1,
-            max_bytes=busqueda_max_bytes,
-        )
-        llamada = grep_files(
-            repo,
-            [f"{simbolo}("],
-            CALLERS_MAX_MATCHES + 1,
-            max_bytes=busqueda_max_bytes,
-        )
-        razones = [
-            resultado.reason
-            for resultado in (simple, llamada)
-            if isinstance(resultado, SearchTruncated)
-        ]
-        if razones:
-            avisos.append(f"pista truncada: {simbolo} ({razones[0]})")
-        fallas = [
-            resultado.reason
-            for resultado in (simple, llamada)
-            if isinstance(resultado, SearchFailed)
-        ]
-        if fallas:
-            avisos.append(f"pista falló: {simbolo} ({fallas[0]})")
-        por_archivo = {}
-        for resultado in (llamada, simple):
-            estado = estado_de_busqueda(resultado)
-            for archivo in getattr(resultado, "paths", ()):
-                por_archivo.setdefault(archivo, estado)
-        for archivo, estado in por_archivo.items():
-            if archivo in propias:
-                continue
-            invocados = nombres_invocados(repo, head, archivo, cache)
-            refs[(archivo, simbolo)] = ContextRef(
-                archivo=archivo,
-                simbolo=simbolo,
-                relacion=(
-                    "sintactica"
-                    if invocados is not None and simbolo in invocados
-                    else "textual"
-                ),
-                papel="prueba" if looks_like_test(archivo) else "consumidor",
-                busqueda=estado,
-            )
-    ordenadas = sorted(
-        refs.values(),
-        key=lambda ref: (
-            ref.relacion != "sintactica",
-            ref.papel != "prueba",
-            ref.archivo,
-            ref.simbolo,
-        ),
-    )
-    seleccion, usados = [], 0
-    for ref in ordenadas:
-        linea = (
-            f"{ref.archivo} {ref.relacion} {ref.papel} {ref.simbolo} {ref.busqueda}\n"
-        )
-        costo = len(linea.encode("utf-8"))
-        if usados + costo > contexto_max_bytes:
-            avisos.append("contexto truncado")
-            break
-        seleccion.append(ref)
-        usados += costo
-    return tuple(seleccion), tuple(avisos)
-
-
 def prepare_review(
     repo,
     request,
     current,
     policy,
     cobertura_previa=None,
-    selectivo=False,
-    contexto_max_bytes=CONTEXTO_SELECTIVO_MAX_BYTES,
-    busqueda_max_bytes=None,
 ):
     target = request.target or {}
     head = target.get("head_sha", "")
@@ -887,33 +725,19 @@ def prepare_review(
     merge_base = repo.merge_base(base, head) or base
     digest = digest_de_politica(policy)
 
-    modo, motivo, previous_head = decidir_modo(
+    modo, _, previous_head = decidir_modo(
         repo, current, head, base, digest, cobertura_previa
     )
-    delta_rutas, omis_delta, delta_calculado = delta_desde_previo(
-        repo, previous_head, head
-    )
+    delta_rutas, _, _ = delta_desde_previo(repo, previous_head, head)
 
-    revertidas = tuple(
-        ruta
-        for ruta in delta_rutas
-        if repo.blob_at(head, ruta) == repo.blob_at(merge_base, ruta)
-    )
-
-    historicas, ilegibles_alcance = [], 0
+    historicas = []
     for path in repo.changed_files(merge_base, head):
         try:
             historicas.append(path.text)
         except UnicodeDecodeError:
-            ilegibles_alcance += 1
+            continue
 
-    omisiones, hechos_omisiones = [], list(omis_delta)
-    if not delta_calculado:
-        hechos_omisiones.append("delta real no calculable")
-    if ilegibles_alcance:
-        hechos_omisiones.append(
-            f"ruta no representable en el alcance: {ilegibles_alcance}"
-        )
+    omisiones = []
 
     patrones = list(DEFAULT_EXCLUDES) + list(policy.exclude_patterns or ())
     numstat = repo.numstat(merge_base, head)
@@ -931,7 +755,6 @@ def prepare_review(
     if modo != "incremental":
         for diagnostico in sin_codificar:
             omisiones.append(Omission(ruta=diagnostico, causa="encoding"))
-            hechos_omisiones.append(f"archivo excluido (encoding): {diagnostico}")
 
     previa = cobertura_previa or {}
     base_movida = False
@@ -983,9 +806,7 @@ def prepare_review(
                     merge_base_previo, previous_head, ruta
                 ) != repo.diff_bytes(merge_base, head, ruta):
                     candidatas.append(ruta)
-        rutas_plan = list(candidatas)
     else:
-        rutas_plan = historicas
         candidatas = historicas
     a_revisar = []
     for ruta in candidatas:
@@ -1020,7 +841,6 @@ def prepare_review(
             chunk = crudo.decode("utf-8")
         except UnicodeDecodeError:
             omisiones.append(Omission(ruta=ruta, causa="encoding"))
-            hechos_omisiones.append(f"archivo excluido (encoding): {ruta}")
             continue
         chunk_bytes = len(chunk.encode("utf-8"))
         # En continuación no hay excepción histórica del primer archivo: lo que
@@ -1030,61 +850,20 @@ def prepare_review(
         ):
             causa = "presupuesto" if policy.strict_budget else "budget"
             omisiones.append(Omission(ruta=ruta, causa=causa))
-            hechos_omisiones.append(f"archivo excluido ({causa}): {ruta}")
             continue
         if not entregados and chunk_bytes > presupuesto:
             if policy.strict_budget:
                 omisiones.append(Omission(ruta=ruta, causa="presupuesto"))
-                hechos_omisiones.append(f"archivo excluido (presupuesto): {ruta}")
                 continue
-            hechos_omisiones.append(
-                f"over_budget_bytes {max(0, chunk_bytes - presupuesto)}: {ruta}"
-            )
             over_budget = max(over_budget, chunk_bytes - presupuesto)
         entregados.append(GitPath(ruta.encode("utf-8")))
         partes[ruta] = chunk
         usados += chunk_bytes
 
-    context_refs, avisos = (), ()
-    if selectivo:
-        context_refs, avisos = contexto_selectivo(
-            repo, head, entregados, partes, contexto_max_bytes, busqueda_max_bytes
-        )
-
-    obligaciones = tuple(
-        Obligation(ruta=ruta)
-        for ruta in dict.fromkeys(list(rutas_plan) + rutas_abiertas(current))
-    )
-    revision = domain.Revision(base_sha=merge_base, head_sha=head, policy_digest=digest)
-    plan = domain.ReviewPlan(
-        revision=revision,
-        basis_generation=request.basis_generation,
-        mode=modo,
-        previous_sha=previous_head,
-        changed_paths=tuple(rutas_plan),
-        obligations=obligaciones,
-        context_refs=context_refs,
-        exclusions=tuple(patrones),
-        delivered=tuple(path.text for path in entregados),
-        policy=policy,
-    )
-    hechos = domain.RepositoryFacts(
-        revision=revision,
-        changed_paths=tuple(delta_rutas),
-        delta_calculado=delta_calculado,
-        reverted_paths=revertidas,
-        omissions=tuple(hechos_omisiones),
-        historical_paths=tuple(historicas),
-    )
     return PreparedReview(
-        plan=plan,
-        hechos=hechos,
         entregados=tuple(entregados),
         omisiones=tuple(omisiones),
-        modo=modo,
-        motivo=motivo,
         partes=partes,
         sin_codificar=tuple(sin_codificar),
         over_budget_bytes=over_budget,
-        avisos=avisos,
     )

