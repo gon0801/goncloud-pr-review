@@ -756,6 +756,38 @@ class PublicacionCompleta(unittest.TestCase):
         )
         self.assertEqual(good.trabajo, (request,))
 
+    def test_same_request_id_with_different_content_never_confirms_or_writes(self):
+        original = document()
+        request = domain.WorkRequest(
+            id=1, kind="review", origin="admission", basis_generation=1,
+            target=domain.ReviewTarget(
+                repository="o/r", pr_number=1, head_sha="a" * 40,
+                base_sha="b" * 40, policy_digest="d" * 64,
+            ).json(),
+        )
+        current = replace(original, memory=replace(
+            original.memory, pending_requests=[request], request_count=1,
+        ))
+        prepared = prepare_publication(current)
+        variants = (
+            replace(request, target={**request.target, "head_sha": "c" * 40}),
+            replace(request, target={**request.target, "policy_digest": "e" * 64}),
+            replace(request, basis_generation=2),
+            replace(request, solicitante="another-user"),
+            replace(request, state=domain.FALLIDA, motivo="retry"),
+        )
+        for prior_body in (prepare_publication(original).body, prepared.body):
+            for variant in variants:
+                with self.subTest(prior_matches=prior_body == prepared.body, work=variant):
+                    adapter = self.Comments(prior_body)
+                    outcome = publish_checkpoint(
+                        prepared, adapter.leer()[0], adapter, login="bot",
+                        work_after_commit=(variant,),
+                    )
+                    self.assertIsInstance(outcome, Unconfirmed)
+                    self.assertEqual(adapter.writes, [])
+                    self.assertEqual(adapter.leer()[0]["body"], prior_body)
+
 
 class PublicacionDirecta(unittest.TestCase):
     def test_lost_patch_reply_does_not_confirm_direct_publication(self):

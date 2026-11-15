@@ -1124,8 +1124,8 @@ def publish_checkpoint(prepared, observed, adapter, login=None, work_after_commi
     ):
         return Unconfirmed("publicación inválida")
     work = tuple(work_after_commit)
-    live = {request.id for request in document.memory.pending_requests if request.viva}
-    if any(request.id not in live for request in work):
+    live = {request.id: request for request in document.memory.pending_requests if request.viva}
+    if any(live.get(request.id) != request for request in work):
         return Unconfirmed("la publicación no contiene el trabajo solicitado")
     found = _bot_comments(adapter, login)
     if len(found) > 1:
