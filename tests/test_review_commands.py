@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_document
 import review_commands
@@ -1151,7 +1152,7 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("&lt;!-- ai-review:sha=", linea)
 
     def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         target = domain.ReviewTarget(
             repository="o/r",
             pr_number=1,

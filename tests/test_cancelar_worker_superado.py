@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_config
 import review_github
@@ -224,14 +225,14 @@ def resultado_del_worker(request_id, head):
         "run_id": 900,
         "attempt": 1,
         "pr_head_sha": head,
-        "policy_digest": review.digest_de_politica(review_config.politica_de_revision()),
+        "policy_digest": review_context.digest_de_politica(review_config.politica_de_revision()),
         "observaciones": [],
         "cobertura": "complete",
     }
 
 
 def sticky_con_hallazgo():
-    digest = review.digest_de_politica(review_config.politica_de_revision())
+    digest = review_context.digest_de_politica(review_config.politica_de_revision())
     estado = domain.Snapshot(
         schema=3,
         generation=2,

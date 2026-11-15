@@ -12,13 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_config
 import review_document
 import review_github
 import review_sticky
 import review_domain as domain  # noqa: E402
 
-PRE, SUF = review.FINDINGS_PREFIX, review.FINDINGS_SUFFIX
+PRE, SUF = domain.FINDINGS_PREFIX, domain.FINDINGS_SUFFIX
 
 
 def legado(findings, next=1, seen=None):
@@ -174,8 +175,8 @@ class LectorCompatible(unittest.TestCase):
         self.assertIsInstance(roto, domain.Invalid)
         self.assertNotIsInstance(roto, domain.Missing)
         self.assertTrue(str(roto.reason))
-        self.assertIsNone(review.parse_findings_block("**Veredicto:** ok"))
-        self.assertIsNone(review.parse_findings_block(PRE + "{oops" + SUF))
+        self.assertIsInstance(domain.read_snapshot("**Veredicto:** ok"), domain.Missing)
+        self.assertIsInstance(domain.read_snapshot(PRE + "{oops" + SUF), domain.Invalid)
 
     def test_future_version_is_not_legacy(self):
         SCHEMA_FUTURO = 4
@@ -286,7 +287,7 @@ class EscrituraCompatible(unittest.TestCase):
         )
         self.assertEqual(de_vuelta.snapshot.command_cursor, 42)
         self.assertEqual(de_vuelta.snapshot.next_id, 7)
-        self.assertEqual(bloque, review.serialize_findings(load.raw))
+        self.assertEqual(bloque, domain.serialize_findings(load.raw))
 
     def test_cierre_mismo_comentario_antes_y_despues_de_la_extraccion(self):
         comentario = (
@@ -312,7 +313,7 @@ class EscrituraCompatible(unittest.TestCase):
             + SUF
             + "\n\nCOVERAGE: complete\n"
         )
-        estado = review.parse_findings_block(comentario)
+        estado = domain.read_snapshot(comentario).raw
         self.assertEqual([f["id"] for f in estado["findings"]], ["F1", "F2", "F3"])
         self.assertEqual(
             [f["state"] for f in estado["findings"]], ["open", "resolved", "dismissed"]
@@ -320,14 +321,14 @@ class EscrituraCompatible(unittest.TestCase):
         self.assertEqual(estado["next"], 4)
         self.assertEqual(estado["seen"], 42)
         self.assertEqual(domain.leer_cierre(comentario).cobertura, "complete")
-        bloque = review.serialize_findings(estado)
-        de_vuelta = review.parse_findings_block(bloque)
+        bloque = domain.serialize_findings(estado)
+        de_vuelta = domain.read_snapshot(bloque).raw
         self.assertEqual([f["id"] for f in de_vuelta["findings"]], ["F1", "F2", "F3"])
         self.assertEqual(
             [f["state"] for f in de_vuelta["findings"]],
             ["open", "resolved", "dismissed"],
         )
-        self.assertEqual(review.serialize_findings(de_vuelta), bloque)
+        self.assertEqual(domain.serialize_findings(de_vuelta), bloque)
         load = domain.read_snapshot(comentario)
         self.assertIsInstance(load, domain.Legacy)
         self.assertEqual([f.id for f in load.snapshot.findings], ["F1", "F2", "F3"])
@@ -425,7 +426,7 @@ class RutaDePublicacion(unittest.TestCase):
     def test_b2_el_texto_del_modelo_no_trona_la_publicacion(self):
         p = payload_v2()
         p["findings"][0]["evidence"] = None
-        self.assertIsNone(review.parse_model_findings(PRE + json.dumps(p) + SUF))
+        self.assertIsNone(domain.parse_model_findings(PRE + json.dumps(p) + SUF))
 
 
 class FronteraDeReferencias(unittest.TestCase):
@@ -636,7 +637,7 @@ class PresupuestosEnBytes(unittest.TestCase):
             }
             for i in range(1, 41)
         ]
-        resultado = review.serialize_findings({"findings": findings, "next": 41})
+        resultado = domain.serialize_findings({"findings": findings, "next": 41})
         self.assertIsInstance(resultado, domain.CapacityExceeded)
         self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
@@ -674,8 +675,9 @@ class FronteraDeEscritura(unittest.TestCase):
         self.assertIsInstance(load, domain.Valid)
         self.assertNotIsInstance(load, domain.Legacy)
         self.assertEqual(load.snapshot.revision, s.revision)
-        self.assertIsNone(
-            review.parse_findings_block(bloque),
+        self.assertNotIsInstance(
+            domain.read_snapshot(bloque),
+            domain.Legacy,
             "el adaptador de M0 no convierte el estado nuevo a legacy",
         )
 
@@ -2217,7 +2219,7 @@ class ObservacionDeEntrada(unittest.TestCase):
         reporte = domain.validar_reporte(
             tuple(
                 domain.observation_de_entrada(e)
-                for e in review.parse_model_findings(texto)["findings"]
+                for e in domain.parse_model_findings(texto)["findings"]
             ),
             domain.COMPLETE_CLAIM,
             hechos,
@@ -3784,7 +3786,8 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
         current = domain.ReviewPolicy(finding_identity="current")
         self.assertEqual(current, self.TITLES)
         self.assertEqual(
-            review.digest_de_politica(current), review.digest_de_politica(self.TITLES)
+            review_context.digest_de_politica(current),
+            review_context.digest_de_politica(self.TITLES),
         )
         self.assertEqual(
             review_config.politica_de_revision(identidad="current"),

@@ -14,6 +14,8 @@ from unittest import mock
 import test_capacidad_pr20
 
 import review
+import review_config
+import review_sticky
 import review_coordinator
 import review_domain as domain
 import review_github
@@ -652,7 +654,7 @@ class RetornoAlPuente(unittest.TestCase):
                         mock.patch.dict(os.environ, {
                             "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "a" * 40,
                         }),
-                        mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                        mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                         mock.patch.object(review_github, "fetch_all_comments", return_value=[sticky]),
                         mock.patch.object(review_github, "sh") as shell,
                         mock.patch.object(review_github, "informar_revision") as output,
@@ -933,7 +935,7 @@ class PublicacionDirecta(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             (work / "result.json").write_text(json.dumps({
-                review.ERROR_KEY: "worker no terminó",
+                review_sticky.ERROR_KEY: "worker no terminó",
             }))
             (work / "manifest.json").write_text(json.dumps({
                 "mode": "full", "reviewed": ["a.py"], "excluded": [],
@@ -943,7 +945,7 @@ class PublicacionDirecta(unittest.TestCase):
                 mock.patch.dict(os.environ, {
                     "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "b" * 40,
                 }),
-                mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                 mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
                 mock.patch.object(review_github, "sh", side_effect=OSError("respuesta perdida")),
                 mock.patch.object(review_github, "informar_revision") as outcome,
@@ -1055,7 +1057,7 @@ class PublicacionDirecta(unittest.TestCase):
                         mock.patch.dict(os.environ, {
                             "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "a" * 40,
                         }),
-                        mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                        mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                         mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
                         mock.patch.object(review_github, "sh", side_effect=persist) as shell,
                         mock.patch.object(review_github, "informar_revision"),

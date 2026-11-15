@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_domain
 import review_sticky
 
 SCRIPT = ROOT / "scripts" / "verify_sticky.py"
@@ -18,7 +19,7 @@ SHA_A, SHA_B = "a" * 40, "b" * 40
 
 def legado():
     return (
-        review.FINDINGS_PREFIX
+        review_domain.FINDINGS_PREFIX
         + json.dumps(
             {
                 "findings": [
@@ -34,13 +35,13 @@ def legado():
                 "next": 2,
             }
         )
-        + review.FINDINGS_SUFFIX
+        + review_domain.FINDINGS_SUFFIX
     )
 
 
 def v2(completion):
     return (
-        review.FINDINGS_PREFIX
+        review_domain.FINDINGS_PREFIX
         + json.dumps(
             {
                 "schema": 2,
@@ -51,7 +52,7 @@ def v2(completion):
                 "findings": [],
             }
         )
-        + review.FINDINGS_SUFFIX
+        + review_domain.FINDINGS_SUFFIX
     )
 
 
@@ -100,7 +101,7 @@ class VerificadorDeStickies(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_bloque_roto_frena(self):
-        cuerpo = sticky("partial", review.FINDINGS_PREFIX + '{"findings": [')
+        cuerpo = sticky("partial", review_domain.FINDINGS_PREFIX + '{"findings": [')
         rc, salida = self.correr(cuerpo)
         self.assertEqual(rc, 1, salida)
 

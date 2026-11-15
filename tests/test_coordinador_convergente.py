@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_document
 import review_render
@@ -31,7 +32,7 @@ import review_domain as domain  # noqa: E402
 
 A, B, BASE, MAIN = "a" * 40, "e" * 40, "b" * 40, "f" * 40
 BOT = "github-actions[bot]"
-DIGEST = review.digest_de_politica(review_config.politica_de_revision())
+DIGEST = review_context.digest_de_politica(review_config.politica_de_revision())
 WORKER_PATH = ".github/workflows/ai-review-worker.yml"
 
 

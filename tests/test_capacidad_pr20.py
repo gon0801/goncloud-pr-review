@@ -560,7 +560,7 @@ class StickiesViejosSeLeenSinPerdida(unittest.TestCase):
             "next": 2,
             "seen": 4,
         }
-        bloque = review.serialize_findings(legacy)
+        bloque = domain.serialize_findings(legacy)
         carga = domain.read_snapshot(f"{review_sticky.MARKER}\n{bloque}")
         self.assertIsInstance(carga, domain.Legacy)
         self.assertEqual(carga.raw["findings"][0]["state"], "resolved")
@@ -1022,7 +1022,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
     no se crea nada."""
 
     def _sticky_legado(self):
-        bloque = review.serialize_findings({"findings": [], "next": 1})
+        bloque = domain.serialize_findings({"findings": [], "next": 1})
         self.assertIsInstance(bloque, str)
         return {
             "id": 55,
@@ -1048,9 +1048,9 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
             for i in range(1, cuantos + 1)
         ]
         resultado = {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps({"findings": hallazgos, "next": 200}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX,
+            + domain.FINDINGS_SUFFIX,
             "review_provider": "opencode-go",
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -1160,7 +1160,7 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
             "next": 53,
             "seen": 3,
         }
-        bloque = review.serialize_findings(previo)
+        bloque = domain.serialize_findings(previo)
         self.assertIsInstance(bloque, str)
         self.assertLessEqual(len(bloque.encode("utf-8")), 8000, "cabe hoy")
         self.assertGreater(len(bloque.encode("utf-8")), 7500, "cerca del tope viejo")
@@ -1178,9 +1178,9 @@ class ElCaminoLegadoTambienPublica(unittest.TestCase):
             for i in range(1, 11)
         ]
         return {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps({"findings": nuevos, "next": 46}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         }
 
     def test_merged_sobre_8000_publica(self):

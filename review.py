@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import review_config
+import review_context
 import review_coordinator
 import review_document
 import review_domain
@@ -19,26 +21,11 @@ from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
     env,
-    get_provider,
     politica_de_revision,
     secretos_del_entorno,
 )
 from review_context import (
-    CALLERS_MAX_BYTES,
-    CALLERS_MAX_MATCHES,
-    CONVENTIONS_MAX_BYTES,
-    DEFAULT_EXCLUDES,
-    DEFAULT_MAX_TURNS,
-    INCREMENTAL_MAX_TURNS,
-    INCREMENTAL_SMALL_BYTES,
-    INCREMENTAL_SMALL_FILES,
-    LARGE_DIFF_MAX_TURNS,
-    TESTS_MAX_BYTES,
-    TESTS_MAX_RESULTS,
     GitRepository,
-    SearchComplete,
-    SearchFailed,
-    SearchTruncated,
     blobs_de_head,
     build_callers,
     build_conventions,
@@ -47,43 +34,10 @@ from review_context import (
     decide_mode,
     delta_real,
     digest_de_politica,
-    excluded_by,
-    files_matching_base,
-    files_reverted,
-    grep_files,
-    is_ancestor,
-    looks_like_test,
-    max_turns_for_diff,
     prepare_review,
     prev_findings_markdown,
-    priority,
-    resolve_max_turns,
-    trim_utf8,
 )
-from review_domain import (
-    DISMISSED,
-    FINDING_FILES_MAX,
-    FINDING_ID_RE,
-    FINDINGS_MAX_COUNT,
-    FINDINGS_PREFIX,
-    FINDINGS_SUFFIX,
-    FINDINGS_TITLE_MAX,
-    OPEN,
-    RESOLVED,
-    SEVERITIES,
-    derive_next,
-    find_findings_block,
-    find_model_findings_block,
-    finding_number,
-    normalize_severity,
-    one_line,
-    parse_model_findings,
-    same_issue,
-    sanitize_finding,
-    strip_findings_block,
-    strip_model_findings_block,
-    unique_paths,
-)
+from review_domain import parse_model_findings
 from review_render import (
     caution_banner,
     redact,
@@ -101,70 +55,6 @@ from review_sticky import (
     sticky_from_comments,
 )
 
-# Superficie de compatibilidad: los tests y el adaptador consumen estos nombres
-# via review.* aunque el cuerpo de review.py ya no los use directamente.
-__all__ = [
-    "CALLERS_MAX_BYTES",
-    "CALLERS_MAX_MATCHES",
-    "CONVENTIONS_MAX_BYTES",
-    "DEFAULT_EXCLUDES",
-    "DEFAULT_MAX_TURNS",
-    "DISMISSED",
-    "FINDINGS_MAX_BYTES",
-    "FINDINGS_MAX_COUNT",
-    "FINDINGS_PREFIX",
-    "FINDINGS_SUFFIX",
-    "FINDINGS_TITLE_MAX",
-    "FINDING_FILES_MAX",
-    "FINDING_ID_RE",
-    "INCREMENTAL_MAX_TURNS",
-    "INCREMENTAL_SMALL_BYTES",
-    "INCREMENTAL_SMALL_FILES",
-    "LARGE_DIFF_MAX_TURNS",
-    "OPEN",
-    "RESOLVED",
-    "SEVERITIES",
-    "TESTS_MAX_BYTES",
-    "TESTS_MAX_RESULTS",
-    "SearchComplete",
-    "SearchFailed",
-    "SearchTruncated",
-    "decide_mode",
-    "derive_next",
-    "digest_de_politica",
-    "excluded_by",
-    "files_matching_base",
-    "find_findings_block",
-    "find_model_findings_block",
-    "finding_number",
-    "grep_files",
-    "is_ancestor",
-    "looks_like_test",
-    "max_turns_for_diff",
-    "normalize_severity",
-    "one_line",
-    "parse_findings_block",
-    "parse_model_findings",
-    "prev_findings_markdown",
-    "priority",
-    "resolve_max_turns",
-    "same_issue",
-    "sanitize_finding",
-    "serialize_findings",
-    "strip_findings_block",
-    "strip_model_findings_block",
-    "trim_utf8",
-    "unique_paths",
-]
-
-FINDINGS_MAX_BYTES = 8000
-
-# Findings memory (PR B). The model emits one hidden block BEFORE the COVERAGE line
-# (never after: leer_cierre drops everything behind it, and the 50k/65k trims cut
-# from the end). Publish re-emits the canonical block right after the SHA marker, so
-# tail trims can never eat it; the review text budget reserves its bytes.
-# The constants and the state functions live in review_domain; re-exported above.
-
 # Dismiss commands (B4): `ai-review: descartar F3` / `ai-review: descartar todo`.
 # Only applied when the comment author has push access, checked with the same token
 # that reads/writes the review (inputs.github_token via GH_TOKEN) against:
@@ -180,21 +70,6 @@ LITELLM_VERSION = "1.102.1"
 def libro_actualizado(sticky, manifest, result, repo, model_ok):
     previo = libro_de((sticky or {}).get("body") or "")[1] or {}
     return libro_fusionado(previo, manifest, result, repo, model_ok)
-
-
-def parse_findings_block(text, *, last=False):
-    """Estado legado crudo, o None (sin bloque, roto o de otra versión).
-
-    La lectura completa con migración (Valid/Legacy/Missing/Invalid/Future)
-    vive en review_domain.read_snapshot.
-    """
-    load = review_domain.read_snapshot(text, last=last)
-    return load.raw if isinstance(load, review_domain.Legacy) else None
-
-
-def serialize_findings(state):
-    """Bloque canónico dentro del presupuesto del adaptador (parcheable)."""
-    return review_domain.serialize_findings(state, max_bytes=FINDINGS_MAX_BYTES)
 
 
 def parse_dismiss_command(body):
@@ -570,7 +445,7 @@ def claude_version_ok(claude_bin):
 
 
 def cmd_install(args):
-    name, provider = get_provider()
+    name, provider = review_config.get_provider()
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     stage = claude_prefix()
@@ -810,7 +685,7 @@ def aceptar_reporte_directo(
         candidatos = sorted(abiertas & cambiadas)
         if candidatos:
             try:
-                revertidas = files_reverted(
+                revertidas = review_context.files_reverted(
                     _repo_actual(),
                     candidatos,
                     manifest["base"],
@@ -867,7 +742,7 @@ def cmd_publish(args):
     work = Path(args.work)
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
-    name, _ = get_provider()
+    name, _ = review_config.get_provider()
     result = json.loads((work / "result.json").read_text())
     name = result.get("review_provider", name)
     review_github.avisar_bloque_sin_cierre(result.get("result") or "")

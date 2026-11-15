@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_config
 import review_document
@@ -51,7 +52,7 @@ def commit(repo, mensaje):
 def texto_del_modelo(*hallazgos):
     bloque = json.dumps({"findings": list(hallazgos)})
     return (
-        f"Detalle.\n\n{review.FINDINGS_PREFIX}{bloque}{review.FINDINGS_SUFFIX}\n"
+        f"Detalle.\n\n{domain.FINDINGS_PREFIX}{bloque}{domain.FINDINGS_SUFFIX}\n"
         "COVERAGE: complete\n"
     )
 
@@ -180,7 +181,7 @@ class ReversionSoloDeLoQueElPrCambio(unittest.TestCase):
 
 def coordinador_revisa(repo, work, actual, base, head, texto):
     policy = review_config.politica_de_revision()
-    digest = review.digest_de_politica(policy)
+    digest = review_context.digest_de_politica(policy)
     facts = domain.RepositoryFacts(
         revision=domain.Revision(base_sha=base, head_sha=head, policy_digest=digest)
     )
@@ -213,7 +214,7 @@ def coordinador_revisa(repo, work, actual, base, head, texto):
     }
     with contextlib.redirect_stderr(io.StringIO()):
         facts = review_coordinator.hechos_con_delta_del_worker(facts, artifact, pedido.snapshot)
-    modelo = review.parse_model_findings(texto)
+    modelo = domain.parse_model_findings(texto)
     decision = domain.reconcile(
         pedido.snapshot,
         domain.ReportReady(
