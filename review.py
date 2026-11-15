@@ -418,7 +418,11 @@ def cmd_prepare(args):
         solicitante="",
     )
     preparacion = prepare_review(
-        repo, request, current, policy, cobertura_previa=prev.get("covered")
+        repo, request, current, policy,
+        cobertura_previa=prev.get("covered"),
+        alcance_legado=(mode, prev_sha)
+        if current.revision is None and mode in ("incremental", "continuation")
+        else None,
     )
 
     reviewed = [path.text for path in preparacion.entregados]

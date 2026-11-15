@@ -331,6 +331,24 @@ class PrepararBrazoDelta(unittest.TestCase):
         self.assertEqual(manifest["reason"], "no-prev")
         self.assertIsNone(manifest["prev_sha"])
 
+    def test_incremental_legacy_seed_delivers_only_new_push(self):
+        prev = {
+            "sha": self.previo,
+            "state": {"seen": 1, "findings": []},
+            "completion": "complete",
+        }
+        work = Path(self.tmp.name, "work-legacy-scope")
+        manifest = correr_prepare(
+            self.repo, self.base, self.cabeza, self.event, work, prev=prev,
+        )
+        patch = (work / "diff.patch").read_text()
+        self.assertEqual(manifest["mode"], "incremental")
+        self.assertEqual(manifest["changed_files"], ["cabeza.py"])
+        self.assertEqual(manifest["reviewed"], ["cabeza.py"])
+        self.assertIn("cabeza.py", patch)
+        self.assertNotIn("previo.py", patch)
+        self.assertEqual(manifest["diff_bytes"], len(patch.encode("utf-8")))
+
     def test_con_prev_json_sale_incremental_con_el_delta_real(self):
         prev = {
             "sha": self.previo,
