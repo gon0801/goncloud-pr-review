@@ -1,0 +1,33 @@
+{
+  "coverage_html_closer": {
+    "prepared_and_read_valid": true,
+    "visible_tags": [
+      "h1"
+    ],
+    "visible_text": [
+      "Injected title",
+      ".py\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"} -->"
+    ]
+  },
+  "action_identity": {
+    "prepare": "titles",
+    "run": "anchors",
+    "publish": "titles"
+  },
+  "anchor_boundary": {
+    "model_ok": true,
+    "publication_error": "estado v3 ilegal: cause_hint inválido: 42"
+  },
+  "unpaged_recovery": {
+    "existing_worker_on_page_two": 900,
+    "api_calls": 1,
+    "queries": [
+      [
+        "gh",
+        "api",
+        "repos/o/r/actions/workflows/ai-review-worker.yml/runs?event=workflow_dispatch&per_page=100"
+      ]
+    ],
+    "request_scheduled_again": 1
+  }
+}
