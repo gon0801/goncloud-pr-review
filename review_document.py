@@ -273,9 +273,9 @@ def _digest(text):
 
 
 def _json(value):
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":")).replace(
-        "<!--", "\\u003c\\u0021\\u002d\\u002d"
-    ).replace("-->", "\\u002d\\u002d\\u003e").replace("--!>", "--!\\u003e")
+    return domain.escape_hidden_json(
+        json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    )
 
 
 def _render(document, block, *, visible_only=False):

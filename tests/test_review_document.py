@@ -66,6 +66,50 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_json_oculto_no_cierra_comentarios_y_conserva_rutas(self):
+        path = "src/<!--a-->--!><h1>visible</h1>ñ\\u003e.py"
+        finding = domain.Finding(
+            id="F1", title="Error", severity="High",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path=path, line=1),
+        )
+        original = replace(
+            document(),
+            memory=replace(document().memory, findings=[finding], next_id=2),
+            covered=CoverageBook("a" * 40, ((path, "b" * 40),)),
+        )
+
+        class Visible(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = []
+
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+
+        current = original
+        for _ in range(3):
+            prepared = prepare_publication(current)
+            self.assertIsInstance(prepared, PreparedPublication)
+            hidden = []
+            for line in prepared.body.splitlines():
+                if line.startswith((
+                    domain.FINDINGS_PREFIX, "<!-- ai-review:view=",
+                    "<!-- ai-review:covered=",
+                )):
+                    hidden.append(line)
+                    payload = line.split("=", 1)[1].rsplit(" -->", 1)[0]
+                    self.assertNotIn("<!--", payload)
+                    self.assertNotIn("-->", payload)
+                    self.assertNotIn("--!>", payload)
+            parser = Visible()
+            parser.feed("\n".join(hidden))
+            self.assertNotIn("h1", parser.tags)
+            current = read_document(prepared.body)
+            self.assertIsInstance(current, ReviewDocument)
+            self.assertEqual(current.memory.findings[0].primary_anchor.path, path)
+            self.assertEqual(current.covered.entries[0][0], path)
+
     def test_three_notices_do_not_block_optional_book_omission(self):
         notices = tuple(Notice("no-entendido", comment_id=cid) for cid in (1, 2, 3))
         book = CoverageBook(

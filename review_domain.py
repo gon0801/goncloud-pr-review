@@ -1603,7 +1603,7 @@ def _encode_sin_perdida(snapshot, limite):
             "findings": _findings_json(snapshot, neutralizar=False),
         }
         blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-        blob = blob.replace("-->", "--\\u003e").replace("--!>", "--!\\u003e")
+        blob = escape_hidden_json(blob)
         bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
         load = read_snapshot(bloque)
         if not isinstance(load, Valid) or load.snapshot.schema != 3:
@@ -1613,6 +1613,14 @@ def _encode_sin_perdida(snapshot, limite):
             return CapacityExceeded(limit=limite, needed=needed)
         return EncodedCheckpoint(block=bloque, schema=3, bytes=needed)
     raise ValueError(f"schema desconocido: {snapshot.schema!r}")
+
+
+def escape_hidden_json(serialized):
+    return (
+        serialized.replace("<!--", "\\u003c!--")
+        .replace("--!>", "--!\\u003e")
+        .replace("-->", "--\\u003e")
+    )
 
 
 # ---- F0: identidad, evidencia y resolución ----
