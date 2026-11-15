@@ -1,21 +1,35 @@
 import ast
 from pathlib import Path
 
-import review_context
-import review_domain
-import review_render
-import review_sticky
+
+MODULES = (
+    "review_context", "review_domain", "review_sticky", "review_render",
+    "review_config",
+)
 
 
-MODULES = (review_context, review_domain, review_sticky, review_render)
+def _defined_names(module):
+    path = Path(__file__).resolve().parent.parent / f"{module}.py"
+    names = set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+            for target in targets:
+                names.update(
+                    item.id for item in ast.walk(target) if isinstance(item, ast.Name)
+                )
+    return names
+
+
+DEFINITIONS = {module: _defined_names(module) for module in MODULES}
 
 
 def owner(name):
-    if name in {"OPEN", "RESOLVED", "DISMISSED"}:
-        return "review_domain"
     for module in MODULES:
-        if hasattr(module, name):
-            return module.__name__
+        if name in DEFINITIONS[module]:
+            return module
     return None
 
 

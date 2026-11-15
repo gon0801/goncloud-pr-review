@@ -15,7 +15,6 @@ import test_capacidad_pr20
 
 import review
 import review_config
-import review_sticky
 import review_coordinator
 import review_domain as domain
 import review_github
@@ -935,7 +934,7 @@ class PublicacionDirecta(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             (work / "result.json").write_text(json.dumps({
-                review_sticky.ERROR_KEY: "worker no terminó",
+                review_config.ERROR_KEY: "worker no terminó",
             }))
             (work / "manifest.json").write_text(json.dumps({
                 "mode": "full", "reviewed": ["a.py"], "excluded": [],
