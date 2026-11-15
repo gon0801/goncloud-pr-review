@@ -21,6 +21,7 @@ from review_config import (
     secretos_del_entorno,
 )
 import review_domain
+import review_document
 import review_github
 from review_render import (
     ALCANCE_INICIO,
@@ -201,6 +202,8 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     """
     if not isinstance(decision, review_domain.Commit):
         return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
+    if observado and review_document.has_document_marker(observado.get("body") or ""):
+        return Unconfirmed("documento de versión posterior; escritura detenida")
     encoded = _cuerpo_con_checkpoint(decision)
     if isinstance(encoded, review_domain.CapacityExceeded):
         motivo = "desborde de memoria: se conserva el checkpoint previo"
@@ -215,6 +218,8 @@ def publish_checkpoint(decision, observado, adaptador, login=None, visible=None)
     ]
     if len(marcados) > 1:
         return Unconfirmed("múltiples comentarios con el marcador; escritura detenida")
+    if any(review_document.has_document_marker(c.get("body") or "") for c in marcados):
+        return Unconfirmed("documento de versión posterior; escritura detenida")
     carga_observada = review_domain.read_snapshot(
         (observado or {}).get("body") or "", last=False
     )
@@ -473,6 +478,8 @@ def _estado_actual(sticky):
     """Estado migrado a v3 para el coordinador; None sólo con memoria
     inválida o de versión futura (se conserva, como en cmd_publish). Un
     sticky sin bloque de memoria es ausencia real: arranca vacío."""
+    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
+        return None
     memoria = review_domain.memoria_operativa(
         review_domain.read_snapshot(sticky["body"] if sticky else "")
     )

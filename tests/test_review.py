@@ -3336,6 +3336,7 @@ class Workflows(unittest.TestCase):
             for nombre in (
                 "review.py",
                 "review_domain.py",
+                "review_document.py",
                 "review_context.py",
                 "review_config.py",
                 "review_run.py",

@@ -20,6 +20,7 @@ from review_config import (
 )
 import review_coordinator
 import review_domain
+import review_document
 import review_github
 import review_run
 from review_render import (
@@ -269,6 +270,10 @@ def cmd_gate(args):
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
+    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
+        review_github.set_output("skip", "true")
+        print("ai-review: vista de documento posterior; se omite la revisión")
+        return
     rerun = int(os.environ.get("RUN_ATTEMPT", "1")) > 1
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
@@ -903,6 +908,10 @@ def cmd_publish(args):
     manifest = json.loads((work / "manifest.json").read_text())
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
+    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
+        print("ai-review: vista de documento posterior; se conserva sin tocar", file=sys.stderr)
+        review_github.informar_revision(False)
+        return
 
     revisado = False
     escribir = True

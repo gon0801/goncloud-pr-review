@@ -22,4 +22,4 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar -xz gitleaks
           ./gitleaks git --redact -v .
       - name: Comprobar que el codigo carga
-        run: python3 -m compileall -q review.py review_context.py review_domain.py review_config.py review_run.py review_sticky.py review_render.py review_github.py review_commands.py review_coordinator.py scripts tests evaluation
+        run: python3 -m compileall -q review.py review_context.py review_domain.py review_document.py review_config.py review_run.py review_sticky.py review_render.py review_github.py review_commands.py review_coordinator.py scripts tests evaluation
