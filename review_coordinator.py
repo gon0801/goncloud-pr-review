@@ -1,14 +1,17 @@
 """El modo coordinado: el coordinador que converge el PR en cada evento y los pasos del worker que preparan la solicitud y cierran el resultado."""
 
-from dataclasses import dataclass, replace
-import html
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+import review_document
+import review_domain
+import review_github
 from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
@@ -20,34 +23,23 @@ from review_config import (
     politica_de_revision,
     secretos_del_entorno,
 )
-import review_domain
-import review_document
-import review_github
+from review_context import GitRepository, digest_de_politica
+from review_document import PublishReceipt, Unconfirmed
+from review_domain import (
+    leer_cierre,
+    parse_model_findings,
+    strip_model_findings_block,
+)
 from review_render import (
-    ALCANCE_INICIO,
-    DETALLE_DEL_REVISOR,
-    GITHUB_COMMENT_MAX,
-    VERDICT_RE,
-    aviso_md,
     caution_banner,
-    compose,
-    cuerpo_publicable,
-    insert_caution_banner,
     neutralizar_marcadores,
     prosa_del_modelo,
     redact,
-    sections_for,
     strip_model_verdict,
-    verdict_for,
 )
 from review_sticky import (
-    COMPLETION_PREFIX,
-    COVERED_PREFIX,
-    MARKER,
-    SHA_PREFIX,
     cobertura_declarada,
     continuacion_terminal,
-    libro_de,
     libro_fusionado,
     modelo_utilizable,
     prev_de_memoria,
@@ -55,27 +47,6 @@ from review_sticky import (
     sha_hexa,
     sticky_from_comments,
 )
-from review_domain import (
-    leer_cierre,
-    parse_model_findings,
-    strip_findings_block,
-    strip_model_findings_block,
-)
-from review_context import GitRepository, digest_de_politica
-
-
-@dataclass
-class PublishReceipt:
-    generacion: int
-    recibo: dict
-    trabajo: tuple
-
-
-@dataclass
-class Unconfirmed:
-    """Escritura incierta: el siguiente evento relee antes de reintentar."""
-
-    motivo: str
 
 
 @dataclass
@@ -93,198 +64,11 @@ class Rejected:
     motivo: str
 
 
-def _cuerpo_con_checkpoint(decision):
-    encoded = review_domain.encode_snapshot(
-        decision.snapshot, review_domain.StorageBudget()
-    )
-    if isinstance(encoded, review_domain.CapacityExceeded):
-        return encoded
-    return encoded.block if decision.snapshot.schema == 3 else encoded
-
-
-def _parchar_aviso(observado, adaptador, banner):
-    """El banner CAUTION va al sticky EXISTENTE, best-effort. Sin sticky no
-    se crea comentario: un MARKER sin bloque válido secuestraría el sticky
-    futuro. Si el PATCH falla, manda el Unconfirmed del llamador."""
-    if observado is None:
-        return False
-    try:
-        adaptador.parchar(
-            observado["id"],
-            insert_caution_banner(observado.get("body") or "", banner),
-        )
-    except Exception:
-        return False
-    return True
-
-
-def _avisar_desborde(desborde, decision, observado, adaptador):
-    revision = decision.snapshot.revision
-    banner = caution_banner(
-        f"memoria de desborde ({desborde.needed} bytes para {desborde.limit}) "
-        "conservada; esta versión no la modifica",
-        revision.head_sha if revision else "",
-        has_previous=True,
-    )
-    return _parchar_aviso(observado, adaptador, banner)
-
-
-def _avisar_sin_espacio(decision, observado, adaptador):
-    """El comentario no trae el bloque de estado (no cabe el fijo del
-    sticky): el checkpoint previo se conserva y el sticky queda visible con
-    el aviso. Nunca se escribe un cuerpo sin bloque válido."""
-    revision = decision.snapshot.revision
-    banner = caution_banner(
-        "comentario sin espacio para el estado; el checkpoint previo se "
-        "conserva y esta versión no la modifica",
-        revision.head_sha if revision else "",
-        has_previous=True,
-    )
-    return _parchar_aviso(observado, adaptador, banner)
-
-
 def _login_de(comentario):
     user = comentario.get("user")
     if isinstance(user, str):
         return user
     return comentario.get("login") or (user or {}).get("login")
-
-
-def cuerpo_con_cabecera(bloque, resto):
-    """MARKER, sha=, completion= y después el bloque, el orden de compose:
-    reviewed_completion exige esas dos líneas justo tras el marcador."""
-    lineas = resto.split("\n") if resto else []
-    cabecera = []
-    while lineas and lineas[0].startswith((SHA_PREFIX, COMPLETION_PREFIX)):
-        cabecera.append(lineas.pop(0))
-    cuerpo = "\n".join([MARKER, *cabecera, bloque])
-    cola = "\n".join(lineas)
-    return f"{cuerpo}\n{cola}" if cola else cuerpo
-
-
-def texto_visible(cuerpo):
-    return re.sub(r"<!--.*?-->", "", cuerpo or "", flags=re.S).strip()
-
-
-def _resto_de(cuerpo):
-    """Lo que `visible(bloque, resto)` recibe de un cuerpo: sin el marcador, sin
-    el bloque y sin las líneas de estado, que se recalculan en cada escritura."""
-    lineas = cuerpo.split("\n")
-    resto = "\n".join(lineas[1:]) if lineas and lineas[0] == MARKER else cuerpo
-    return "\n".join(
-        linea
-        for linea in strip_findings_block(resto, last=False).split("\n")
-        if not linea.startswith((AVISO_EN_CURSO_PREFIX, AVISO_SIN_REVISION_PREFIX))
-    ).strip()
-
-
-def encadenar(*pasos):
-    """Re-renders en orden: cada uno parte del cuerpo que armó el anterior."""
-
-    def armar(bloque, resto):
-        cuerpo = pasos[0](bloque, resto)
-        for paso in pasos[1:]:
-            cuerpo = paso(bloque, _resto_de(cuerpo))
-        return cuerpo
-
-    return armar
-
-
-def publish_checkpoint(decision, observado, adaptador, login=None, visible=None):
-    """El sticky gobierna por su PRIMER bloque: la escritura reemplaza ese
-    bloque y conserva el resto (la prosa puede citar otros), salvo que
-    `visible(bloque, resto)` arme el cuerpo completo. Relee antes de
-    escribir (duplicados del bot y checkpoint ya aplicado); una respuesta de
-    PATCH/POST perdida devuelve Unconfirmed para que el siguiente paso relea.
-    Un Keep no escribe: es un no-op confirmado, igual que crear un sticky que
-    no tendría texto visible. La línea de revisión en curso no se arrastra:
-    solo estado_visible la vuelve a poner mientras siga pendiente.
-    """
-    if not isinstance(decision, review_domain.Commit):
-        return PublishReceipt(generacion=0, recibo={"sin_cambios": True}, trabajo=())
-    if observado and review_document.has_document_marker(observado.get("body") or ""):
-        return Unconfirmed("documento de versión posterior; escritura detenida")
-    encoded = _cuerpo_con_checkpoint(decision)
-    if isinstance(encoded, review_domain.CapacityExceeded):
-        motivo = "desborde de memoria: se conserva el checkpoint previo"
-        if _avisar_desborde(encoded, decision, observado, adaptador):
-            motivo += "; aviso publicado en el comentario"
-        return Unconfirmed(motivo)
-    bloque = encoded
-    marcados = [
-        c
-        for c in adaptador.leer()
-        if MARKER in (c.get("body") or "") and (login is None or _login_de(c) == login)
-    ]
-    if len(marcados) > 1:
-        return Unconfirmed("múltiples comentarios con el marcador; escritura detenida")
-    if any(review_document.has_document_marker(c.get("body") or "") for c in marcados):
-        return Unconfirmed("documento de versión posterior; escritura detenida")
-    carga_observada = review_domain.read_snapshot(
-        (observado or {}).get("body") or "", last=False
-    )
-    if (
-        observado is not None
-        and isinstance(carga_observada, review_domain.Valid)
-        and carga_observada.block == bloque
-    ):
-        return PublishReceipt(
-            generacion=decision.snapshot.generation,
-            recibo={"comentario_id": observado.get("id"), "ya_aplicado": True},
-            trabajo=decision.work_after_commit,
-        )
-    if visible is None:
-        visible = cuerpo_con_cabecera
-
-    if observado is None:
-        cuerpo = visible(bloque, "")
-        if not texto_visible(cuerpo):
-            return PublishReceipt(
-                generacion=0, recibo={"sin_texto_visible": True}, trabajo=()
-            )
-        if not cuerpo_publicable(cuerpo, bloque):
-            return Unconfirmed(
-                "el comentario no trae el bloque de estado; no se crea sticky"
-            )
-        try:
-            adaptador.crear(cuerpo)
-        except Exception as exc:
-            return Unconfirmed(f"respuesta de POST incierta: {exc}")
-        creado = next(
-            (
-                c
-                for c in adaptador.leer()
-                if MARKER in (c.get("body") or "")
-                and (login is None or _login_de(c) == login)
-            ),
-            None,
-        )
-        return PublishReceipt(
-            generacion=decision.snapshot.generation,
-            recibo={"comentario_id": creado.get("id") if creado else None},
-            trabajo=decision.work_after_commit,
-        )
-    cuerpo = visible(bloque, _resto_de(observado.get("body") or ""))
-    if not texto_visible(cuerpo):
-        # Un sticky que ya existe no puede quedar como un comentario en blanco.
-        cuerpo = f"{cuerpo}\n\n{LINEA_SIN_REVISION}"
-    if not cuerpo_publicable(cuerpo, bloque):
-        motivo = (
-            "el comentario no trae el bloque de estado: se conserva el "
-            "checkpoint previo"
-        )
-        if _avisar_sin_espacio(decision, observado, adaptador):
-            motivo += "; aviso publicado en el comentario"
-        return Unconfirmed(motivo)
-    try:
-        adaptador.parchar(observado["id"], cuerpo)
-    except Exception as exc:
-        return Unconfirmed(f"respuesta de PATCH incierta: {exc}")
-    return PublishReceipt(
-        generacion=decision.snapshot.generation,
-        recibo={"comentario_id": observado["id"]},
-        trabajo=decision.work_after_commit,
-    )
 
 
 def request_de_solicitud(
@@ -474,18 +258,6 @@ def _run_id():
     return int(valor) if valor.isdigit() else 0
 
 
-def _estado_actual(sticky):
-    """Estado migrado a v3 para el coordinador; None sólo con memoria
-    inválida o de versión futura (se conserva, como en cmd_publish). Un
-    sticky sin bloque de memoria es ausencia real: arranca vacío."""
-    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
-        return None
-    memoria = review_domain.memoria_operativa(
-        review_domain.read_snapshot(sticky["body"] if sticky else "")
-    )
-    return memoria.snapshot if isinstance(memoria, review_domain.MemoryReady) else None
-
-
 def _comandos_de_comentarios(comentarios, login, cursor):
     """El checkpoint es datos, nunca comandos: fuera los comentarios del
     propio bot y el texto que no contiene un comando."""
@@ -523,7 +295,7 @@ def _comandos_de_comentarios(comentarios, login, cursor):
 
 def fallo_de_resultado(artifact, run_id, attempt):
     # La presencia de la clave decide, como reviewed= en el worker y el aviso
-    # de revision_visible: un motivo vacío sigue siendo un fallo.
+    # de la vista tipada: un motivo vacío sigue siendo un fallo.
     if ERROR_KEY not in (artifact or {}):
         return None
     return review_domain.ReportFailed(
@@ -858,7 +630,7 @@ class Plan:
     trabajo: tuple
     terminadas: tuple
     sin_cambios: bool
-    visible: object = None
+    document: review_document.ReviewDocument | None = None
 
 
 def decidir(
@@ -876,6 +648,7 @@ def decidir(
     hay_sticky,
     permisos,
     ultimo_comentario,
+    document,
 ):
     # Se despacha otra vez; si el run solo tardó en aparecer en la lista, el
     # grupo del worker cancela al anterior y cuenta el más nuevo. Un PR
@@ -927,15 +700,45 @@ def decidir(
     if estado == current and not trabajo:
         return Plan(estado, trabajo, terminadas, sin_cambios=True)
 
-    # Varias explicaciones pueden llegar en la misma cosecha: una por re-render.
-    pasos = [estado_visible(estado, e) for e in explicaciones[:-1]]
-    pasos.append(estado_visible(estado, (explicaciones or [None])[-1], avisos))
+    visible = replace(document, memory=estado)
     if revision_entregada is not None:
         artifact, previos, cabeza = revision_entregada
-        revision = revision_visible(artifact, estado, previos, cabeza)
-        pasos = [revision, *pasos] if avisos or explicaciones else [revision]
-    visible = encadenar(*pasos)
-    return Plan(estado, trabajo, terminadas, sin_cambios=False, visible=visible)
+        if ERROR_KEY in artifact:
+            visible = replace(
+                visible,
+                failure=review_document.FailureView(
+                    cabeza, "worker-failed",
+                    review_document.SafeProse(str(artifact[ERROR_KEY])),
+                ),
+            )
+        else:
+            proveedor = artifact.get("review_provider")
+            if proveedor not in PROVIDERS:
+                proveedor = get_provider()[0]
+            manifest = {"reviewed": [], "excluded": [], **(artifact.get("manifest") or {})}
+            libro = artifact.get("covered")
+            if libro is not None and not (
+                artifact.get("model_ok", True) and forma_utilizable_del_artifact(artifact)
+            ):
+                previo = dict(document.covered.entries) if document.covered else {}
+                libro = {
+                    ruta: blob for ruta, blob in libro.items()
+                    if previo.get(ruta) == blob
+                }
+            visible = review_document.document_from_result(
+                visible,
+                estado,
+                artifact,
+                manifest,
+                proveedor,
+                cabeza,
+                [finding.id for finding in estado.findings if finding.id not in previos],
+                libro,
+            )
+    visible = review_document.update_presentation(
+        visible, estado, explicaciones, avisos,
+    )
+    return Plan(estado, trabajo, terminadas, sin_cambios=False, document=visible)
 
 
 def cmd_reconcile(args):
@@ -950,13 +753,14 @@ def cmd_reconcile(args):
     adaptador = ComentariosGh(repo, pr)
     comments = adaptador.leer()
     sticky = sticky_from_comments(comments, login)
-    current = _estado_actual(sticky)
-    if current is None:
+    document = review_document.read_document(sticky["body"] if sticky else "")
+    if isinstance(document, review_document.DocumentBlocked):
         print(
             "ai-review: memoria inválida o de versión futura; se conserva sin tocar",
             file=sys.stderr,
         )
         return
+    current = document.memory
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     if event_name == "issue_comment":
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
@@ -976,7 +780,7 @@ def cmd_reconcile(args):
             pr_data = json.loads(review_github.sh("gh", "api", f"repos/{repo}/pulls/{pr}").stdout)
             head = pr_data["head"]["sha"]
             base = pr_data["base"]["sha"]
-        except Exception as exc:
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(
                 f"ai-review: no se pudo consultar el PR ({exc}); "
                 "queda pendiente para el próximo evento",
@@ -1017,7 +821,7 @@ def cmd_reconcile(args):
     avisos = tuple(
         aviso
         for cid, effect in rechazos
-        if (aviso := aviso_de_rechazo(cid, effect)) is not None
+        if (aviso := notice_de_rechazo(cid, effect)) is not None
     )
 
     if event_name not in (
@@ -1035,7 +839,7 @@ def cmd_reconcile(args):
         entregas, sin_corrida, rechazo = cosechar(
             estado, repo, pr, worker_ref, args.work, _run_avisado()
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(
             f"ai-review: no se pudo cosechar el worker ({exc}); "
             "se reintenta en el próximo evento",
@@ -1057,6 +861,7 @@ def cmd_reconcile(args):
         hay_sticky=sticky is not None,
         permisos=permisos,
         ultimo_comentario=lambda: _ultimo_comentario(adaptador),
+        document=document,
     )
     for terminada in plan.terminadas:
         print(f"ai-review: solicitud {terminada.id} terminada ({terminada.motivo})")
@@ -1066,12 +871,21 @@ def cmd_reconcile(args):
             sys.exit(1)
         return
 
-    resultado = publish_checkpoint(
-        review_domain.Commit(snapshot=plan.estado, work_after_commit=plan.trabajo),
-        sticky or None,
-        adaptador,
-        login=login,
-        visible=plan.visible,
+    prepared = review_document.prepare_publication(
+        plan.document, review_domain.StorageBudget(), secretos_del_entorno(),
+    )
+    if isinstance(prepared, review_domain.CapacityExceeded):
+        status = review_document.publish_capacity_notice(
+            sticky, adaptador, login=login, secrets=secretos_del_entorno(),
+        )
+        print(f"ai-review: {status.motivo}", file=sys.stderr)
+        sys.exit(1)
+    if isinstance(prepared, review_document.DocumentBlocked):
+        print("ai-review: documento inválido; se conserva sin tocar", file=sys.stderr)
+        sys.exit(1)
+    resultado = review_document.publish_checkpoint(
+        prepared, sticky or None, adaptador, login=login,
+        work_after_commit=plan.trabajo,
     )
     if isinstance(resultado, Unconfirmed):
         print(
@@ -1107,12 +921,13 @@ def cmd_execute_request(args):
     sticky = sticky_from_comments(
         adaptador.leer(), os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     )
-    current = _estado_actual(sticky)
-    if current is None:
+    document = review_document.read_document(sticky["body"] if sticky else "")
+    if isinstance(document, review_document.DocumentBlocked):
         sys.exit(
             "ai-review: memoria inválida o de versión futura; "
             "no se ejecuta la solicitud"
         )
+    current = document.memory
     solicitud = next(
         (
             r
@@ -1235,148 +1050,22 @@ CAMPOS_DEL_ALCANCE = (
 )
 
 
-def revision_visible(artifact, snapshot, previos, head):
-    """Arma el comentario del resultado del worker con el mismo render que el
-    revisor directo. Un fallo no marca el SHA como revisado: antepone el aviso
-    a la revisión anterior."""
-
-    def armar(bloque, resto):
-        if ERROR_KEY in artifact:
-            banner = caution_banner(artifact[ERROR_KEY], head, has_previous=bool(resto))
-            return cuerpo_con_cabecera(
-                bloque, insert_caution_banner(resto, banner).rstrip()
-            )
-        proveedor = artifact.get("review_provider")
-        if proveedor not in PROVIDERS:
-            proveedor = get_provider()[0]
-        manifest = {"reviewed": [], "excluded": [], **(artifact.get("manifest") or {})}
-        model_ok = artifact.get("model_ok", True) and forma_utilizable_del_artifact(
-            artifact
-        )
-        libro = artifact.get("covered")
-        if not model_ok and libro is not None:
-            previo = libro_de(resto)[1] or {}
-            libro = {ruta: blob for ruta, blob in libro.items() if previo.get(ruta) == blob}
-        return compose(
-            artifact,
-            manifest,
-            sha=head,
-            provider=proveedor,
-            findings={
-                "merged": review_domain.hallazgos_legacy(snapshot),
-                "new_ids": [f.id for f in snapshot.findings if f.id not in previos],
-                "block": bloque,
-                "model_ok": model_ok,
-                "completion": snapshot.completion,
-                "no_acreditados": review_domain.resoluciones_sin_acreditar(snapshot),
-            },
-            libro=libro,
-            budget=review_domain.StorageBudget(),
-        )
-
-    return armar
-
-
-TITULO_DE_REVISION = "### Revisión automática · "
-EXPLICACION_PREFIX = "## Explicación de "
 EXPLICACION_MAX = 8000
-EXPLICACIONES_VISIBLES = 3
-AVISO_COMANDO_PREFIX = aviso_md("Comando no entendido", "")
-AVISOS_VISIBLES = 3
-AVISO_EN_CURSO_PREFIX = aviso_md("Revisión en curso", "")
-AVISO_SIN_REVISION_PREFIX = aviso_md("Sin revisión publicada", "")
-LINEA_SIN_REVISION = (
-    f"{AVISO_SIN_REVISION_PREFIX}este PR no tiene una revisión pendiente ni "
-    "publicada; la pide `ai-review: revisar`, o un push cuando el PR está "
-    "abierto y listo para revisión."
-)
 
 
-def linea_en_curso(snapshot):
-    """La línea visible de la revisión pendiente, para que un sticky sin
-    revisión publicada nunca quede vacío; None sin revisión pendiente."""
-    pendiente = next(
-        (
-            r
-            for r in reversed(snapshot.pending_requests)
-            if r.kind == "review" and r.state == review_domain.PENDIENTE
-        ),
-        None,
-    )
-    if pendiente is None:
-        return None
-    head = pendiente.target.get("head_sha", "")
-    commit = f"el commit `{head[:7]}`" if sha_hexa(head) else "el PR"
-    return (
-        f"{AVISO_EN_CURSO_PREFIX}el revisor está revisando {commit}; este "
-        "comentario se actualiza cuando termine."
-    )
-
-
-def es_aviso_de_comando(linea):
-    """Solo la línea exacta que escribe el programa para un comentario real se
-    conserva entre re-renders; cualquier otra que imite el prefijo se descarta."""
-    m = re.search(r"el comentario (\d{1,19}) ", linea)
-    if not m:
-        return False
-    cid = int(m.group(1))
-    if any(linea == aviso(cid) for aviso in AVISOS_DE_RECHAZO.values()):
-        return True
-    ids = re.findall(r"\bF\d{1,9}\b", linea)
-    return bool(ids) and linea == aviso_de_hallazgo_inexistente(cid, ids)
-
-
-def aviso_de_comando_no_entendido(cid):
-    return (
-        f"{AVISO_COMANDO_PREFIX}el comentario {cid} menciona `ai-review:` pero no es un "
-        "comando que entienda; cada comando va al inicio de una línea: "
-        "`ai-review: descartar F3`, `ai-review: descartar F1, F2`, "
-        "`ai-review: descartar todo`, `ai-review: explicar F3` o `ai-review: revisar`."
-    )
-
-
-def aviso_de_hallazgo_inexistente(cid, ids):
-    nombrados = (
-        f"el hallazgo {ids[0]}, que no existe"
-        if len(ids) == 1
-        else f"los hallazgos {', '.join(ids)}, que no existen"
-    )
-    return (
-        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} nombra "
-        f"{nombrados}; no se aplicó nada."
-    )
-
-
-def aviso_de_comando_extra(cid):
-    return (
-        f"{aviso_md('Comando no aplicado', '')}el comentario {cid} trae más de un "
-        "comando; solo se lee el primero. Escribe cada comando en su propio "
-        "comentario."
-    )
-
-
-def aviso_de_todo_tardio(cid):
-    return (
-        f"{aviso_md('Comando no aplicado', '')}`ai-review: descartar todo` del "
-        f"comentario {cid} es de antes de la última revisión con hallazgos nuevos y "
-        "no se aplicó; si también quieres descartarlos, comenta de nuevo "
-        "`ai-review: descartar todo`."
-    )
-
-
-AVISOS_DE_RECHAZO = {
-    review_domain.RECHAZO_NO_ENTENDIDO: aviso_de_comando_no_entendido,
-    review_domain.RECHAZO_COMANDO_EXTRA: aviso_de_comando_extra,
-    review_domain.RECHAZO_TODO_TARDIO: aviso_de_todo_tardio,
-}
-
-
-def aviso_de_rechazo(cid, efecto):
-    if efecto in AVISOS_DE_RECHAZO:
-        return AVISOS_DE_RECHAZO[efecto](cid)
+def notice_de_rechazo(cid, efecto):
+    kinds = {
+        review_domain.RECHAZO_NO_ENTENDIDO: "no-entendido",
+        review_domain.RECHAZO_COMANDO_EXTRA: "extra",
+        review_domain.RECHAZO_TODO_TARDIO: "todo-tardio",
+    }
+    if efecto in kinds:
+        return review_document.Notice(kinds[efecto], comment_id=cid)
     prefijo = f"{review_domain.RECHAZO_HALLAZGO_INEXISTENTE}: "
     if efecto.startswith(prefijo):
-        return aviso_de_hallazgo_inexistente(cid, efecto[len(prefijo) :].split(", "))
+        return review_document.Notice(
+            "inexistente", tuple(efecto[len(prefijo):].split(", ")), cid,
+        )
     return None
 
 
@@ -1387,159 +1076,8 @@ def texto_de_explicacion(artifact):
     avisos del programa (una cita `> **Comando no entendido:**` deja de serlo)."""
     texto = leer_cierre(artifact.get("result") or "").prosa
     texto = strip_model_verdict(strip_model_findings_block(texto)).strip()
-    texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.M)
+    texto = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]+", "#### ", texto, flags=re.MULTILINE)
     texto = neutralizar_marcadores(prosa_del_modelo(texto))
     if len(texto) > EXPLICACION_MAX:
         texto = texto[:EXPLICACION_MAX] + "\n\n_(Explicación recortada.)_"
     return texto or "_El revisor no devolvió texto._"
-
-
-def estado_visible(snapshot, explicacion=None, avisos=()):
-    """Re-render del comentario cuando un comando o una explicación cambian la
-    memoria sin una revisión nueva: veredicto y secciones salen del snapshot;
-    los marcadores sha=/completion=, los avisos, el título y el detalle del
-    revisor se conservan (nada de esto acredita un SHA). explicacion es
-    (finding_id, texto). avisos son líneas de comandos que no se entendieron:
-    se ven tras las secciones y se conservan los últimos en los re-renders. Un
-    cuerpo sin la forma de una revisión conserva el resto tal cual."""
-    merged = review_domain.hallazgos_legacy(snapshot)
-    titulos = {f["id"]: f["title"] for f in merged}
-    nueva = []
-    if explicacion is not None:
-        fid, texto = explicacion
-        titulo = html.escape(titulos.get(fid, ""), quote=False)
-        nueva = [
-            f"{EXPLICACION_PREFIX}{fid}" + (f" · {titulo}" if titulo else ""),
-            "",
-            texto,
-        ]
-
-    def armar(bloque, resto):
-        lineas = resto.split("\n") if resto else []
-        titulo = next(
-            (
-                i
-                for i, linea in enumerate(lineas)
-                if linea.startswith(TITULO_DE_REVISION)
-            ),
-            None,
-        )
-        detalle = next(
-            (i for i, linea in enumerate(lineas) if linea == DETALLE_DEL_REVISOR), None
-        )
-        veredicto = (
-            next(
-                (i for i in range(titulo, detalle) if VERDICT_RE.match(lineas[i])),
-                None,
-            )
-            if titulo is not None and detalle is not None and titulo < detalle
-            else None
-        )
-        if veredicto is None:
-            cuerpo = cuerpo_con_cabecera(bloque, resto)
-            en_curso = linea_en_curso(snapshot)
-            return "\n".join(
-                [
-                    cuerpo,
-                    *(["", en_curso] if en_curso else []),
-                    *(["", *avisos] if avisos else []),
-                    *(["", *nueva] if nueva else []),
-                ]
-            )[:GITHUB_COMMENT_MAX]
-        marcas = (SHA_PREFIX, COMPLETION_PREFIX, COVERED_PREFIX)
-        # Los avisos de un cuerpo viejo citan motivos y detalle de cobertura del
-        # modelo publicados antes de neutralizarse.
-        previo = [
-            neutralizar_marcadores(linea)
-            for linea in lineas[:titulo]
-            if not linea.startswith(marcas)
-        ]
-        while previo and not previo[0]:
-            previo.pop(0)
-        while previo and not previo[-1]:
-            previo.pop()
-        region = lineas[veredicto:detalle]
-        nuevos = []
-        if "## Nuevos en este push" in region and "## Siguen abiertos" in region:
-            tramo = region[
-                region.index("## Nuevos en este push") : region.index(
-                    "## Siguen abiertos"
-                )
-            ]
-            nuevos = [
-                m.group(1) for linea in tramo if (m := re.search(r" · (\S+)$", linea))
-            ]
-        explicaciones = []
-        previos_avisos = []
-        for linea in region:
-            if linea.startswith(EXPLICACION_PREFIX):
-                explicaciones.append([linea])
-            elif explicaciones:
-                explicaciones[-1].append(linea)
-            elif es_aviso_de_comando(linea):
-                previos_avisos.append(linea)
-        todos_avisos = [a for a in previos_avisos if a not in avisos] + list(avisos)
-        if nueva:
-            explicaciones = [
-                e
-                for e in explicaciones
-                if e[0].split(" · ")[0] != nueva[0].split(" · ")[0]
-            ]
-            explicaciones.append(nueva)
-        conservadas = [linea for linea in lineas[:titulo] if linea.startswith(marcas)]
-        # Con un aviso previo, la forma de revision_visible ante un fallo: el
-        # aviso tras la cabecera, para que el próximo fallo lo reemplace.
-        cabecera = [MARKER, *conservadas, bloque, *previo, *([""] if previo else [])]
-        cuerpo = [
-            *cabecera,
-            lineas[titulo],
-            *(
-                neutralizar_marcadores(linea)
-                for linea in lineas[titulo + 1 : veredicto]
-            ),
-            verdict_for(merged),
-            "",
-            *sections_for(
-                merged, nuevos, review_domain.resoluciones_sin_acreditar(snapshot)
-            ),
-        ]
-        for aviso in todos_avisos[-AVISOS_VISIBLES:]:
-            cuerpo += ["", aviso]
-        for e in explicaciones[-EXPLICACIONES_VISIBLES:]:
-            while e and not e[-1]:
-                e = e[:-1]
-            cuerpo += ["", *e]
-        # La prosa del detalle de un cuerpo publicado antes de neutralizarse
-        # tampoco puede llevar marcadores vivos al cuerpo nuevo. El alcance real
-        # es el último: la prosa vieja puede traer una línea idéntica.
-        alcance = max(
-            (i for i in range(detalle, len(lineas)) if lineas[i] == ALCANCE_INICIO),
-            default=len(lineas),
-        )
-        # Dentro del Alcance las rutas salen del PR: solo su <details> de apertura
-        # y su </details> de cierre quedan vivos.
-        cierre = max(
-            (i for i in range(alcance, len(lineas)) if lineas[i] == "</details>"),
-            default=None,
-        )
-        if alcance < len(lineas) and cierre is not None:
-            cola = [
-                lineas[alcance],
-                *(
-                    neutralizar_marcadores(linea)
-                    for linea in lineas[alcance + 1 : cierre]
-                ),
-                lineas[cierre],
-                *(neutralizar_marcadores(linea) for linea in lineas[cierre + 1 :]),
-            ]
-        else:
-            cola = [neutralizar_marcadores(linea) for linea in lineas[alcance:]]
-        cuerpo += [
-            "",
-            lineas[detalle],
-            *(neutralizar_marcadores(linea) for linea in lineas[detalle + 1 : alcance]),
-            *cola,
-        ]
-        return "\n".join(cuerpo)[:GITHUB_COMMENT_MAX]
-
-    return armar

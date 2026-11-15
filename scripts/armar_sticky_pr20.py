@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Arma el sticky completo del caso representativo del PR #20 de hermes.
 
 Uso:
@@ -21,11 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import review  # noqa: E402
-import review_coordinator
-
-import review_sticky
-import review_domain as domain  # noqa: E402
+import review_document
+import review_domain as domain
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -66,23 +62,26 @@ def aceptar_ronda(body, ronda):
 def armar(body, ronda):
     previos = {f.id for f in domain.read_snapshot(body).snapshot.findings}
     snapshot = aceptar_ronda(body, ronda)
-    lineas = body.split("\n")
-    resto = "\n".join(lineas[1:]) if lineas and lineas[0] == review_sticky.MARKER else body
-    resto = review.strip_findings_block(resto, last=False).strip()
-    visible = review_coordinator.revision_visible(
-        dict(ronda, review_provider="opencode-go", model_ok=True),
+    document = review_document.document_from_result(
+        review_document.read_document(body),
         snapshot,
-        previos,
+        dict(ronda, review_provider="opencode-go", model_ok=True),
+        {"reviewed": [], "excluded": []},
+        "opencode-go",
         ronda["head_sha"],
+        [finding.id for finding in snapshot.findings if finding.id not in previos],
     )
-    bloque = domain.encode_snapshot(snapshot)
-    if isinstance(bloque, domain.CapacityExceeded):
+    prepared = review_document.prepare_publication(
+        document, domain.StorageBudget(), (),
+    )
+    if isinstance(prepared, domain.CapacityExceeded):
         raise SystemExit(
-            f"armar_sticky: el estado no cabe ({bloque.needed} bytes > "
-            f"{bloque.limit} incluso compactando); la ronda es demasiado grande"
+            f"armar_sticky: el comentario no cabe ({prepared.needed} bytes > "
+            f"{prepared.limit}); la ronda es demasiado grande"
         )
-    cuerpo = visible(bloque.block, resto)
-    return cuerpo, snapshot
+    if isinstance(prepared, review_document.DocumentBlocked):
+        raise SystemExit(f"armar_sticky: documento inválido ({prepared.reason})")
+    return prepared.body, snapshot
 
 
 def main():

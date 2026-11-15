@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_config
+import review_document
 import review_github
-import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
 
@@ -552,12 +552,19 @@ class PublicacionConMemoriaV2(unittest.TestCase):
                 "HEAD_SHA": "c" * 40,
             }
             os.environ.pop("GITHUB_STEP_SUMMARY", None)
+
+            def write(*args, **_):
+                if "-X" in args and "--input" in args:
+                    sticky["body"] = json.loads(
+                        Path(args[args.index("--input") + 1]).read_text()
+                    )["body"]
+
             with mock.patch.dict(os.environ, envs):
                 with (
                     mock.patch.object(
                         review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review_github, "sh"),
+                    mock.patch.object(review_github, "sh", side_effect=write),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
             body = json.loads((work / "comment.json").read_text())["body"]
@@ -2553,6 +2560,18 @@ class Schema3Compatibility(unittest.TestCase):
 class CheckpointCapacity(unittest.TestCase):
     """T05: perfil de estado propuesto y límites del comentario completo."""
 
+    def _publication(self, snapshot, result, manifest, budget):
+        document = review_document.document_from_result(
+            review_document.read_document(""),
+            snapshot,
+            result,
+            manifest,
+            "opencode-go",
+            snapshot.revision.head_sha,
+            (),
+        )
+        return review_document.prepare_publication(document, budget, ())
+
     def _snapshot_rico(self, relleno="x"):
         hallazgos = [
             domain.Finding(
@@ -2644,14 +2663,9 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": ["src/modulo_0.py"],
             "excluded": [],
         }
-        comentario = review_render.compose(
-            resultado,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=None,
-            budget=perfil,
-        )
+        prepared = self._publication(s, resultado, manifest, perfil)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        comentario = prepared.body
         self.assertLessEqual(len(comentario.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         self.assertLessEqual(len(comentario), domain.COMMENT_MAX_CHARS)
 
@@ -2661,22 +2675,10 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_chars=15000,
         )
         ascii_ = {"result": "COVERAGE: partial\n" + "d" * 40000}
-        con_ascii = review_render.compose(
-            ascii_,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            budget=ajustado,
-        )
+        con_ascii = self._publication(s, ascii_, manifest, ajustado).body
         self.assertLessEqual(len(con_ascii), ajustado.comment_max_chars)
         multibyte = {"result": "COVERAGE: partial\n" + "ñ" * 30000}
-        con_multibyte = review_render.compose(
-            multibyte,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            budget=ajustado,
-        )
+        con_multibyte = self._publication(s, multibyte, manifest, ajustado).body
         self.assertLessEqual(
             len(con_multibyte.encode("utf-8")), ajustado.comment_max_bytes
         )
@@ -2696,23 +2698,6 @@ class CheckpointCapacity(unittest.TestCase):
         snapshot = self._snapshot_rico()
         encoded = domain.encode_snapshot(snapshot, perfil)
         self.assertIsInstance(encoded, domain.EncodedCheckpoint)
-        hallazgos = [
-            {
-                "id": f.id,
-                "file": f.primary_anchor.path,
-                "line": 1,
-                "severity": f.severity,
-                "title": f.title,
-                "state": "open",
-            }
-            for f in snapshot.findings
-        ]
-        findings = {
-            "merged": hallazgos,
-            "new_ids": ["F0", "F1"],
-            "block": encoded.block,
-            "model_ok": True,
-        }
         resultado = {"result": "COVERAGE: partial\n" + ("detalle largo " * 3000)}
         manifest = {
             "mode": "full",
@@ -2720,14 +2705,9 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": ["src/modulo_0.py"],
             "excluded": [],
         }
-        comentario = review_render.compose(
-            resultado,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
-            budget=ajustado,
-        )
+        prepared = self._publication(snapshot, resultado, manifest, ajustado)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        comentario = prepared.body
         self.assertLessEqual(
             len(comentario.encode("utf-8")), ajustado.comment_max_bytes
         )
@@ -2748,12 +2728,6 @@ class CheckpointCapacity(unittest.TestCase):
         snapshot = self._snapshot_rico()
         encoded = domain.encode_snapshot(snapshot, perfil)
         self.assertGreater(encoded.bytes, 9000)
-        findings = {
-            "merged": [],
-            "new_ids": [],
-            "block": encoded.block,
-            "model_ok": True,
-        }
         resultado = {"result": "COVERAGE: partial\n"}
         manifest = {
             "mode": "full",
@@ -2766,62 +2740,11 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_bytes=5000,
             comment_max_chars=5000,
         )
-        comentario = review_render.compose(
-            resultado,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
-            budget=chico,
-        )
-        self.assertNotIn(
-            encoded.block,
-            comentario,
-            "el checkpoint confirmado jamás se recorta: si no cabe, no viaja",
-        )
-        self.assertIn(review_render.CAUTION_MARK, comentario, "aviso visible de capacidad")
-        self.assertIsNone(
-            review_sticky.reviewed_completion(comentario), "el presupuesto chico no confirma"
-        )
+        prepared = self._publication(snapshot, resultado, manifest, chico)
+        self.assertIsInstance(prepared, domain.CapacityExceeded)
+        self.assertGreater(prepared.needed, prepared.limit)
 
     def test_estructura_con_budget_sin_duplicados(self):
-        findings = {
-            "merged": [
-                {
-                    "id": "F1",
-                    "file": "a.py",
-                    "line": 1,
-                    "severity": "Low",
-                    "title": "t",
-                    "state": "open",
-                }
-            ],
-            "new_ids": [],
-            "block": domain.encode_snapshot(
-                domain.Snapshot(
-                    schema=2,
-                    generation=1,
-                    revision=domain.Revision(
-                        base_sha="b" * 40,
-                        head_sha="c" * 40,
-                        policy_digest="d" * 64,
-                    ),
-                    next_id=2,
-                    completion=domain.PARTIAL,
-                    findings=[
-                        domain.Finding(
-                            id="F1",
-                            title="t",
-                            severity="Low",
-                            status=domain.StatusOpen(),
-                            primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
-                        )
-                    ],
-                    command_cursor=0,
-                )
-            ),
-            "model_ok": True,
-        }
         snapshot_chico = domain.Snapshot(
             schema=2,
             generation=1,
@@ -2841,8 +2764,6 @@ class CheckpointCapacity(unittest.TestCase):
             ],
             command_cursor=0,
         )
-        findings_block = domain.encode_snapshot(snapshot_chico)
-        findings["block"] = findings_block
         args = (
             {
                 "result": "COVERAGE: complete\n"
@@ -2861,55 +2782,51 @@ class CheckpointCapacity(unittest.TestCase):
             ),
         ):
             with self.subTest(rama=nombre):
-                out = review_render.compose(
-                    *args,
-                    sha="e" * 40,
-                    provider="opencode-go",
-                    findings=findings,
-                    budget=budget,
-                )
+                prepared = self._publication(snapshot_chico, *args, budget)
+                self.assertIsInstance(prepared, review_document.PreparedPublication)
+                out = prepared.body
                 self.assertEqual(out.count("## Detalle del revisor"), 1)
                 self.assertEqual(out.count("Alcance de la revisión"), 1)
                 if budget is not None:
-                    detalle = out[out.index("## Detalle del revisor") :]
                     self.assertIn(
-                        "_(Revisión recortada al presupuesto de capacidad.)_",
-                        detalle,
-                        "la prosa recortada y su aviso viven en Detalle",
+                        "El detalle se recortó para conservar el estado",
+                        out,
+                        "la prosa recortada deja un aviso visible",
                     )
 
-    def test_sin_revisables_publica_el_mensaje_y_coincide_con_la_base(self):
-        doradas = [
+    def test_sin_revisables_publica_el_mensaje_y_una_parcial_sigue_parcial(self):
+        casos = (
             (
                 {"result": ""},
-                {
-                    "mode": "full",
-                    "reason": "no-prev",
-                    "reviewed": [],
-                    "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
-                },
-                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:complete -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n## Detalle del revisor\n\nNo hay archivos revisables en este PR (todo quedó excluido por filtro).\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 0 archivo(s)\n- Excluidos: 1\n  - `dist/x.js` (filtro dist/**)\n\n</details>",
+                {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}]},
+                domain.COMPLETE_CLAIM,
             ),
             (
                 {"result": "COVERAGE: partial\ntexto del revisor"},
-                {
-                    "mode": "full",
-                    "reason": "no-prev",
-                    "reviewed": ["a.py"],
-                    "excluded": [],
-                },
-                "<!-- ai-review:sticky -->\n<!-- ai-review:sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee -->\n<!-- ai-review:completion=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:partial -->\n### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · eeeeeee\n\n> [!WARNING]\n> **Revisión incompleta:** el revisor no declaró su cobertura.\n\n## Detalle del revisor\n\nCOVERAGE: partial\ntexto del revisor\n\n<details><summary>Alcance de la revisión</summary>\n\n- Revisados: 1 archivo(s)\n\n</details>",
+                {"mode": "full", "reason": "no-prev", "reviewed": ["a.py"], "excluded": []},
+                domain.PARTIAL,
             ),
-        ]
-        for resultado, manifest, dorada in doradas:
+        )
+        for resultado, manifest, completion in casos:
             with self.subTest(reviewed=len(manifest["reviewed"])):
-                out = review_render.compose(
-                    resultado,
-                    manifest,
-                    sha="e" * 40,
-                    provider="opencode-go",
+                snapshot = domain.Snapshot(
+                    3, 1, domain.Revision("b" * 40, "e" * 40, "d" * 64),
+                    1, completion, [], 0,
                 )
-                self.assertEqual(out, dorada, "byte-idéntico a la base")
+                prepared = self._publication(snapshot, resultado, manifest, domain.StorageBudget())
+                self.assertIsInstance(prepared, review_document.PreparedPublication)
+                out = prepared.body
+                self.assertIsInstance(review_document.read_document(out), review_document.ReviewDocument)
+                self.assertEqual(
+                    review_sticky.reviewed_completion(out),
+                    domain.marker_of(completion),
+                )
+                if not manifest["reviewed"]:
+                    self.assertIn("No hay archivos revisables en este PR", out)
+                    self.assertIn("dist/x.js", out)
+                else:
+                    self.assertIn("el revisor no declaró su cobertura", out)
+                    self.assertIn("texto del revisor", out)
 
     def test_sin_revisables_con_presupuesto_publica_el_mismo_mensaje(self):
         manifest = {
@@ -2918,59 +2835,20 @@ class CheckpointCapacity(unittest.TestCase):
             "reviewed": [],
             "excluded": [{"path": "dist/x.js", "reason": "filtro dist/**"}],
         }
-        sin = review_render.compose(
-            {"result": ""}, manifest, sha="e" * 40, provider="opencode-go"
+        snapshot = domain.Snapshot(
+            3, 1, domain.Revision("b" * 40, "e" * 40, "d" * 64),
+            1, domain.COMPLETE_CLAIM, [], 0,
         )
-        con = review_render.compose(
-            {"result": ""},
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            budget=domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
-        )
+        sin = self._publication(snapshot, {"result": ""}, manifest, None).body
+        con = self._publication(
+            snapshot, {"result": ""}, manifest,
+            domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
+        ).body
         self.assertEqual(con, sin)
         self.assertIn(
-            "No hay archivos revisables en este PR (todo quedó excluido por filtro).",
+            "No hay archivos revisables en este PR",
             con,
         )
-
-    def _hallazgos_chicos(self, titulo="t", cuantos=1):
-        snapshot = domain.Snapshot(
-            schema=2,
-            generation=1,
-            revision=domain.Revision(
-                base_sha="b" * 40, head_sha="c" * 40, policy_digest="d" * 64
-            ),
-            next_id=cuantos + 1,
-            completion=domain.PARTIAL,
-            findings=[
-                domain.Finding(
-                    id="F1",
-                    title="t",
-                    severity="Low",
-                    status=domain.StatusOpen(),
-                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
-                )
-            ],
-            command_cursor=0,
-        )
-        merged = [
-            {
-                "id": f"F{i}",
-                "file": "a.py",
-                "line": i,
-                "severity": "Low",
-                "title": titulo,
-                "state": "open",
-            }
-            for i in range(1, cuantos + 1)
-        ]
-        return {
-            "merged": merged,
-            "new_ids": [],
-            "block": domain.encode_snapshot(snapshot),
-            "model_ok": True,
-        }
 
     def test_margen_menor_que_el_aviso_no_excede_el_presupuesto(self):
         manifest = {
@@ -2980,43 +2858,61 @@ class CheckpointCapacity(unittest.TestCase):
             "excluded": [],
         }
         resultado = {"result": "COVERAGE: complete\n" + "x" * 5000}
-        for camino, findings in (
-            ("genérico", None),
-            ("hallazgos", self._hallazgos_chicos()),
+        empty = domain.Snapshot(
+            3, 1, domain.Revision("b" * 40, "e" * 40, "d" * 64),
+            1, domain.COMPLETE_CLAIM, [], 0,
+        )
+        with_findings = replace(
+            empty, next_id=2,
+            findings=[
+                domain.Finding(
+                    id="F1", title="t", severity="Low",
+                    status=domain.StatusOpen(),
+                    primary_anchor=domain.AnchorLegacy(path="a.py", line=1),
+                )
+            ],
+        )
+        for camino, snapshot in (
+            ("vacío", empty),
+            ("hallazgos", with_findings),
         ):
-            vacio = review_render.compose(
-                {"result": "COVERAGE: complete\n"},
-                manifest,
-                sha="e" * 40,
-                provider="opencode-go",
-                findings=findings,
-                budget=domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
+            sin_prosa = self._publication(
+                snapshot, {"result": "COVERAGE: complete\n"}, manifest,
+                domain.StorageBudget(max_bytes=domain.STATE_BYTES_PROPOSED),
             )
+            self.assertIsInstance(sin_prosa, review_document.PreparedPublication)
             for margen in range(0, 120):
-                tope = len(vacio) + margen
+                tope = len(sin_prosa.body.encode("utf-8")) + margen
                 presupuesto = domain.StorageBudget(
                     max_bytes=domain.STATE_BYTES_PROPOSED,
                     comment_max_bytes=tope,
                     comment_max_chars=tope,
                 )
                 with self.subTest(camino=camino, margen=margen):
-                    out = review_render.compose(
-                        resultado,
-                        manifest,
-                        sha="e" * 40,
-                        provider="opencode-go",
-                        findings=findings,
-                        budget=presupuesto,
+                    prepared = self._publication(snapshot, resultado, manifest, presupuesto)
+                    if isinstance(prepared, domain.CapacityExceeded):
+                        continue
+                    self.assertIsInstance(prepared, review_document.PreparedPublication)
+                    self.assertLessEqual(len(prepared.body), tope)
+                    self.assertLessEqual(len(prepared.body.encode("utf-8")), tope)
+                    self.assertIsInstance(
+                        review_document.read_document(prepared.body),
+                        review_document.ReviewDocument,
                     )
-                    if review_render.CAUTION_MARK in out:
-                        continue  # el fijo no cabe: aviso de capacidad, fail-closed
-                    self.assertLessEqual(len(out), tope)
-                    self.assertLessEqual(len(out.encode("utf-8")), tope)
 
     def test_fijo_inflado_rechaza_el_presupuesto_en_camino_con_hallazgos(self):
-        # 200 títulos largos: las secciones (fijas) pasan el presupuesto aunque
-        # el bloque de memoria quepa de sobra.
-        findings = self._hallazgos_chicos(titulo="t" * 150, cuantos=200)
+        findings = [
+            domain.Finding(
+                id=f"F{i}", title="t" * 150, severity="Low",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="a.py", line=i),
+            )
+            for i in range(1, 41)
+        ]
+        snapshot = domain.Snapshot(
+            3, 1, domain.Revision("b" * 40, "e" * 40, "d" * 64),
+            41, domain.COMPLETE_CLAIM, findings, 0,
+        )
         manifest = {
             "mode": "full",
             "reason": "no-prev",
@@ -3029,38 +2925,16 @@ class CheckpointCapacity(unittest.TestCase):
             comment_max_bytes=20000,
             comment_max_chars=20000,
         )
-        self.assertLess(len(findings["block"]), 20000)
-        out = review_render.compose(
-            resultado,
-            manifest,
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
-            budget=presupuesto,
+        encoded = domain.encode_snapshot(snapshot)
+        self.assertIsInstance(encoded, domain.EncodedCheckpoint)
+        self.assertLess(len(encoded.block), 20000)
+        blocked = self._publication(snapshot, resultado, manifest, presupuesto)
+        self.assertIsInstance(blocked, domain.CapacityExceeded)
+        normal = self._publication(
+            snapshot, resultado, manifest, domain.StorageBudget(),
         )
-        sin = review_render.compose(
-            resultado, manifest, sha="e" * 40, provider="opencode-go", findings=findings
-        )
-        self.assertGreater(len(sin), 20000)
-        self.assertIn(
-            review_render.CAUTION_MARK,
-            out,
-            "el fijo no cabe: aviso de capacidad, jamás un corte a ciegas",
-        )
-        self.assertNotIn(findings["block"], out)
-        self.assertIsNone(review_sticky.reviewed_completion(out))
-        self.assertLessEqual(len(out), review_render.GITHUB_COMMENT_MAX)
-
-    def test_mensaje_sin_revisables_con_findings_vacios(self):
-        findings = {"merged": [], "new_ids": [], "block": "", "model_ok": True}
-        out = review_render.compose(
-            {"result": ""},
-            {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
-        )
-        self.assertIn("No hay archivos revisables", out)
+        self.assertIsInstance(normal, review_document.PreparedPublication)
+        self.assertGreater(len(normal.body), 20000)
 
     def test_frontera_exacta_del_perfil_propuesto(self):
         """T05: 40000 bytes exactos se aceptan; 40001 se rechazan."""

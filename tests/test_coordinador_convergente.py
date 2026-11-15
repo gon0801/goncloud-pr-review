@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
+import review_document
 import review_config
 import review_github
 import review_sticky
@@ -185,7 +186,8 @@ def estados(github):
 
 def sticky_con(estado, visible=""):
     bloque = domain.encode_snapshot(estado).block
-    return {"id": 7, "body": review_coordinator.cuerpo_con_cabecera(bloque, visible), "user": BOT}
+    body = f"{review_sticky.MARKER}\n{bloque}"
+    return {"id": 7, "body": f"{body}\n{visible}" if visible else body, "user": BOT}
 
 
 def correr(github, evento, head=None, permiso="write", aviso=None):
@@ -356,7 +358,9 @@ class ComandosEnCualquierEvento(unittest.TestCase):
             estados(github), {"F1": "StatusDismissed", "F2": "StatusOpen"}
         )
         self.assertEqual(github.estado().command_cursor, 30)
-        aviso = review_coordinator.aviso_de_todo_tardio(20)
+        aviso = review_document._notice_text(
+            review_document.Notice("todo-tardio", comment_id=20)
+        )
         self.assertIn(aviso, github.sticky())
         github.comentar(31, "ai-review: descartar F2")
         correr(github, "issue_comment")

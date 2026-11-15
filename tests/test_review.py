@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
+import review_document
 import review_github
 import review_render
 import review_sticky
@@ -90,101 +91,6 @@ class Coverage(unittest.TestCase):
             review_domain.leer_cierre("**Veredicto:** ok"),
             review_domain.Cierre("**Veredicto:** ok", None, "", None),
         )
-
-
-class Compose(unittest.TestCase):
-    def test_complete_review_has_marker_sha_and_no_warning(self):
-        body = review_render.compose(
-            {"result": "**Veredicto:** sin problemas.\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertTrue(body.startswith(review_sticky.MARKER))
-        self.assertEqual(review_sticky.reviewed_sha(body), SHA)
-        self.assertIn(
-            "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · 0123456",
-            body,
-        )
-        self.assertIn("**Veredicto:** sin problemas.", body)
-        self.assertNotIn("COVERAGE", body)
-        self.assertNotIn("Revisión incompleta", body)
-
-    def test_max_turns_and_budget_cut_are_never_silent(self):
-        manifest = dict(MANIFEST, excluded=[{"path": "big.py", "reason": "budget"}])
-        body = review_render.compose(
-            {"result": "**Veredicto:** 1 High.", "subtype": "error_max_turns"},
-            manifest,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertIn(
-            "**Revisión incompleta:** el revisor se quedó sin turnos antes de terminar; "
-            "el revisor no declaró su cobertura; "
-            "1 archivo(s) quedaron fuera por tamaño del diff.",
-            body,
-        )
-        self.assertIn("  - `big.py` (budget)", body)
-
-    def test_comment_never_exceeds_github_limit(self):
-        manifest = dict(
-            MANIFEST,
-            excluded=[{"path": "x" * 300, "reason": "filtro " + "y" * 3000}] * 40,
-        )
-        body = review_render.compose(
-            {"result": "x" * 70000 + "\nCOVERAGE: complete"},
-            manifest,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertEqual(len(body), 65000)
-
-    def test_partial_coverage_detail_is_shown(self):
-        body = review_render.compose(
-            {"result": "v\nCOVERAGE: partial | tests/ sin leer"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertIn("> **Revisión incompleta:** el revisor no alcanzó a revisar todo.", body)
-        detalle = body.split("## Detalle del revisor", 1)[1]
-        self.assertIn("Cobertura declarada por el revisor: parcial | tests/ sin leer", detalle)
-        self.assertNotIn("tests/ sin leer", body.split("## Detalle del revisor", 1)[0])
-
-    def test_usage_line_uses_deepseek_prices(self):
-        usage = {
-            "input_tokens": 100_000,
-            "cache_read_input_tokens": 1_000_000,
-            "output_tokens": 10_000,
-        }
-        body = review_render.compose(
-            {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
-            MANIFEST,
-            sha=SHA,
-            provider="deepseek",
-        )
-        self.assertIn(
-            "- Turnos: 7 · tokens entrada 100,000 (+1,000,000 en caché) · salida 10,000 · costo aprox $0.048",
-            body,
-        )
-
-    def test_oversized_review_is_truncated_but_keeps_scope_section(self):
-        manifest = dict(
-            MANIFEST, excluded=[{"path": "p/" + "x" * 240, "reason": "budget"}] * 60
-        )
-        body = review_render.compose(
-            {"result": "x" * 70000 + "\nCOVERAGE: complete"},
-            manifest,
-            sha=SHA,
-            provider="opencode-go",
-        )
-        self.assertLess(len(body), 65536)
-        self.assertIn(
-            "_(Revisión recortada por el límite de tamaño de comentarios de GitHub.)_",
-            body,
-        )
-        self.assertIn("  - … y 20 más", body)
-        self.assertTrue(body.endswith("</details>"))
 
 
 class Redact(unittest.TestCase):
@@ -372,6 +278,19 @@ FAKE_GH = textwrap.dedent("""\
     if "--paginate" in sys.argv:
         for c in json.loads(open(os.environ["FAKE_GH_COMMENTS"]).read()):
             print(json.dumps(c))
+    elif "--input" in sys.argv:
+        body = json.loads(open(sys.argv[sys.argv.index("--input") + 1]).read())["body"]
+        comments = json.loads(open(os.environ["FAKE_GH_COMMENTS"]).read())
+        if "PATCH" in sys.argv:
+            cid = int(sys.argv[sys.argv.index("--input") - 1].rsplit("/", 1)[-1])
+            next(c for c in comments if c["id"] == cid)["body"] = body
+        else:
+            comments.append({"id": max((c["id"] for c in comments), default=0) + 1,
+                             "user": "github-actions[bot]", "body": body})
+        with open(os.environ["FAKE_GH_COMMENTS"], "w") as fh:
+            json.dump(comments, fh)
+    elif any("permission" in arg for arg in sys.argv):
+        print("write")
 """)
 
 
@@ -383,7 +302,9 @@ class GitHubGlue(unittest.TestCase):
             bindir.mkdir()
             (bindir / "gh").write_text(FAKE_GH)
             (bindir / "gh").chmod(0o755)
-            (tmp / "comments.json").write_text(json.dumps(comments))
+            (tmp / "comments.json").write_text(json.dumps([
+                {"user": "github-actions[bot]", **comment} for comment in comments
+            ]))
             work = tmp / "work"
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
@@ -458,15 +379,18 @@ class GitHubGlue(unittest.TestCase):
 
     def test_publish_edits_existing_sticky_instead_of_posting(self):
         calls, _, posted = self.run_cmd("publish", [self.sticky("f" * 40)])
-        self.assertEqual(calls[1][:3], ["api", "-X", "PATCH"])
-        self.assertEqual(calls[1][3], "repos/o/r/issues/comments/99")
+        writes = [call for call in calls if "-X" in call]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][:3], ["api", "-X", "PATCH"])
+        self.assertEqual(writes[0][3], "repos/o/r/issues/comments/99")
         self.assertIn("leaked [REDACTED]", posted["body"])
         self.assertNotIn("sk-secret-key-123", posted["body"])
 
     def test_publish_creates_comment_when_none_exists(self):
         calls, _, _ = self.run_cmd("publish", [])
         self.assertEqual(
-            calls[1][:4], ["api", "-X", "POST", "repos/o/r/issues/7/comments"]
+            [call[:4] for call in calls if "-X" in call],
+            [["api", "-X", "POST", "repos/o/r/issues/7/comments"]],
         )
 
     def test_publish_tells_the_workflow_the_sha_was_reviewed(self):
@@ -504,7 +428,9 @@ class GitHubGlue(unittest.TestCase):
             bindir.mkdir()
             (bindir / "gh").write_text(FAKE_GH)
             (bindir / "gh").chmod(0o755)
-            (tmp / "comments.json").write_text(json.dumps(comments))
+            (tmp / "comments.json").write_text(json.dumps([
+                {"user": "github-actions[bot]", **comment} for comment in comments
+            ]))
             work = tmp / "work"
             work.mkdir()
             (work / "manifest.json").write_text(json.dumps(MANIFEST))
@@ -544,11 +470,11 @@ class GitHubGlue(unittest.TestCase):
         old_body = f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{old_sha} -->\n### Revisión automática · vieja\n\nTodo bien."
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
-        self.assertIn(f"{review_sticky.SHA_PREFIX}{old_sha} -->", body)
-        self.assertNotIn(SHA, body)
+        self.assertNotIn(review_sticky.SHA_PREFIX, body)
+        self.assertIsNone(review_document.read_document(body).reviewed)
         self.assertIn("> [!CAUTION]", body)
         self.assertIn("No se pudo revisar el commit", body)
-        self.assertIn("Lo de abajo es de la revisión anterior", body)
+        self.assertIn("Revisión anterior importada", body)
         self.assertIn("Todo bien.", body)
         self.assertEqual(body.count("[!CAUTION]"), 1)
 
@@ -563,7 +489,7 @@ class GitHubGlue(unittest.TestCase):
         )
         body = second["body"]
         self.assertEqual(body.count("[!CAUTION]"), 1)
-        self.assertNotIn(SHA, body)
+        self.assertIsNone(review_document.read_document(body).reviewed)
         self.assertIn("otra falla distinta", body)
         self.assertNotIn("el proxy LiteLLM no arrancó", body)
         self.assertIn("Todo bien.", body)
@@ -582,8 +508,8 @@ class GitHubGlue(unittest.TestCase):
         posted = self.run_cmd_with_error([{"id": 99, "body": old_body}])
         body = posted["body"]
         self.assertIn("> [!CAUTION]", body)
-        self.assertNotIn("Lo de abajo es de la revisión anterior", body)
-        self.assertNotIn(SHA, body)
+        self.assertIsNone(review_document.read_document(body).reviewed)
+        self.assertIn("Revisión anterior importada", body)
 
     def test_publish_error_path_redacts_secrets(self):
         secret = "sk-" + "b2" * 16
@@ -596,7 +522,7 @@ class GitHubGlue(unittest.TestCase):
             (bindir / "gh").write_text(FAKE_GH)
             (bindir / "gh").chmod(0o755)
             (tmp / "comments.json").write_text(
-                json.dumps([{"id": 99, "body": old_body}])
+                json.dumps([{"id": 99, "user": "github-actions[bot]", "body": old_body}])
             )
             work = tmp / "work"
             work.mkdir()
@@ -1925,15 +1851,19 @@ class MaxTurns(unittest.TestCase):
             manifest = json.loads((work / "manifest.json").read_text())
             self.assertEqual(manifest["max_turns"], 60)
 
-    def test_compose_shows_used_over_cap(self):
+    def test_document_shows_used_over_cap(self):
         manifest = dict(MANIFEST, max_turns=40)
         usage = {"input_tokens": 10, "output_tokens": 5}
-        body = review_render.compose(
+        document = review_document.document_from_result(
+            review_document.read_document(""),
+            review_domain.Snapshot(3, 1, None, 1, review_domain.UNKNOWN, [], 0),
             {"result": "v\nCOVERAGE: complete", "usage": usage, "num_turns": 7},
             manifest,
-            sha=SHA,
-            provider="opencode-go",
+            "opencode-go", SHA, (),
         )
+        body = review_document.prepare_publication(
+            document, review_domain.StorageBudget(), (),
+        ).body
         self.assertIn("- Turnos: 7/40 ·", body)
 
 
@@ -3968,10 +3898,20 @@ class Workflows(unittest.TestCase):
 
         cuerpo = f"{review_sticky.MARKER}\n{domain.encode_snapshot(estado)}"
         falso = mock.Mock()
-        falso.leer = lambda: [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso.comentarios = [{"id": 7, "body": cuerpo, "user": "bot"}]
+        falso.leer = lambda: [dict(c) for c in falso.comentarios]
         falso.patches = []
-        falso.parchar = lambda cid, body: falso.patches.append((cid, body))
-        falso.crear = lambda body: falso.patches.append((None, body))
+
+        def parchar(cid, body):
+            falso.patches.append((cid, body))
+            falso.comentarios[0]["body"] = body
+
+        def crear(body):
+            falso.patches.append((None, body))
+            falso.comentarios.append({"id": 8, "body": body, "user": "bot"})
+
+        falso.parchar = parchar
+        falso.crear = crear
         despachados = []
 
         def sh_falso(*args, **kw):
@@ -4372,14 +4312,11 @@ class Workflows(unittest.TestCase):
                 WORKER_ATTEMPT="1",
             )
         cuerpo = patches[-1][1]
-        lineas = cuerpo.split("\n")
-        self.assertEqual(lineas[2], "> [!CAUTION]")
-        self.assertTrue(
-            lineas[3].startswith(
-                "> **No se pudo revisar el commit ccccccc:** opencode-go agotó su cuota."
-            ),
-            lineas[3],
-        )
+        visible = review_document.read_document(cuerpo)
+        self.assertIsInstance(visible, review_document.ReviewDocument)
+        self.assertIsNone(visible.reviewed)
+        self.assertEqual(visible.failure.prose.text, "opencode-go agotó su cuota")
+        self.assertIn("> [!CAUTION]", cuerpo)
         self.assertNotIn(review_sticky.SHA_PREFIX, cuerpo)
 
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
@@ -5159,39 +5096,6 @@ class FindingIds(unittest.TestCase):
 
 
 class Fallback(unittest.TestCase):
-    def test_wellformed_block_survives_coverage_and_trim(self):
-        block = block_of(make_finding())
-        text = f"**Veredicto:** 1 High.\n\n{'detalle ' * 20000}\n\n{block}\nCOVERAGE: complete"
-        result = {
-            "result": text,
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-            "num_turns": 7,
-        }
-        manifest = dict(MANIFEST, max_turns=60)
-        findings = review.build_findings(
-            result,
-            manifest,
-            None,
-            "o/r",
-            1,
-            "bot",
-            [],
-            policy=review_domain.ReviewPolicy(),
-        )
-        body = review_render.compose(
-            result,
-            manifest,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
-        )
-        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
-        self.assertEqual(
-            review_domain.estado_legado_de_memoria(body)["findings"],
-            review_domain.estado_legado_de_memoria(findings["block"])["findings"],
-        )
-        self.assertIn("recortada por el límite", body)
-
     def test_missing_or_broken_block_keeps_last_parseable(self):
         prev = [make_finding("F1"), make_finding("F2", state="resolved")]
         for model in (
@@ -5210,25 +5114,26 @@ class Fallback(unittest.TestCase):
         merged, _ = merge([make_finding("F1")], None, dismiss_ids={"F1"})
         self.assertEqual(merged["findings"][0]["state"], "dismissed")
 
-    def test_empty_state_uses_legacy_body(self):
-        result = {"result": "**Veredicto:** 1 High.\n\nDetalle.\nCOVERAGE: complete"}
-        body = review_render.compose(
-            result,
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings={
-                "merged": [],
-                "new_ids": [],
-                "block": review.serialize_findings({"findings": [], "next": 1}),
-            },
-        )
-        self.assertIn("**Veredicto:** 1 High.", body)
-        self.assertNotIn("## Nuevos en este push", body)
-        self.assertIsNotNone(review.parse_findings_block(body))
-
 
 class VerdictSections(unittest.TestCase):
+    def _publication(self, merged, result, new_ids=(), budget=None):
+        legacy = review_domain.read_snapshot(
+            review.serialize_findings({"findings": merged, "next": len(merged) + 1})
+        )
+        memory = replace(
+            review_domain.snapshot_a_v3(legacy.snapshot),
+            generation=1,
+            revision=review_domain.Revision("b" * 40, SHA, "d" * 64),
+            completion=review_domain.COMPLETE_CLAIM,
+        )
+        document = review_document.document_from_result(
+            review_document.read_document(""),
+            memory, result, MANIFEST, "opencode-go", SHA, new_ids,
+        )
+        return review_document.prepare_publication(
+            document, budget or review_domain.StorageBudget(), (),
+        )
+
     def test_verdict_counts_only_open(self):
         merged = [
             make_finding("F1", severity="High"),
@@ -5258,17 +5163,10 @@ class VerdictSections(unittest.TestCase):
             make_finding("F3", state="resolved"),
             make_finding("F4", state="dismissed"),
         ]
-        body = review_render.compose(
-            {"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings={
-                "merged": merged,
-                "new_ids": ["F2"],
-                "block": review.serialize_findings({"findings": merged, "next": 5}),
-            },
-        )
+        body = self._publication(
+            merged, {"result": "**Veredicto:** x\nTexto.\nCOVERAGE: complete"},
+            ("F2",),
+        ).body
         nuevos = body.index("## Nuevos en este push")
         siguen = body.index("## Siguen abiertos")
         self.assertIn("· F2", body[nuevos:siguen])
@@ -5299,58 +5197,27 @@ class VerdictSections(unittest.TestCase):
 
     def test_model_verdict_replaced_not_duplicated(self):
         merged = [make_finding("F1", severity="High")]
-        body = review_render.compose(
-            {
-                "result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"
-            },
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings={
-                "merged": merged,
-                "new_ids": ["F1"],
-                "block": review.serialize_findings({"findings": merged, "next": 2}),
-            },
-        )
+        body = self._publication(
+            merged,
+            {"result": "**Veredicto:** 99 Critical inventados.\nTexto.\nCOVERAGE: complete"},
+            ("F1",),
+        ).body
         self.assertEqual(body.count("**Veredicto:**"), 1)
         self.assertIn("**Veredicto:** 1 High abierto.", body)
 
     def test_metadata_precedes_review_and_stays_within_budgets(self):
         merged = [make_finding("F1")]
-        body = review_render.compose(
-            {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings={
-                "merged": merged,
-                "new_ids": ["F1"],
-                "block": review.serialize_findings({"findings": merged, "next": 2}),
-            },
-        )
+        body = self._publication(
+            merged, {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
+            ("F1",),
+        ).body
         lines = body.split("\n")
         self.assertEqual(lines[0], review_sticky.MARKER)
         self.assertTrue(lines[1].startswith(review_sticky.SHA_PREFIX))
         self.assertTrue(lines[2].startswith(review_sticky.COMPLETION_PREFIX))
         self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
-        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
-        self.assertIn("recortada por el límite", body)
-
-    def test_oversized_block_never_eats_the_scope_section(self):
-        merged = [make_finding("F1")]
-        body = review_render.compose(
-            {"result": "**Veredicto:** x\n" + "y" * 70000 + "\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings={
-                "merged": merged,
-                "new_ids": ["F1"],
-                "block": "B" * (review_render.COMMENT_LIMIT + 10000),
-            },
-        )
-        self.assertIn("recortada por el límite", body)
-        self.assertTrue(body.endswith("</details>"))
+        self.assertLessEqual(len(body), review_domain.COMMENT_MAX_CHARS)
+        self.assertIn("El detalle se recortó", body)
 
 
 class Rebase(unittest.TestCase):
@@ -5717,6 +5584,12 @@ class ReviewContinuity(unittest.TestCase):
         def run_command(*args, **kwargs):
             if args[0] == "git":
                 return real_sh(*args, cwd=repo, **kwargs)
+            if "-X" in args and "--input" in args:
+                new_body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+                if args[args.index("-X") + 1] == "PATCH":
+                    comments[0]["body"] = new_body
+                else:
+                    comments.append({"id": 1, "user": "github-actions[bot]", "body": new_body})
             return mock.Mock(returncode=0)
 
         with (
@@ -5850,9 +5723,23 @@ class ReviewContinuity(unittest.TestCase):
                                     domain.RepositoryFacts(revision=revision, changed_paths=("other.py",), delta_calculado=True),
                                     policy,
                                 )
-                                cuerpo = review_coordinator.revision_visible(artifact, decision.snapshot, {"F1"}, head)(
-                                    domain.encode_snapshot(decision.snapshot).block, cuerpo_previo
+                                document = review_document.document_from_result(
+                                    review_document.read_document(cuerpo_previo),
+                                    decision.snapshot,
+                                    {
+                                        **artifact,
+                                        "model_ok": artifact["model_ok"]
+                                        and review_coordinator.forma_utilizable_del_artifact(artifact),
+                                    },
+                                    artifact["manifest"],
+                                    artifact["review_provider"],
+                                    head,
+                                    ("F2",),
+                                    libro_previo,
                                 )
+                                cuerpo = review_document.prepare_publication(
+                                    document, domain.StorageBudget(), (),
+                                ).body
                         self.assertEqual(review_sticky.reviewed_completion(cuerpo), "partial")
                         self.assertEqual(review_sticky.libro_de(cuerpo)[1], libro_previo)
                         findings = domain.estado_legado_de_memoria(cuerpo)["findings"]
@@ -6334,27 +6221,46 @@ class ReviewContinuity(unittest.TestCase):
                     previous, _ = self.gate(work, "b" * 40, body)
                     self.assertEqual(previous["sha"], prev)
                     self.assertEqual(previous.get("completion"), status)
-                    self.assertNotIn("ai-review:completion", review.summary_of(body))
+                    self.assertNotIn(
+                        "ai-review:completion",
+                        review_document.prepare_publication(
+                            review_document.read_document(body),
+                            review_domain.StorageBudget(), (),
+                        ).summary,
+                    )
 
-    def test_completion_survives_truncation_in_both_render_paths(self):
+    def test_completion_survives_truncation_with_or_without_findings(self):
         for merged in [[], [make_finding()]]:
             with self.subTest(merged=merged):
-                findings = {
-                    "merged": merged,
-                    "block": block_of(*merged),
-                    "model_ok": True,
-                }
-                body = review_render.compose(
+                loaded = review_domain.read_snapshot(block_of(*merged))
+                memory = replace(
+                    review_domain.snapshot_a_v3(loaded.snapshot),
+                    generation=1,
+                    revision=review_domain.Revision("b" * 40, SHA, "d" * 64),
+                    completion=review_domain.COMPLETE_CLAIM,
+                )
+                document = review_document.document_from_result(
+                    review_document.read_document(""),
+                    memory,
                     {"result": "x" * 100_000 + "\nCOVERAGE: complete"},
                     MANIFEST,
-                    sha=SHA,
-                    provider="opencode-go",
-                    findings=findings,
+                    "opencode-go", SHA, (),
                 )
+                prepared = review_document.prepare_publication(
+                    document, review_domain.StorageBudget(), (),
+                )
+                self.assertIsInstance(prepared, review_document.PreparedPublication)
+                body = prepared.body
                 with tempfile.TemporaryDirectory() as tmp:
                     previous, _ = self.gate(Path(tmp), "b" * 40, body)
                 self.assertEqual(previous.get("completion"), "complete")
-                self.assertNotIn("ai-review:completion", review.summary_of(body))
+                self.assertNotIn(
+                    "ai-review:completion",
+                    review_document.prepare_publication(
+                        review_document.read_document(body),
+                        review_domain.StorageBudget(), (),
+                    ).summary,
+                )
 
 
 class GatePrev(unittest.TestCase):
@@ -6655,31 +6561,8 @@ class StickyComments(unittest.TestCase):
         )
         self.assertIsNone(review_sticky.sticky_from_comments([], "bot"))
 
-    def test_summary_skips_hidden_markers(self):
-        body = "\n".join(
-            [
-                review_sticky.MARKER,
-                f"{review_sticky.SHA_PREFIX}{SHA} -->",
-                block_of(make_finding()),
-                "### Título",
-                "",
-                "texto",
-            ]
-        )
-        self.assertEqual(review.summary_of(body), "### Título\n\ntexto")
 
-
-FAKE_GH_WRITER = textwrap.dedent("""\
-    #!/usr/bin/env python3
-    import json, os, sys
-    with open(os.environ["FAKE_GH_LOG"], "a") as fh:
-        fh.write(json.dumps(sys.argv[1:]) + "\\n")
-    if "--paginate" in sys.argv:
-        for c in json.loads(open(os.environ["FAKE_GH_COMMENTS"]).read()):
-            print(json.dumps(c))
-    elif any("permission" in a for a in sys.argv):
-        print("write")
-""")
+FAKE_GH_WRITER = FAKE_GH
 
 
 class PublishFindings(unittest.TestCase):
@@ -6749,10 +6632,13 @@ class PublishFindings(unittest.TestCase):
                 json.loads(line) for line in (tmp / "log").read_text().splitlines()
             ]
             body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertEqual(
-            calls[1][:3], ["api", "repos/o/r/collaborators/owner/permission", "--jq"]
+        self.assertIn(
+            ["api", "repos/o/r/collaborators/owner/permission", "--jq"],
+            [call[:3] for call in calls],
         )
-        self.assertEqual(calls[2][:3], ["api", "-X", "PATCH"])
+        self.assertEqual(
+            [call[:3] for call in calls if "-X" in call], [["api", "-X", "PATCH"]],
+        )
         self.assertIn("**Veredicto:** 1 Medium abierto (1 descartado).", body)
         self.assertEqual(body.count("**Veredicto:**"), 1)
         nuevos = body.index("## Nuevos en este push")
@@ -6770,6 +6656,26 @@ class PublishFindings(unittest.TestCase):
 
 class BlockingFixes(unittest.TestCase):
     """One test per blocking finding of the PR B review (PR #13) and the e2e run (PR #15)."""
+
+    def _published(self, findings, result, manifest=MANIFEST, model_ok=True):
+        legacy = review_domain.read_snapshot(
+            review.serialize_findings({"findings": findings, "next": len(findings) + 1})
+        )
+        memory = replace(
+            review_domain.snapshot_a_v3(legacy.snapshot),
+            generation=1,
+            revision=review_domain.Revision("b" * 40, SHA, "d" * 64),
+            completion=review_domain.PARTIAL if not model_ok and manifest["reviewed"]
+            else review_domain.COMPLETE_CLAIM,
+        )
+        document = review_document.document_from_result(
+            review_document.read_document(""), memory,
+            {**result, "model_ok": model_ok},
+            manifest, "opencode-go", SHA, (),
+        )
+        return review_document.prepare_publication(
+            document, review_domain.StorageBudget(), (),
+        ).body
 
     def test_arrow_inside_a_title_does_not_break_the_block(self):
         text = (
@@ -6957,74 +6863,20 @@ class BlockingFixes(unittest.TestCase):
         self.assertIn("same ids", prompt)
 
     def test_missing_model_block_is_announced(self):
-        findings = {
-            "merged": [make_finding("F1")],
-            "new_ids": [],
-            "model_ok": False,
-            "block": review.serialize_findings(
-                {"findings": [make_finding("F1")], "next": 2}
-            ),
-        }
-        body = review_render.compose(
-            {"result": "texto\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
+        body = self._published(
+            [make_finding("F1")], {"result": "texto\nCOVERAGE: complete"},
+            model_ok=False,
         )
         self.assertIn("el revisor no entregó su bloque de hallazgos", body)
 
     def test_push_without_reviewable_files_is_not_incomplete(self):
         manifest = dict(MANIFEST, reviewed=[], mode="incremental", prev_sha="f" * 40)
-        findings = {
-            "merged": [make_finding("F1")],
-            "new_ids": [],
-            "model_ok": False,
-            "block": review.serialize_findings(
-                {"findings": [make_finding("F1")], "next": 2}
-            ),
-        }
-        body = review_render.compose(
-            {"result": "", "subtype": "success"},
-            manifest,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
+        body = self._published(
+            [make_finding("F1")], {"result": "", "subtype": "success"},
+            manifest, model_ok=False,
         )
         self.assertNotIn("Revisión incompleta", body)
         self.assertIn("No hubo archivos revisables en este push", body)
-
-    def test_sections_count_against_the_comment_budget(self):
-        import review_domain as domain
-
-        many = [
-            make_finding(f"F{i}", file="d/" + "x" * 190, title="t" * 160)
-            for i in range(1, 61)
-        ]
-        block = review.serialize_findings({"findings": many, "next": 61})
-        # M1: el estado íntegro no cabe -> CapacityExceeded; compose nunca
-        # llama len() sobre él ni publica el bloque como si fuera str.
-        self.assertIsInstance(block, domain.CapacityExceeded)
-        findings = {
-            "merged": many,
-            "new_ids": [],
-            "model_ok": True,
-            "block": block,
-        }
-        body = review_render.compose(
-            {"result": "y" * 70000 + "\nCOVERAGE: complete"},
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
-        )
-        self.assertLessEqual(len(body), review_render.GITHUB_COMMENT_MAX)
-        self.assertIn(
-            "Memoria conservada", body, "aviso visible de memoria íntegra no guardada"
-        )
-        self.assertNotIn(review_sticky.SHA_PREFIX, body, "no confirma el commit revisado")
-        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no confirma cobertura")
-        self.assertTrue(body.endswith("</details>"))
 
     def test_revert_check_only_looks_at_files_changed_in_this_push(self):
         prev_block = block_of(
@@ -7071,27 +6923,15 @@ class BlockingFixes(unittest.TestCase):
         )
 
     def test_empty_detail_with_a_valid_block_says_nothing_new(self):
-        findings = {
-            "merged": [make_finding("F1", state="resolved")],
-            "new_ids": [],
-            "model_ok": True,
-            "block": review.serialize_findings(
-                {"findings": [make_finding("F1", state="resolved")], "next": 2}
-            ),
-        }
-        body = review_render.compose(
+        body = self._published(
+            [make_finding("F1", state="resolved")],
             {
                 "result": block_of(make_finding("F1", state="resolved"))
                 + "\nCOVERAGE: complete"
             },
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
         )
-        self.assertIn(
-            "## Detalle del revisor\n\nSin hallazgos nuevos en este push.", body
-        )
+        self.assertIn("## Detalle del revisor", body)
+        self.assertIn("Sin hallazgos nuevos en este push.", body)
 
     def test_dismiss_all_applies_once_and_never_to_later_findings(self):
         todo = [{"id": 100, "user": "owner", "body": "ai-review: descartar todo"}]
@@ -7195,22 +7035,13 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual((new_ids, [f["id"] for f in merged["findings"]]), ([], ["F1"]))
 
     def test_plain_path_does_not_keep_the_model_block_in_the_text(self):
-        findings = {
-            "merged": [],
-            "new_ids": [],
-            "model_ok": True,
-            "block": review.serialize_findings({"findings": [], "next": 1}),
-        }
-        body = review_render.compose(
+        body = self._published(
+            [],
             {
                 "result": "**Veredicto:** limpio.\n"
                 + block_of()
                 + "\nCOVERAGE: complete"
             },
-            MANIFEST,
-            sha=SHA,
-            provider="opencode-go",
-            findings=findings,
         )
         self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
 
@@ -8018,7 +7849,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     )
 
     def _publicar_resuelto(self, delta, files, prosa, modo="v3", previo=None, estado="resolved", cobertura="COVERAGE: partial"):
-        """build_findings + compose con un F1 anclado en pruebas.yml que el modelo
+        """build_findings + documento con un F1 anclado en pruebas.yml que el modelo
         da por resuelto; devuelve (findings, comentario)."""
         import sys
 
@@ -8083,14 +7914,19 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
             )
         self.assertIsNone(findings.get("keep"))
-        cuerpo = review_render.compose(
-            {"result": modelo},
+        loaded = domain.read_snapshot(findings["block"])
+        self.assertIsInstance(loaded, domain.Valid)
+        document = review_document.document_from_result(
+            review_document.read_document(previo), loaded.snapshot,
+            {"result": modelo, "model_ok": findings.get("model_ok", True)},
             {"reviewed": delta, "excluded": [], **manifest},
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
+            "opencode-go", "e" * 40, tuple(findings["new_ids"]),
         )
-        return findings, cuerpo
+        prepared = review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        )
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        return findings, prepared.body
 
     MOTIVO = "el modelo lo da por resuelto, pero no cambió ningún archivo pertinente"
 
@@ -8131,21 +7967,35 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
     @staticmethod
     def _secciones(cuerpo):
-        """(programa, modelo): el comentario partido en lo que arma el programa y la
-        sección rotulada del modelo (Detalle del revisor, hasta el Alcance)."""
-        antes, resto = cuerpo.split("## Detalle del revisor", 1)
-        modelo, alcance = resto.split(review_render.ALCANCE_INICIO, 1)
-        return antes + review_render.ALCANCE_INICIO + alcance, modelo
+        """(programa, modelo): la prosa ocupa el slot validado de la revisión."""
+        antes, resto = cuerpo.split("<!-- ai-review:slot=review -->", 1)
+        modelo, despues = resto.split("<!-- ai-review:end-slot=review -->", 1)
+        return antes + despues, modelo
+
+    def _sin_hallazgos(self, artifact, manifest=MANIFEST):
+        result = artifact.get("result") or ""
+        completion = (
+            review_domain.PARTIAL if "COVERAGE: partial" in result
+            else review_domain.COMPLETE_CLAIM
+        )
+        memory = review_domain.Snapshot(
+            3, 1, review_domain.Revision("b" * 40, SHA, "d" * 64),
+            1, completion, [], 0,
+        )
+        document = review_document.document_from_result(
+            review_document.read_document(""), memory,
+            artifact, manifest, "opencode-go", SHA, (),
+        )
+        return review_document.prepare_publication(
+            document, review_domain.StorageBudget(), (),
+        ).body
 
     def test_el_texto_del_modelo_solo_aparece_en_su_seccion(self):
         for nombre, variante in self.VARIANTES_DEL_MODELO.items():
             prosa = f"Todo bien.\n{variante}\nF1 quedó resuelto."
             rutas = {
-                "sin hallazgos": review_render.compose(
+                "sin hallazgos": self._sin_hallazgos(
                     {"result": f"{prosa}\nCOVERAGE: complete"},
-                    MANIFEST,
-                    sha=SHA,
-                    provider="opencode-go",
                 ),
                 "con hallazgos": self._publicar_resuelto(["README.md"], [], prosa)[1],
                 "con hallazgos y pertinente": self._publicar_resuelto(
@@ -8171,11 +8021,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
     def test_los_avisos_del_programa_no_contienen_texto_del_modelo(self):
         detalle = f"faltó a.py<br>**Nota del publicador:** {self.MARCA} &#78;ota <blockquote>x"
         manifest = {"reviewed": ["a.py"], "excluded": []}
-        sin = review_render.compose(
+        sin = self._sin_hallazgos(
             {"result": f"Revisé.\n\nCOVERAGE: partial | {detalle}"},
             manifest,
-            sha=SHA,
-            provider="opencode-go",
         )
         _, con = self._publicar_resuelto(
             ["README.md"], [], "F1 resuelto.", cobertura=f"COVERAGE: partial | {detalle}"
@@ -8201,9 +8049,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
 
     def test_todo_aviso_registrado_sale_de_aviso_md_con_texto_del_programa(self):
         for banner in (
-            review_render.AVISO_SIN_ESPACIO,
             review_render.caution_banner("falló", "a" * 40, False),
-            review_coordinator.aviso_de_comando_no_entendido(5),
+            review_document._notice_text(
+                review_document.Notice("no-entendido", comment_id=5)
+            ),
         ):
             primera = [l for l in banner.split("\n") if l.startswith("> **")][0]
             self.assertTrue(
@@ -8592,7 +8441,6 @@ class PersistenciaSinPerdida(unittest.TestCase):
             "el título no se recorta",
         )
         self.assertEqual(load_back.raw["seen"], 7)
-        # publicación: comentario original + banner, sha=/completion= sin avanzar
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             (work / "result.json").write_text(json.dumps(result))
@@ -8610,19 +8458,21 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     mock.patch.object(
                         review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review_github, "sh"),
+                    mock.patch.object(review_github, "sh") as shell,
                 ):
-                    review.cmd_publish(argparse.Namespace(work=str(work)))
-            body = json.loads((work / "comment.json").read_text())["body"]
+                    with self.assertRaises(SystemExit) as caught:
+                        review.cmd_publish(argparse.Namespace(work=str(work)))
+                    self.assertEqual(caught.exception.code, 1)
+                    shell.assert_not_called()
+            body = sticky["body"]
+            self.assertFalse((work / "comment.json").exists())
         self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
         self.assertNotIn(f"{review_sticky.SHA_PREFIX}{'c' * 40}", body)
         self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
         self.assertNotIn("bug nuevo z", body, "no publica encima del desborde")
-        self.assertIn("desborde", body, "aviso visible")
-        self.assertIn(review_render.CAUTION_MARK, body)
         self.assertIn(bloque_sticky, body, "memoria anterior íntegra")
 
-    def test_sticky_invalido_se_conserva_con_banner(self):
+    def test_sticky_invalido_se_conserva_sin_escribir(self):
         sticky_body = (
             review_sticky.MARKER
             + "\n"
@@ -8670,16 +8520,12 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     mock.patch.object(
                         review_github, "fetch_all_comments", return_value=[sticky]
                     ),
-                    mock.patch.object(review_github, "sh"),
+                    mock.patch.object(review_github, "sh") as shell,
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
-            body = json.loads((work / "comment.json").read_text())["body"]
-        self.assertIn(f"{review_sticky.SHA_PREFIX}{'a' * 40} -->", body, "el SHA no avanza")
-        self.assertNotIn(f"{'c' * 40}:complete", body, "no confirma cobertura nueva")
-        self.assertNotIn("bug nuevo z", body, "no publica encima de memoria inválida")
-        self.assertIn("conservada", body, "aviso visible")
-        self.assertIn(review_render.CAUTION_MARK, body)
-        self.assertIn("Texto previo.", body)
+                    shell.assert_not_called()
+            self.assertFalse((work / "comment.json").exists())
+        self.assertEqual(sticky["body"], sticky_body)
 
 
 class DesbordeSinMemoriaPrevia(unittest.TestCase):
@@ -8732,21 +8578,17 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                     mock.patch.object(
                         review_github, "fetch_all_comments", return_value=comments
                     ),
-                    mock.patch.object(review_github, "sh"),
+                    mock.patch.object(review_github, "sh") as writes,
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
-            return json.loads((work / "comment.json").read_text())["body"]
+                    writes.assert_not_called()
+            self.assertFalse((work / "comment.json").exists())
+            return comments[0]["body"] if comments else None
 
-    def test_b3_desborde_sin_sticky_publica_banner_sin_memoria(self):
-        body = self.publicar([])
-        self.assertIn(review_sticky.MARKER, body)
-        self.assertIn("conservada", body)
-        self.assertIn(review_render.CAUTION_MARK, body)
-        self.assertNotIn(review_sticky.SHA_PREFIX, body, "sin memoria no se marca SHA")
-        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body, "no se confirma cobertura")
-        self.assertNotIn("bug nuevo z", body, "no publica la memoria que no cupo")
+    def test_b3_desborde_sin_sticky_no_crea_comentario(self):
+        self.assertIsNone(self.publicar([]))
 
-    def test_b3_desborde_con_sticky_solo_aviso(self):
+    def test_b3_desborde_con_sticky_solo_aviso_lo_conserva(self):
         sticky_body = (
             review_sticky.MARKER
             + "\n"
@@ -8755,16 +8597,25 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
         )
         sticky = {"id": 8, "user": "github-actions[bot]", "body": sticky_body}
         body = self.publicar([sticky])
-        self.assertIn(review_sticky.MARKER, body)
-        self.assertIn("conservada", body)
-        self.assertIn(review_render.CAUTION_MARK, body)
-        self.assertNotIn(review_sticky.SHA_PREFIX, body)
-        self.assertNotIn(review_sticky.COMPLETION_PREFIX, body)
-        self.assertNotIn("bug nuevo z", body)
+        self.assertEqual(body, sticky_body)
 
 
 class CableadoIdentidad(unittest.TestCase):
     """F0 r7 R-C: env finding_identity validado antes del modelo."""
+
+    def _cuerpo_de_aceptacion(self, accepted, result, manifest, head):
+        loaded = review_domain.read_snapshot(accepted["block"])
+        self.assertIsInstance(loaded, review_domain.Valid)
+        document = review_document.document_from_result(
+            review_document.read_document(""), loaded.snapshot,
+            {**result, "model_ok": accepted.get("model_ok", True)},
+            manifest, "opencode-go", head, tuple(accepted.get("new_ids", ())),
+        )
+        prepared = review_document.prepare_publication(
+            document, review_domain.StorageBudget(), (),
+        )
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        return prepared.body
 
     def test_env_invalida_se_rechaza(self):
         with mock.patch.dict(os.environ, {"FINDING_IDENTITY": "bogus"}):
@@ -9015,12 +8866,8 @@ class CableadoIdentidad(unittest.TestCase):
                 out["completion"],
                 domain.COMPLETE_CLAIM,
             )
-            cuerpo = review_render.compose(
-                resultado,
-                manifest,
-                sha=r["head2"],
-                provider="opencode-go",
-                findings=out,
+            cuerpo = self._cuerpo_de_aceptacion(
+                out, resultado, manifest, r["head2"],
             )
             self.assertIn(
                 f"{review_sticky.COMPLETION_PREFIX}{r['head2']}:complete -->",
@@ -9080,12 +8927,8 @@ class CableadoIdentidad(unittest.TestCase):
                         domain.PARTIAL,
                         "archivo excluido: omisión obligatoria, no complete",
                     )
-                    cuerpo = review_render.compose(
-                        resultado,
-                        manifest,
-                        sha=head,
-                        provider="opencode-go",
-                        findings=out,
+                    cuerpo = self._cuerpo_de_aceptacion(
+                        out, resultado, manifest, head,
                     )
                     self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{head[:7]}", cuerpo)
                     self.assertIn(":partial -->", cuerpo)
@@ -9107,8 +8950,8 @@ class CableadoIdentidad(unittest.TestCase):
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
         self.assertFalse(out["model_ok"])
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review_render.compose(
-            resultado, manifest, sha="c" * 40, provider="opencode-go", findings=out
+        cuerpo = self._cuerpo_de_aceptacion(
+            out, resultado, manifest, "c" * 40,
         )
         self.assertIn(f"{review_sticky.COMPLETION_PREFIX}{'c' * 40}:partial -->", cuerpo)
 
@@ -9297,8 +9140,8 @@ class CableadoIdentidad(unittest.TestCase):
             finally:
                 os.chdir(cwd)
         self.assertEqual(out["completion"], domain.PARTIAL)
-        cuerpo = review_render.compose(
-            resultado, manifest, sha=base, provider="opencode-go", findings=out
+        cuerpo = self._cuerpo_de_aceptacion(
+            out, resultado, manifest, base,
         )
         self.assertIn(":partial -->", cuerpo)
 
@@ -9388,24 +9231,26 @@ class CableadoIdentidad(unittest.TestCase):
     def test_el_marcador_visible_nace_de_la_cobertura_persistida(self):
         import review_domain as domain
 
-        findings = {
-            "merged": [],
-            "new_ids": [],
-            "block": "",
-            "model_ok": True,
-            "completion": domain.PARTIAL,
-        }
-        cuerpo = review_render.compose(
+        memory = domain.Snapshot(
+            3, 1, domain.Revision("b" * 40, "e" * 40, "d" * 64),
+            1, domain.PARTIAL, [], 0,
+        )
+        document = review_document.document_from_result(
+            review_document.read_document(""), memory,
             {"result": ""},
             {"mode": "full", "reason": "no-prev", "reviewed": [], "excluded": []},
-            sha="e" * 40,
-            provider="opencode-go",
-            findings=findings,
+            "opencode-go", "e" * 40, (),
         )
+        prepared = review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        )
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        cuerpo = prepared.body
         self.assertIn(
             f"{review_sticky.COMPLETION_PREFIX}{'e' * 40}:partial -->",
             cuerpo,
         )
+        self.assertEqual(review_document.read_document(cuerpo).memory.completion, domain.PARTIAL)
 
     def test_cita_sobre_ruta_del_delta_ausente_del_manifiesto_verifica(self):
         """CodeRabbit r1: la identidad no se pierde por falta del manifiesto."""
@@ -10122,12 +9967,18 @@ class GitPaths(unittest.TestCase):
             self.assertNotIn(b"\xef\xbf\xbd", diff_bytes)
             self.assertNotIn(b"no utf8", diff_bytes)
 
-            body = review_render.compose(
-                {"result": "COVERAGE: complete\n"},
-                manifest,
-                sha=SHA,
-                provider="opencode-go",
+            memory = review_domain.Snapshot(
+                3, 1, review_domain.Revision("b" * 40, SHA, "d" * 64),
+                1, review_domain.PARTIAL, [], 0,
             )
+            document = review_document.document_from_result(
+                review_document.read_document(""), memory,
+                {"result": "COVERAGE: complete\n"},
+                manifest, "opencode-go", SHA, (),
+            )
+            body = review_document.prepare_publication(
+                document, review_domain.StorageBudget(), (),
+            ).body
             self.assertIn(f"completion={SHA}:partial", body)
             self.assertIn("no se pudieron leer como UTF-8", body)
 

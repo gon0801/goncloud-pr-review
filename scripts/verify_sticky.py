@@ -23,8 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import review_document
+import review_domain as domain
 import review_sticky
-import review_domain as domain  # noqa: E402
 
 
 def falla(mensajes, texto):
@@ -83,6 +84,13 @@ def main():
             falla(errores, "libro de cobertura ausente, corrupto o de otro head")
         else:
             print(f"verify_sticky: ok: libro de cobertura con {len(libro)} entrada(s)")
+
+    if review_document.has_document_marker(body):
+        document = review_document.read_document(body)
+        if isinstance(document, review_document.DocumentBlocked):
+            falla(errores, f"vista inválida: {document.reason}")
+        else:
+            print("verify_sticky: ok: documento v1 íntegro")
 
     if args.expect_sha:
         if sha != args.expect_sha:

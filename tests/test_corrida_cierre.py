@@ -172,10 +172,17 @@ class VueltaDeCierre(unittest.TestCase):
     def publicar(self, result):
         (self.work / "result.json").write_text(json.dumps(result))
         real_sh = review_github.sh
+        comments = []
 
         def run_command(*args, **kwargs):
             if args[0] == "git":
                 return real_sh(*args, cwd=self.repo, **kwargs)
+            if "-X" in args and "--input" in args:
+                new_body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+                if args[args.index("-X") + 1] == "PATCH":
+                    comments[0]["body"] = new_body
+                else:
+                    comments.append({"id": 1, "user": "github-actions[bot]", "body": new_body})
             return mock.Mock(returncode=0)
 
         with (
@@ -189,7 +196,7 @@ class VueltaDeCierre(unittest.TestCase):
                     "GITHUB_STEP_SUMMARY": "",
                 },
             ),
-            mock.patch.object(review_github, "fetch_all_comments", return_value=[]),
+            mock.patch.object(review_github, "fetch_all_comments", return_value=comments),
             mock.patch.object(review_github, "set_output"),
             mock.patch.object(review_github, "sh", side_effect=run_command),
             contextlib.redirect_stdout(io.StringIO()),

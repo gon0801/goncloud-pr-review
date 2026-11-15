@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 import review  # noqa: E402
 import review_coordinator
+import review_document
 
 import review_github
 
@@ -187,17 +188,27 @@ class ElCasoDelPr20Publica(unittest.TestCase):
 
     def test_ronda_extra_publica_en_lugar_de_desbordar(self):
         sticky = sticky_pr20()
-        decision = decision_de_ronda(sticky["body"], ronda_extra())
+        ronda = ronda_extra()
+        decision = decision_de_ronda(sticky["body"], ronda)
         previos = {f.id for f in domain.read_snapshot(sticky["body"]).snapshot.findings}
-        visible = review_coordinator.revision_visible(
-            dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
+        document = review_document.document_from_result(
+            review_document.read_document(sticky["body"]),
             decision.snapshot,
-            previos,
-            ronda_extra()["head_sha"],
+            dict(ronda, review_provider="opencode-go", model_ok=True),
+            {"reviewed": [], "excluded": []},
+            "opencode-go",
+            ronda["head_sha"],
+            [finding.id for finding in decision.snapshot.findings if finding.id not in previos],
         )
         falso = _ComentariosFalsos([sticky])
-        recibo = review_coordinator.publish_checkpoint(decision, sticky, falso, visible=visible)
-        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
+        prepared = review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        )
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        recibo = review_document.publish_checkpoint(
+            prepared, sticky, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(recibo, review_document.PublishReceipt)
         self.assertEqual(falso.creaciones, [])
         cuerpo = falso.leer()[0]["body"]
         carga = domain.read_snapshot(cuerpo)
@@ -268,10 +279,17 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         )
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review_coordinator.publish_checkpoint(
-            domain.Commit(snapshot=snapshot), sticky, falso
+        prepared = review_document.prepare_publication(
+            domain.replace(
+                review_document.read_document(sticky["body"]), memory=snapshot,
+            ),
+            domain.StorageBudget(), (),
         )
-        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
+        self.assertIsInstance(prepared, domain.CapacityExceeded)
+        resultado = review_document.publish_capacity_notice(
+            sticky, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(resultado, review_document.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás crea un sticky sin bloque")
         self.assertEqual(len(falso.patches), 1, "el aviso va al sticky existente")
         cuerpo = falso.leer()[0]["body"]
@@ -286,10 +304,17 @@ class SesentaAbiertosNuncaSilenciosos(unittest.TestCase):
         self.assertIsInstance(encoded, domain.EncodedCheckpoint)
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        recibo = review_coordinator.publish_checkpoint(
-            domain.Commit(snapshot=snapshot), sticky, falso
+        prepared = review_document.prepare_publication(
+            domain.replace(
+                review_document.read_document(sticky["body"]), memory=snapshot,
+            ),
+            domain.StorageBudget(), (),
         )
-        self.assertIsInstance(recibo, review_coordinator.PublishReceipt)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        recibo = review_document.publish_checkpoint(
+            prepared, sticky, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(recibo, review_document.PublishReceipt)
 
 
 class RoundtripDelEstadoCompacto(unittest.TestCase):
@@ -737,14 +762,20 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
             "model_ok": True,
         }
 
-    def _findings(self, block, snapshot):
-        return {
-            "merged": domain.hallazgos_legacy(snapshot),
-            "new_ids": [],
-            "block": block,
-            "model_ok": True,
-            "completion": domain.COMPLETE_CLAIM,
-        }
+    def _preparado(self, snapshot, *, result=None, libro=None, manifest=None, budget=None, previous=""):
+        document = review_document.document_from_result(
+            review_document.read_document(previous),
+            snapshot,
+            result if result is not None else self._resultado(),
+            manifest if manifest is not None else self.MANIFEST,
+            "opencode-go",
+            snapshot.revision.head_sha,
+            (),
+            libro,
+        )
+        return review_document.prepare_publication(
+            document, budget or domain.StorageBudget(), (),
+        )
 
     def _snapshot_grande(self):
         snapshot = snapshot_grande()
@@ -794,17 +825,11 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self._sticky_verificado(sticky_pr20()["body"])
 
     def test_libro_al_tope_y_estado_grande_publican_sin_libro(self):
-        snapshot, block = self._snapshot_grande()
+        snapshot, _ = self._snapshot_grande()
         libro = self._libro_grande()
-        cuerpo = review_render.compose(
-            self._resultado(),
-            self.MANIFEST,
-            sha="c" * 40,
-            provider="opencode-go",
-            findings=self._findings(block, snapshot),
-            budget=domain.StorageBudget(),
-            libro=libro,
-        )
+        prepared = self._preparado(snapshot, libro=libro)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        cuerpo = prepared.body
         self.assertLessEqual(len(cuerpo), domain.COMMENT_MAX_CHARS)
         self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         carga = domain.read_snapshot(cuerpo)
@@ -828,21 +853,15 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self._sticky_verificado(cuerpo)
 
     def test_prosa_que_no_cabe_entera_se_recorta_y_publica_el_estado(self):
-        snapshot, block = self._snapshot_grande()
+        snapshot, _ = self._snapshot_grande()
         resultado = {
             "result": "COVERAGE: complete\n" + "detalle del revisor " * 1500,
             "review_provider": "opencode-go",
             "model_ok": True,
         }
-        cuerpo = review_render.compose(
-            resultado,
-            self.MANIFEST,
-            sha="c" * 40,
-            provider="opencode-go",
-            findings=self._findings(block, snapshot),
-            budget=domain.StorageBudget(),
-            libro=self._libro_grande(),
-        )
+        prepared = self._preparado(snapshot, result=resultado, libro=self._libro_grande())
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        cuerpo = prepared.body
         self.assertLessEqual(len(cuerpo), domain.COMMENT_MAX_CHARS)
         self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         carga = domain.read_snapshot(cuerpo)
@@ -853,7 +872,7 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         )
         self.assertNotIn(review_sticky.COVERED_PREFIX, cuerpo, "el libro cede ante el estado")
         self.assertIn(
-            "Revisión recortada al presupuesto de capacidad",
+            "El detalle se recortó para conservar el estado",
             cuerpo,
             "la prosa se recorta, el estado no",
         )
@@ -861,17 +880,11 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self.assertEqual(review_sticky.reviewed_sha(cuerpo), "c" * 40)
 
     def test_libro_chico_sigue_viajando(self):
-        snapshot, block = self._snapshot_grande()
+        snapshot, _ = self._snapshot_grande()
         libro = {"src/chico.py": "a" * 40}
-        cuerpo = review_render.compose(
-            self._resultado(),
-            self.MANIFEST,
-            sha="c" * 40,
-            provider="opencode-go",
-            findings=self._findings(block, snapshot),
-            budget=domain.StorageBudget(),
-            libro=libro,
-        )
+        prepared = self._preparado(snapshot, libro=libro)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        cuerpo = prepared.body
         self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
@@ -883,22 +896,21 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         sticky = sticky_pr20()
         decision = decision_de_ronda(sticky["body"], ronda_extra())
         snapshot = decision.snapshot
-        block = domain.encode_snapshot(snapshot).block
         libro = {f["file"]: "e" * 40 for f in domain.hallazgos_legacy(snapshot)}
-        cuerpo = review_render.compose(
-            dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
-            {
+        prepared = self._preparado(
+            snapshot,
+            result=dict(ronda_extra(), review_provider="opencode-go", model_ok=True),
+            manifest={
                 "mode": "full",
                 "reason": "no-prev",
                 "reviewed": sorted(libro),
                 "excluded": [],
             },
-            sha=ronda_extra()["head_sha"],
-            provider="opencode-go",
-            findings=self._findings(block, snapshot),
-            budget=domain.StorageBudget(),
             libro=libro,
+            previous=sticky["body"],
         )
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        cuerpo = prepared.body
         self.assertLessEqual(len(cuerpo.encode("utf-8")), domain.COMMENT_MAX_BYTES)
         carga = domain.read_snapshot(cuerpo)
         self.assertIsInstance(carga, domain.Valid)
@@ -909,23 +921,15 @@ class ElEstadoMandaSobreElLibro(unittest.TestCase):
         self._sticky_verificado(cuerpo)
 
     def test_ni_sin_libro_cabe_entonces_aviso_y_nunca_corte_a_ciegas(self):
-        snapshot, block = self._snapshot_grande()
-        cuerpo = review_render.compose(
-            self._resultado(),
-            self.MANIFEST,
-            sha="c" * 40,
-            provider="opencode-go",
-            findings=self._findings(block, snapshot),
+        snapshot, _ = self._snapshot_grande()
+        prepared = self._preparado(
+            snapshot,
             budget=domain.StorageBudget(
                 comment_max_bytes=45000, comment_max_chars=45000
             ),
-            libro=None,
         )
-        self.assertIn(review_render.CAUTION_MARK, cuerpo)
-        self.assertIn("no cabe", cuerpo)
-        self.assertIsNone(review_sticky.reviewed_completion(cuerpo), "sin confirmación")
-        self.assertNotIn(review.FINDINGS_PREFIX, cuerpo, "nunca un bloque partido")
-        self.assertLessEqual(len(cuerpo), review_render.GITHUB_COMMENT_MAX)
+        self.assertIsInstance(prepared, domain.CapacityExceeded)
+        self.assertGreater(prepared.needed, prepared.limit)
 
 
 class ElPasoTresNoBorraMemoria(unittest.TestCase):
@@ -934,47 +938,39 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
     parcha el banner CAUTION y responde Unconfirmed; sin sticky previo no
     crea nada. Una sola fuente de verdad: cuerpo_publicable."""
 
-    def _visible_sin_espacio(self, snapshot):
-        def visible(bloque, resto):
-            return review_render.compose(
-                {
-                    "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
-                    "review_provider": "opencode-go",
-                    "model_ok": True,
-                },
-                {
-                    "mode": "full",
-                    "reason": "no-prev",
-                    "reviewed": ["src/a.py"],
-                    "excluded": [],
-                },
-                sha=snapshot.revision.head_sha,
-                provider="opencode-go",
-                findings={
-                    "merged": domain.hallazgos_legacy(snapshot),
-                    "new_ids": [],
-                    "block": bloque,
-                    "model_ok": True,
-                    "completion": snapshot.completion,
-                },
-                budget=domain.StorageBudget(
-                    comment_max_bytes=45000, comment_max_chars=45000
-                ),
-            )
-
-        return visible
+    def _documento(self, snapshot, sticky=None):
+        return review_document.document_from_result(
+            review_document.read_document(sticky["body"] if sticky else ""),
+            snapshot,
+            {
+                "result": "COVERAGE: complete\n" + "detalle del revisor " * 200,
+                "review_provider": "opencode-go",
+                "model_ok": True,
+            },
+            {
+                "mode": "full",
+                "reason": "no-prev",
+                "reviewed": ["src/a.py"],
+                "excluded": [],
+            },
+            "opencode-go",
+            snapshot.revision.head_sha,
+            (),
+        )
 
     def test_con_sticky_observado_lo_conserva_y_avisa(self):
         snapshot = snapshot_grande()
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review_coordinator.publish_checkpoint(
-            domain.Commit(snapshot=snapshot),
-            sticky,
-            falso,
-            visible=self._visible_sin_espacio(snapshot),
+        limit = domain.StorageBudget(comment_max_bytes=45000, comment_max_chars=45000)
+        prepared = review_document.prepare_publication(
+            self._documento(snapshot, sticky), limit, (),
         )
-        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
+        self.assertIsInstance(prepared, domain.CapacityExceeded)
+        resultado = review_document.publish_capacity_notice(
+            sticky, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(resultado, review_document.Unconfirmed)
         self.assertEqual(falso.creaciones, [])
         self.assertEqual(len(falso.patches), 1)
         cuerpo = falso.leer()[0]["body"]
@@ -988,13 +984,15 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
     def test_sin_sticky_previo_no_crea_nada(self):
         snapshot = snapshot_grande()
         falso = _ComentariosFalsos([])
-        resultado = review_coordinator.publish_checkpoint(
-            domain.Commit(snapshot=snapshot),
-            None,
-            falso,
-            visible=self._visible_sin_espacio(snapshot),
+        limit = domain.StorageBudget(comment_max_bytes=45000, comment_max_chars=45000)
+        prepared = review_document.prepare_publication(
+            self._documento(snapshot), limit, (),
         )
-        self.assertIsInstance(resultado, review_coordinator.Unconfirmed)
+        self.assertIsInstance(prepared, domain.CapacityExceeded)
+        resultado = review_document.publish_capacity_notice(
+            None, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(resultado, review_document.Unconfirmed)
         self.assertEqual(falso.creaciones, [], "jamás un sticky sin bloque")
         self.assertEqual(falso.comentarios, [])
 
@@ -1002,10 +1000,16 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
         snapshot = snapshot_grande()
         sticky = sticky_pr20()
         falso = _ComentariosFalsos([sticky])
-        resultado = review_coordinator.publish_checkpoint(
-            domain.Commit(snapshot=snapshot), sticky, falso
+        prepared = review_document.prepare_publication(
+            review_document.update_presentation(
+                review_document.read_document(sticky["body"]), snapshot,
+            ), domain.StorageBudget(), (),
         )
-        self.assertIsInstance(resultado, review_coordinator.PublishReceipt)
+        self.assertIsInstance(prepared, review_document.PreparedPublication)
+        resultado = review_document.publish_checkpoint(
+            prepared, sticky, falso, login="github-actions[bot]",
+        )
+        self.assertIsInstance(resultado, review_document.PublishReceipt)
         carga = domain.read_snapshot(falso.leer()[0]["body"])
         self.assertIsInstance(carga, domain.Valid)
         self.assertEqual(carga.block, domain.encode_snapshot(snapshot).block)
@@ -1014,10 +1018,8 @@ class ElPasoTresNoBorraMemoria(unittest.TestCase):
 class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
     """cmd_publish con un estado que produce un comentario sin espacio (el
     fijo pasa de 60000 aun sin libro: ~86 hallazgos con rutas y títulos
-    largos, bloque legado de ~38 KB + secciones de ~33 KB): sin
-    cuerpo_publicable parchaba el cuerpo de aviso de compose sobre el sticky
-    (memoria borrada) y marcaba revisado. Con el guard: Keep+banner; sin
-    sticky previo no se crea nada."""
+    largos. El aviso tipado conserva el bloque previo. Sin sticky previo
+    no se crea nada."""
 
     def _sticky_legado(self):
         bloque = review.serialize_findings({"findings": [], "next": 1})
@@ -1083,6 +1085,12 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
 
                 def falso_sh(*args, **kwargs):
                     llamadas.append(list(args))
+                    if "-X" in args and "--input" in args:
+                        body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+                        if args[args.index("-X") + 1] == "PATCH":
+                            comments[0]["body"] = body
+                        else:
+                            comments.append({"id": 55, "user": "github-actions[bot]", "body": body})
 
                     class Hecho:
                         stdout = ""
@@ -1091,7 +1099,7 @@ class ElPublicadorClasicoNoBorraMemoria(unittest.TestCase):
 
                 with mock.patch.object(review_github, "sh", falso_sh):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
-            cuerpo = json.loads((work / "comment.json").read_text())["body"]
+            cuerpo = comments[0]["body"] if comments else None
             revisado = salida.read_text().strip() if salida.exists() else ""
             return cuerpo, llamadas, revisado
 

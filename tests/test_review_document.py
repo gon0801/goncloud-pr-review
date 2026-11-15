@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import replace
@@ -19,16 +21,23 @@ from review_document import (
     ExplanationView,
     FailureView,
     Notice,
+    PreparedPublication,
+    PublishReceipt,
     ReviewDocument,
     ReviewedHeader,
     ReviewView,
     SafeProse,
+    ScopeUsage,
     ScopeView,
+    Unconfirmed,
+    document_from_result,
     has_document_marker,
     prepare_publication,
+    publish_capacity_notice,
     publish_checkpoint,
     read_document,
     safe_prose,
+    update_presentation,
 )
 
 
@@ -53,6 +62,22 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_verificador_rechaza_vista_con_slot_alterado(self):
+        prepared = prepare_publication(document(), domain.StorageBudget(), ())
+        with tempfile.TemporaryDirectory() as path:
+            body_file = Path(path, "review.md")
+            command = [
+                sys.executable, "scripts/verify_sticky.py", "--body-file", str(body_file),
+                "--expect-sha", "a" * 40,
+            ]
+            body_file.write_text(prepared.body)
+            good = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+            body_file.write_text(prepared.body.replace("niña 漢字", "nina 漢字", 1))
+            invalid = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(invalid.returncode, 1, invalid.stdout + invalid.stderr)
+            self.assertIn("vista inválida", invalid.stdout)
+
     def test_utf8_and_three_read_write_cycles_are_stable(self):
         original = document()
         previous = prepare_publication(original, domain.StorageBudget(), ())
@@ -65,6 +90,12 @@ class CodecDocumento(unittest.TestCase):
             self.assertEqual(rewritten.body, previous.body)
             previous = rewritten
         self.assertEqual(previous.state_block, domain.encode_snapshot(original.memory).block)
+
+    def test_sanitized_markers_and_numeric_entities_remain_stable(self):
+        once = safe_prose("detalle <!-- comentario y &#78;ota")
+        self.assertIn("&lt;!--", once.text)
+        self.assertIn("&amp;#78;", once.text)
+        self.assertEqual(safe_prose(once.text), once)
 
     def test_covered_line_keeps_its_order_across_three_cycles(self):
         original = replace(
@@ -199,7 +230,7 @@ class CodecDocumento(unittest.TestCase):
     def test_generated_title_is_not_used_as_a_presentation_parser(self):
         published = prepare_publication(document(), domain.StorageBudget(), ())
         changed_title = published.body.replace(
-            "### Revisión automática · opencode-go · aaaaaaa",
+            "### Revisión automática · DeepSeek V4.1 Flash · OpenCode Go · aaaaaaa",
             "## Otro título libre",
             1,
         )
@@ -353,7 +384,6 @@ class RetornoAlPuente(unittest.TestCase):
                 "<!-- ai-review:end-slot=review -->",
                 )
             ]
-            bodies.append(prepare_publication(document(), domain.StorageBudget(), ()).body)
             for number, body in enumerate(bodies):
                 with self.subTest(case=number):
                     sticky = {
@@ -377,7 +407,7 @@ class RetornoAlPuente(unittest.TestCase):
                         shell.assert_not_called()
                         output.assert_called_once_with(False)
 
-    def test_el_publicador_coordinado_no_parcha_una_vista_presente(self):
+    def test_el_publicador_coordinado_no_parcha_marcadores_invalidos(self):
         block = domain.encode_snapshot(document().memory).block
         bodies = [
             "<!-- ai-review:sticky -->\n" + block + "\n" + marker
@@ -387,7 +417,7 @@ class RetornoAlPuente(unittest.TestCase):
             "<!-- ai-review:end-slot=review -->",
             )
         ]
-        bodies.append(prepare_publication(document(), domain.StorageBudget(), ()).body)
+        prepared = prepare_publication(document(), domain.StorageBudget(), ())
         for number, body in enumerate(bodies):
             with self.subTest(case=number):
                 sticky = {
@@ -403,12 +433,12 @@ class RetornoAlPuente(unittest.TestCase):
                     def parchar(self, *_, writes=calls):
                         writes.append("PATCH")
 
-                result = review_coordinator.publish_checkpoint(
-                    domain.Commit(snapshot=document().memory),
+                result = publish_checkpoint(
+                    prepared,
                     sticky,
                     FakeAdapter(),
                 )
-                self.assertIsInstance(result, review_coordinator.Unconfirmed)
+                self.assertIsInstance(result, Unconfirmed)
                 self.assertEqual(calls, [])
 
 
@@ -447,6 +477,86 @@ class PublicacionCompleta(unittest.TestCase):
         receipt = publish_checkpoint(second, adapter.leer()[0], adapter, login="bot")
         self.assertEqual(adapter.writes, [("PATCH", 7)])
         self.assertTrue(receipt.recibo["ya_aplicado"])
+
+    def test_repeated_capacity_notice_does_not_stack(self):
+        current = prepare_publication(document(), domain.StorageBudget(), ())
+        adapter = self.Comments(current.body)
+        for _ in range(2):
+            status = publish_capacity_notice(adapter.leer()[0], adapter, login="bot")
+            self.assertIsInstance(status, Unconfirmed)
+        updated = read_document(adapter.leer()[0]["body"])
+        self.assertEqual(
+            [notice.kind for notice in updated.notices],
+            ["capacity-exceeded"],
+        )
+        self.assertEqual(adapter.writes, [("PATCH", 7)])
+
+    def test_review_dismiss_explain_notice_failure_and_restart_keep_the_view(self):
+        prior = domain.Snapshot(3, 1, None, 1, domain.UNKNOWN, [], 0)
+        findings = [
+            domain.Finding(
+                id=f"F{i}", title=f"Fuga {i}", severity="High",
+                status=domain.StatusOpen(),
+                primary_anchor=domain.AnchorLegacy(path="a.py", line=i),
+            )
+            for i in range(1, 4)
+        ]
+        memory = domain.Snapshot(
+            3, 2, domain.Revision("b" * 40, "a" * 40, "d" * 64),
+            4, domain.COMPLETE_CLAIM, findings, 0,
+        )
+        adapter = self.Comments(f"<!-- ai-review:sticky -->\n{domain.encode_snapshot(prior).block}")
+
+        def publish(value):
+            prepared = prepare_publication(value, domain.StorageBudget(), ())
+            self.assertIsInstance(prepared, PreparedPublication)
+            receipt = publish_checkpoint(prepared, adapter.leer()[0], adapter, login="bot")
+            self.assertIsInstance(receipt, PublishReceipt)
+            return read_document(adapter.leer()[0]["body"])
+
+        current = publish(document_from_result(
+            read_document(adapter.leer()[0]["body"]), memory,
+            {"result": "Revisión inicial.\nCOVERAGE: complete", "model_ok": True},
+            {"reviewed": ["a.py"], "excluded": [], "mode": "full"},
+            "opencode-go", "a" * 40, ("F1", "F2", "F3"),
+            {"a.py": "a" * 40},
+        ))
+        dismissed = replace(
+            memory, generation=3, command_cursor=7,
+            findings=[replace(findings[0], status=domain.StatusDismissed(command_id=7)), *findings[1:]],
+        )
+        current = publish(update_presentation(current, dismissed))
+        for i in range(1, 4):
+            current = publish(update_presentation(
+                current, dismissed, explanations=((f"F{i}", f"Causa {i}"),),
+            ))
+        current = publish(update_presentation(
+            current, dismissed,
+            notices=(
+                Notice("no-entendido", comment_id=10),
+                Notice("extra", comment_id=11),
+                Notice("inexistente", ("F99",), 12),
+            ),
+        ))
+        current = publish(replace(
+            current,
+            failure=FailureView("c" * 40, "worker-failed", SafeProse("el worker no terminó")),
+        ))
+        body = adapter.leer()[0]["body"]
+        self.assertEqual(current.memory.generation, 3)
+        self.assertEqual(current.reviewed, ReviewedHeader("a" * 40, "complete"))
+        self.assertEqual(current.covered, CoverageBook("a" * 40, (("a.py", "a" * 40),)))
+        self.assertEqual([item.finding_id for item in current.explanations], ["F1", "F2", "F3"])
+        self.assertEqual([item.comment_id for item in current.notices], [10, 11, 12])
+        self.assertEqual(body.count("[!CAUTION]"), 1)
+        changed = body.replace("### Revisión automática", "### Encabezado distinto", 1)
+        changed = changed.replace("## Detalle del revisor", "## Título distinto", 1)
+        restarted = read_document(changed)
+        self.assertEqual(restarted.explanations, current.explanations)
+        self.assertEqual(restarted.notices, current.notices)
+        self.assertEqual(
+            prepare_publication(restarted, domain.StorageBudget(), ()).body, body,
+        )
 
     def test_stale_base_and_lost_patch_reply_do_not_confirm_work(self):
         first = prepare_publication(document(), domain.StorageBudget(), ())
@@ -500,3 +610,151 @@ class PublicacionCompleta(unittest.TestCase):
             work_after_commit=(request,),
         )
         self.assertEqual(good.trabajo, (request,))
+
+
+class PublicacionDirecta(unittest.TestCase):
+    def test_lost_patch_reply_does_not_confirm_direct_publication(self):
+        prior = prepare_publication(document(), domain.StorageBudget(), ())
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps({
+                review.ERROR_KEY: "worker no terminó",
+            }))
+            (work / "manifest.json").write_text(json.dumps({
+                "mode": "full", "reviewed": ["a.py"], "excluded": [],
+            }))
+            sticky = [{"id": 5, "user": "github-actions[bot]", "body": prior.body}]
+            with (
+                mock.patch.dict(os.environ, {
+                    "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "b" * 40,
+                }),
+                mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
+                mock.patch.object(review_github, "sh", side_effect=OSError("respuesta perdida")),
+                mock.patch.object(review_github, "informar_revision") as outcome,
+            ):
+                with self.assertRaises(SystemExit) as caught:
+                    review.cmd_publish(argparse.Namespace(work=tmp))
+                self.assertEqual(caught.exception.code, 1)
+                outcome.assert_called_once_with(False)
+            self.assertEqual(sticky[0]["body"], prior.body)
+
+    def test_summary_uses_the_same_presentation_without_state_or_slot_markers(self):
+        current = prepare_publication(document(), domain.StorageBudget(), ())
+        self.assertIn("## Detalle del revisor", current.summary)
+        self.assertIn("niña 漢字", current.summary)
+        self.assertNotIn("<!-- ai-review:", current.summary)
+
+    def test_incremental_scope_and_usage_survive_read_write(self):
+        original = document()
+        scope = replace(
+            original.review.scope,
+            mode="incremental", prev_sha="b" * 40, changed_count=2,
+            usage=ScopeUsage(63, 60, 1234, 100, 44, 0.004),
+        )
+        current = replace(
+            original, review=replace(original.review, scope=scope),
+        )
+        first = prepare_publication(current, domain.StorageBudget(), ())
+        self.assertIn("incremental desde bbbbbbb", first.body)
+        self.assertIn("- Modo: incremental desde bbbbbbb (2 archivo(s) cambiaron)", first.body)
+        self.assertIn("- Turnos: 63/60", first.body)
+        self.assertIn("costo aprox $0.004", first.body)
+        restored = read_document(first.body)
+        self.assertEqual(restored.review.scope, scope)
+        self.assertEqual(
+            prepare_publication(restored, domain.StorageBudget(), ()).body,
+            first.body,
+        )
+
+    def test_command_notices_keep_typed_comment_ids_across_render_cycles(self):
+        current = replace(
+            document(),
+            notices=(
+                Notice("no-entendido", comment_id=31),
+                Notice("extra", comment_id=32),
+                Notice("inexistente", ("F99",), comment_id=33),
+            ),
+        )
+        first = prepare_publication(current, domain.StorageBudget(), ())
+        self.assertIn("Comando no entendido", first.body)
+        self.assertIn("el comentario 31", first.body)
+        self.assertIn("el comentario 32", first.body)
+        self.assertIn("el comentario 33 nombra el hallazgo F99", first.body)
+        restored = read_document(first.body)
+        self.assertEqual(restored.notices, current.notices)
+        self.assertEqual(
+            prepare_publication(restored, domain.StorageBudget(), ()).body,
+            first.body,
+        )
+
+    def test_document_renders_findings_and_scope_from_typed_state(self):
+        original = document()
+        finding = domain.Finding(
+            "F1", "Error real", "High",
+            domain.StatusOpen(), domain.AnchorLegacy("src/a.py", 12),
+        )
+        updated = replace(
+            original,
+            memory=replace(original.memory, findings=[finding], next_id=2),
+            review=replace(original.review, new_ids=("F1",)),
+        )
+        body = prepare_publication(updated, domain.StorageBudget(), ()).body
+        self.assertIn("## Nuevos en este push", body)
+        self.assertIn("## Siguen abiertos", body)
+        self.assertIn("## Detalle del revisor", body)
+        self.assertIn("- Revisados: 1 archivo(s)", body)
+        self.assertIn("F1", body)
+
+    def test_publishes_new_and_existing_reviews_from_typed_documents(self):
+        existing = prepare_publication(document(), domain.StorageBudget(), ()).body
+        model = (
+            "**Veredicto:** sin problemas abiertos.\nNuevo análisis\n"
+            + domain.FINDINGS_PREFIX
+            + json.dumps({"findings": [], "next": 1})
+            + domain.FINDINGS_SUFFIX
+            + "\nCOVERAGE: partial"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "result.json").write_text(json.dumps({"result": model}))
+            (work / "manifest.json").write_text(json.dumps({
+                "mode": "full", "reviewed": ["src/a.py"], "excluded": [],
+            }))
+            for before in (None, existing):
+                with self.subTest(before=bool(before)):
+                    sticky = (
+                        [{"id": 5, "user": "github-actions[bot]", "body": before}]
+                        if before else []
+                    )
+
+                    def persist(*args, sticky=sticky, **_):
+                        body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+                        if args[3] == "PATCH":
+                            sticky[0]["body"] = body
+                        else:
+                            sticky.append({"id": 5, "user": "github-actions[bot]", "body": body})
+                        return mock.Mock(stdout="")
+
+                    with (
+                        mock.patch.dict(os.environ, {
+                            "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "a" * 40,
+                        }),
+                        mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                        mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
+                        mock.patch.object(review_github, "sh", side_effect=persist) as shell,
+                        mock.patch.object(review_github, "informar_revision"),
+                    ):
+                        review.cmd_publish(argparse.Namespace(work=tmp))
+                        self.assertEqual(
+                            shell.call_args.args[3],
+                            "PATCH" if before else "POST",
+                        )
+                    body = json.loads((work / "comment.json").read_text())["body"]
+                    loaded = read_document(body)
+                    self.assertIsInstance(loaded, ReviewDocument)
+                    self.assertIn("Nuevo análisis", loaded.review.prose.text)
+                    self.assertTrue(
+                        test_capacidad_pr20.ElParserDeGleeElStickyNuevo()
+                        ._merge().parsear_bot(body).bloque_valido
+                    )

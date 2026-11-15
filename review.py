@@ -2,14 +2,19 @@
 """Glue for the AI PR review action."""
 
 import argparse
-from dataclasses import replace
 import json
 import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
+import review_coordinator
+import review_document
+import review_domain
+import review_github
+import review_run
 from review_commands import leer_comando
 from review_config import (
     ERROR_KEY,
@@ -18,33 +23,42 @@ from review_config import (
     politica_de_revision,
     secretos_del_entorno,
 )
-import review_coordinator
-import review_domain
-import review_document
-import review_github
-import review_run
-from review_render import (
-    caution_banner,
-    compose,
-    cuerpo_publicable,
-    insert_caution_banner,
-    redact,
-)
-from review_sticky import (
-    COMPLETION_PREFIX,
-    COVERED_PREFIX,
-    MARKER,
-    SHA_PREFIX,
-    cobertura_declarada,
-    continuacion_terminal,
-    libro_de,
-    libro_fusionado,
-    modelo_utilizable,
-    prev_de_memoria,
-    recortes_del_manifest,
-    reviewed_sha,
-    sha_hexa,
-    sticky_from_comments,
+from review_context import (
+    CALLERS_MAX_BYTES,
+    CALLERS_MAX_MATCHES,
+    CONVENTIONS_MAX_BYTES,
+    DEFAULT_EXCLUDES,
+    DEFAULT_MAX_TURNS,
+    INCREMENTAL_MAX_TURNS,
+    INCREMENTAL_SMALL_BYTES,
+    INCREMENTAL_SMALL_FILES,
+    LARGE_DIFF_MAX_TURNS,
+    TESTS_MAX_BYTES,
+    TESTS_MAX_RESULTS,
+    GitRepository,
+    SearchComplete,
+    SearchFailed,
+    SearchTruncated,
+    blobs_de_head,
+    build_callers,
+    build_conventions,
+    build_tests,
+    changed_since,
+    decide_mode,
+    delta_real,
+    digest_de_politica,
+    excluded_by,
+    files_matching_base,
+    files_reverted,
+    grep_files,
+    is_ancestor,
+    looks_like_test,
+    max_turns_for_diff,
+    prepare_review,
+    prev_findings_markdown,
+    priority,
+    resolve_max_turns,
+    trim_utf8,
 )
 from review_domain import (
     DISMISSED,
@@ -70,42 +84,21 @@ from review_domain import (
     strip_model_findings_block,
     unique_paths,
 )
-from review_context import (
-    CALLERS_MAX_BYTES,
-    CALLERS_MAX_MATCHES,
-    CONVENTIONS_MAX_BYTES,
-    DEFAULT_EXCLUDES,
-    DEFAULT_MAX_TURNS,
-    GitRepository,
-    INCREMENTAL_MAX_TURNS,
-    INCREMENTAL_SMALL_BYTES,
-    INCREMENTAL_SMALL_FILES,
-    LARGE_DIFF_MAX_TURNS,
-    SearchComplete,
-    SearchFailed,
-    SearchTruncated,
-    TESTS_MAX_BYTES,
-    TESTS_MAX_RESULTS,
-    build_callers,
-    build_conventions,
-    build_tests,
-    blobs_de_head,
-    changed_since,
-    decide_mode,
-    delta_real,
-    digest_de_politica,
-    excluded_by,
-    files_matching_base,
-    files_reverted,
-    grep_files,
-    is_ancestor,
-    looks_like_test,
-    max_turns_for_diff,
-    prepare_review,
-    prev_findings_markdown,
-    priority,
-    resolve_max_turns,
-    trim_utf8,
+from review_render import (
+    caution_banner,
+    redact,
+)
+from review_sticky import (
+    cobertura_declarada,
+    continuacion_terminal,
+    libro_de,
+    libro_fusionado,
+    modelo_utilizable,
+    prev_de_memoria,
+    recortes_del_manifest,
+    reviewed_sha,
+    sha_hexa,
+    sticky_from_comments,
 )
 
 # Superficie de compatibilidad: los tests y el adaptador consumen estos nombres
@@ -117,13 +110,13 @@ __all__ = [
     "DEFAULT_EXCLUDES",
     "DEFAULT_MAX_TURNS",
     "DISMISSED",
-    "FINDING_FILES_MAX",
-    "FINDING_ID_RE",
     "FINDINGS_MAX_BYTES",
     "FINDINGS_MAX_COUNT",
     "FINDINGS_PREFIX",
     "FINDINGS_SUFFIX",
     "FINDINGS_TITLE_MAX",
+    "FINDING_FILES_MAX",
+    "FINDING_ID_RE",
     "INCREMENTAL_MAX_TURNS",
     "INCREMENTAL_SMALL_BYTES",
     "INCREMENTAL_SMALL_FILES",
@@ -131,11 +124,11 @@ __all__ = [
     "OPEN",
     "RESOLVED",
     "SEVERITIES",
+    "TESTS_MAX_BYTES",
+    "TESTS_MAX_RESULTS",
     "SearchComplete",
     "SearchFailed",
     "SearchTruncated",
-    "TESTS_MAX_BYTES",
-    "TESTS_MAX_RESULTS",
     "decide_mode",
     "derive_next",
     "digest_de_politica",
@@ -270,7 +263,10 @@ def cmd_gate(args):
     login = os.environ.get("BOT_LOGIN") or "github-actions[bot]"
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
-    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
+    if sticky and isinstance(
+        review_document.read_document(sticky.get("body") or ""),
+        review_document.DocumentBlocked,
+    ):
         review_github.set_output("skip", "true")
         print("ai-review: vista de documento posterior; se omite la revisión")
         return
@@ -284,14 +280,14 @@ def cmd_gate(args):
                 review_domain.read_snapshot(sticky["body"])
             )
             if not isinstance(memoria, review_domain.MemoryReady):
-                raise ValueError(memoria.reason)
+                raise TypeError(memoria.reason)
             dismiss_ids, dismiss_all, _ = collect_dismissals(
                 repo, pr, login, comments, memoria.snapshot.command_cursor
             )
             prev["state"] = review_domain._legacy_raw_of_snapshot(
                 review_domain.aplicar_descartes(memoria.snapshot, dismiss_ids, dismiss_all)
             )
-        except Exception as exc:
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(
                 f"ai-review: no se pudieron leer los descartes ({exc}); se aplican al publicar",
                 file=sys.stderr,
@@ -491,7 +487,7 @@ def _pr_via_api():
             check=False,
         )
         datos = json.loads(respuesta.stdout) if respuesta.returncode == 0 else {}
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, RuntimeError):
         return {}
     return datos if isinstance(datos, dict) else {}
 
@@ -516,6 +512,7 @@ def venv_ready(venv):
             [str(venv / "bin" / "python"), "-c", "import litellm"],
             capture_output=True,
             timeout=120,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -690,8 +687,9 @@ def blobs_para_aceptar(snapshot, manifest, policy, rutas_delta=()):
             continue
         try:
             contenido = review_github.sh("git", "cat-file", "-p", ancla.blob_sha, check=False).stdout
-        except Exception:
-            continue
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"ai-review: no se pudo leer un blob ({exc})", file=sys.stderr)
+            contenido = ""
         if contenido:
             blobs[(ancla.path, ancla.blob_sha)] = tuple(contenido.splitlines())
     return blobs
@@ -733,7 +731,7 @@ def aceptar_reporte_directo(
         dismiss_ids, dismiss_all, seen = collect_dismissals(
             repo, pr, login, comments, snapshot.command_cursor
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(
             f"ai-review: no se pudieron leer los descartes ({exc}); se sigue sin aplicarlos",
             file=sys.stderr,
@@ -806,7 +804,7 @@ def aceptar_reporte_directo(
                     manifest.get("prev_sha"),
                     head,
                 )
-            except Exception:
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError):
                 revertidas = set()
     facts = replace(
         facts,
@@ -886,17 +884,6 @@ def build_findings(result, manifest, sticky, repo, pr, login, comments, policy=N
     }
 
 
-def summary_of(body):
-    return "\n".join(
-        line
-        for line in body.split("\n")
-        if line != MARKER
-        and not line.startswith(
-            (SHA_PREFIX, COMPLETION_PREFIX, FINDINGS_PREFIX, COVERED_PREFIX)
-        )
-    )
-
-
 def cmd_publish(args):
     work = Path(args.work)
     repo, pr, head = env("REPO"), env("PR_NUMBER"), env("HEAD_SHA")
@@ -906,29 +893,35 @@ def cmd_publish(args):
     name = result.get("review_provider", name)
     review_github.avisar_bloque_sin_cierre(result.get("result") or "")
     manifest = json.loads((work / "manifest.json").read_text())
+
+    def guardar_summary(text):
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary, "a") as fh:
+                fh.write(text + "\n")
+
     comments = review_github.fetch_all_comments(repo, pr)
     sticky = sticky_from_comments(comments, login)
-    if sticky and review_document.has_document_marker(sticky.get("body") or ""):
+    document = review_document.read_document(sticky["body"] if sticky else "")
+    if isinstance(document, review_document.DocumentBlocked):
         print("ai-review: vista de documento posterior; se conserva sin tocar", file=sys.stderr)
         review_github.informar_revision(False)
         return
 
     revisado = False
-    escribir = True
     if ERROR_KEY in result:
         # Infra failure: don't mark this sha as reviewed, keep whatever review was there before.
         reason = result[ERROR_KEY]
         has_previous = bool(sticky and reviewed_sha(sticky.get("body") or ""))
+        failed = replace(
+            document,
+            failure=review_document.FailureView(
+                head, "worker-failed", review_document.SafeProse(reason)
+            ),
+        )
+        prepared = review_document.prepare_publication(
+            failed, review_domain.StorageBudget(), secretos_del_entorno()
+        )
         banner = caution_banner(reason, head, has_previous=has_previous)
-        body = (
-            insert_caution_banner(sticky["body"], banner)
-            if sticky
-            else f"{MARKER}\n{banner}"
-        )
-        body = redact(
-            body,
-            secretos_del_entorno(),
-        )
         summary_text = redact(
             banner,
             secretos_del_entorno(),
@@ -936,107 +929,89 @@ def cmd_publish(args):
     else:
         findings = build_findings(result, manifest, sticky, repo, pr, login, comments)
         if findings.get("keep"):
-            # Memoria v2/v3, de versión futura, inválida o desbordada: se conserva
-            # el comentario sin modificar (o MARKER + banner si no hay sticky),
-            # el sha= y la cobertura no avanzan y se avisa en visible, como en
-            # la ruta de falla de infraestructura.
-            banner = caution_banner(
-                f"memoria de {findings['keep']} conservada; esta versión no la modifica",
-                head,
-                has_previous=bool(sticky),
+            reason = f"memoria de {findings['keep']} conservada; esta versión no la modifica"
+            if not sticky or not isinstance(
+                review_domain.read_snapshot(sticky["body"]),
+                (review_domain.Valid, review_domain.Legacy),
+            ):
+                print(f"ai-review: {reason}; no se escribe el sticky", file=sys.stderr)
+                guardar_summary(redact(
+                    caution_banner(reason, head, has_previous=bool(sticky)),
+                    secretos_del_entorno(),
+                ))
+                review_github.informar_revision(False)
+                return
+            failed = replace(
+                document,
+                failure=review_document.FailureView(
+                    head, "state-kept", review_document.SafeProse(reason),
+                ),
             )
-            if sticky:
-                body = insert_caution_banner(sticky["body"], banner)
-            else:
-                escribir = False
-                body = f"{MARKER}\n{banner}"
-            body = redact(
-                body,
-                secretos_del_entorno(),
+            prepared = review_document.prepare_publication(
+                failed, review_domain.StorageBudget(), secretos_del_entorno(),
             )
             summary_text = redact(
-                banner,
+                caution_banner(reason, head, has_previous=bool(sticky)),
                 secretos_del_entorno(),
             )
         else:
-            cuerpo = redact(
-                compose(
-                    result,
-                    manifest,
-                    sha=head,
-                    provider=name,
-                    findings=findings,
-                    libro=libro_actualizado(
-                        sticky,
-                        manifest,
-                        result,
-                        _repo_actual(),
-                        findings.get("model_ok", True),
-                    )
-                    if manifest.get("head")
-                    else None,
-                    budget=review_domain.StorageBudget(),
-                ),
-                secretos_del_entorno(),
+            candidate = review_document.document_from_result(
+                document,
+                review_domain.read_snapshot(findings["block"]).snapshot,
+                {**result, "model_ok": findings.get("model_ok", True)},
+                manifest,
+                name,
+                head,
+                findings["new_ids"],
+                libro_actualizado(
+                    sticky, manifest, result, _repo_actual(),
+                    findings.get("model_ok", True),
+                ) if manifest.get("head") else None,
             )
-            if not cuerpo_publicable(cuerpo, findings["block"]):
-                # El fijo del comentario no cabe (ni sin libro): el cuerpo no
-                # trae el bloque y escribirlo borraría la memoria. Keep + banner
-                # como en el desborde; sin sticky previo no se crea nada.
-                revisado = False
-                banner = caution_banner(
-                    "comentario sin espacio para el estado; el checkpoint "
-                    "previo se conserva y esta versión no la modifica",
-                    head,
-                    has_previous=bool(sticky),
+            prepared = review_document.prepare_publication(
+                candidate, review_domain.StorageBudget(), secretos_del_entorno()
+            )
+            if isinstance(prepared, (review_domain.CapacityExceeded, review_document.DocumentBlocked)):
+                summary_text = caution_banner(
+                    "comentario sin espacio para el estado; el checkpoint previo se conserva",
+                    head, has_previous=bool(sticky),
                 )
-                if sticky:
-                    cuerpo = insert_caution_banner(sticky["body"], banner)
-                else:
-                    escribir = False
-                    print(
-                        "ai-review: comentario sin espacio para el estado; "
-                        "no se crea sticky"
-                    )
-                body = cuerpo
-                summary_text = banner
             else:
-                revisado = True
-                body = cuerpo
-                summary_text = summary_of(body)
+                summary_text = prepared.summary
 
+    adapter = review_coordinator.ComentariosGh(repo, pr)
+    if isinstance(prepared, review_domain.CapacityExceeded):
+        status = review_document.publish_capacity_notice(
+            sticky, adapter, login=login, secrets=secretos_del_entorno(),
+        )
+        print(f"ai-review: {status.motivo}", file=sys.stderr)
+        guardar_summary(redact(summary_text, secretos_del_entorno()))
+        review_github.informar_revision(False)
+        sys.exit(1)
+    if isinstance(prepared, review_document.DocumentBlocked):
+        print(f"ai-review: documento inválido ({prepared.reason}); no se publica", file=sys.stderr)
+        guardar_summary(redact(summary_text, secretos_del_entorno()))
+        review_github.informar_revision(False)
+        sys.exit(1)
+    body = prepared.body
     payload = work / "comment.json"
     payload.write_text(json.dumps({"body": body}))
-
-    if not escribir:
-        print("ai-review: sin escritura en esta corrida (comentario sin espacio)")
+    receipt = review_document.publish_checkpoint(
+        prepared, sticky, adapter, login=login,
+    )
+    if isinstance(receipt, review_document.Unconfirmed):
+        print(f"ai-review: escritura incierta ({receipt.motivo})", file=sys.stderr)
+        review_github.informar_revision(False)
+        sys.exit(1)
+    revisado = ERROR_KEY not in result and not findings.get("keep")
+    if receipt.recibo.get("sin_texto_visible"):
+        print("ai-review: nada visible que mostrar; no se crea sticky")
     elif sticky:
-        review_github.sh(
-            "gh",
-            "api",
-            "-X",
-            "PATCH",
-            f"repos/{repo}/issues/comments/{sticky['id']}",
-            "--input",
-            str(payload),
-        )
         print(f"ai-review: comentario {sticky['id']} actualizado")
     else:
-        review_github.sh(
-            "gh",
-            "api",
-            "-X",
-            "POST",
-            f"repos/{repo}/issues/{pr}/comments",
-            "--input",
-            str(payload),
-        )
         print("ai-review: comentario creado")
 
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as fh:
-            fh.write(summary_text + "\n")
+    guardar_summary(summary_text)
     review_github.informar_revision(revisado)
 
 

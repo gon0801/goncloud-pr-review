@@ -1,6 +1,8 @@
 # Validación D3
 
 Base `e0211e5c0bf93bf1653c257ffe36e3e26d162841`.
+Código y puente de retorno `4db77cc5ff984d54d7e0ed450456837204ed72af`.
+Diff base→head: `git diff --stat e0211e5c0bf93bf1653c257ffe36e3e26d162841..4db77cc5ff984d54d7e0ed450456837204ed72af`.
 
 - `python3 -m unittest discover -s tests -p 'test_review_document.py'`: 23 pruebas, OK. Incluye ciclos UTF-8, hashes, slots incompletos, versión futura, PR20, 60 hallazgos abiertos, libro grande y tres explicaciones multibyte.
 - `python3 -m unittest discover -s tests -p 'test_review_coordinator.py'`: 35 pruebas, OK.

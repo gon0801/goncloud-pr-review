@@ -15,8 +15,8 @@ sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 import review_coordinator
 import review_config
+import review_document
 import review_github
-import review_render
 import review_sticky
 import review_domain as domain  # noqa: E402
 
@@ -88,6 +88,12 @@ def publicar_directo(repo, work, head, texto, cuerpo_previo=None):
     def correr(*args, **kwargs):
         if args[0] == "git":
             return sh_real(*args, cwd=repo, **kwargs)
+        if "-X" in args and "--input" in args:
+            new_body = json.loads(Path(args[args.index("--input") + 1]).read_text())["body"]
+            if args[args.index("-X") + 1] == "PATCH":
+                comentarios[0]["body"] = new_body
+            else:
+                comentarios.append({"id": 1, "user": BOT, "body": new_body})
         return mock.Mock(returncode=0)
 
     with (
@@ -355,27 +361,24 @@ class DeltaNuloEnElManifest(unittest.TestCase):
         self.assertEqual(domain.rutas_de_cambio(self.MANIFEST), ())
 
     def test_un_delta_nulo_se_publica_como_no_verificable(self):
-        hallazgo = {
-            "id": "F1",
-            "file": "a.py",
-            "files": ["a.py"],
-            "line": 2,
-            "severity": "High",
-            "title": "eval",
-            "state": "open",
-        }
-        cuerpo = review_render.compose(
+        finding = domain.Finding(
+            id="F1", title="eval", severity="High",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path="a.py", line=2),
+        )
+        memory = domain.Snapshot(
+            3, 1, domain.Revision("c" * 40, "b" * 40, "d" * 64),
+            2, domain.COMPLETE_CLAIM, [finding], 0,
+        )
+        document = review_document.document_from_result(
+            review_document.read_document(""), memory,
             {"result": "Sigue abierto.\nCOVERAGE: complete", "subtype": "success"},
             self.MANIFEST,
-            sha="b" * 40,
-            provider="opencode-go",
-            findings={
-                "merged": [hallazgo],
-                "new_ids": [],
-                "block": review.serialize_findings({"findings": [hallazgo], "next": 2}),
-                "model_ok": True,
-            },
+            "opencode-go", "b" * 40, (),
         )
+        cuerpo = review_document.prepare_publication(
+            document, domain.StorageBudget(), (),
+        ).body
         self.assertIn("incremental desde aaaaaaa (delta no verificable)", cuerpo)
 
 
