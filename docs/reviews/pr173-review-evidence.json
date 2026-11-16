@@ -1,0 +1,87 @@
+{
+  "history": {
+    "current_only": {
+      "exit_codes": [
+        0,
+        0
+      ],
+      "pending": [],
+      "sticky_unchanged": false,
+      "message": "ai-review: resultado de la solicitud 1 ignorado: ya no está pendiente"
+    },
+    "with_legacy": {
+      "exit_codes": [
+        0,
+        0
+      ],
+      "pending": [
+        1
+      ],
+      "sticky_unchanged": true,
+      "message": "ai-review: run del worker sin solicitud atribuible; solicitudes pendientes"
+    }
+  },
+  "capacity": {
+    "initial": {
+      "exit_code": 0,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 1,
+      "failure": "state-kept",
+      "notices": []
+    },
+    "redacted": {
+      "exit_code": 1,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 1,
+      "failure": null,
+      "notices": [
+        "capacity-exceeded"
+      ]
+    },
+    "body": {
+      "exit_code": 1,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 0,
+      "failure": null,
+      "notices": []
+    }
+  },
+  "capacity_differential": {
+    "reference": "25372d08bf615fc241b10447bbdf6070d8a45a96",
+    "candidate": "2396be5571d5c0ca2f584478f4f5a5c421ca9f34",
+    "cases": 48,
+    "mismatches": [],
+    "prepared": 37
+  },
+  "real_history": {
+    "observed_at_utc": "2026-11-15T23:33:12Z",
+    "pages": 3,
+    "total": 201,
+    "unattributable_titles": 163,
+    "example": {
+      "id": 43574699960,
+      "display_title": "155",
+      "created_at": "2026-11-14T08:12:34Z",
+      "event": "workflow_dispatch",
+      "path": ".github/workflows/ai-review-worker.yml",
+      "head_branch": "main"
+    },
+    "replayed_result": "RunSearchUnknown(run del worker sin solicitud atribuible)"
+  },
+  "validation": {
+    "sha": "2396be5571d5c0ca2f584478f4f5a5c421ca9f34",
+    "full_check": "OK",
+    "tests": 850,
+    "seconds": 103.764,
+    "remote_successful_checks": 5,
+    "reconcile": "skipped",
+    "ruff_F": "passed",
+    "diff_check": "passed"
+  }
+}
