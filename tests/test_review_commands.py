@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_document
 import review_commands
@@ -1151,7 +1152,7 @@ class CoordinadorComandos(unittest.TestCase):
         self.assertIn("&lt;!-- ai-review:sha=", linea)
 
     def test_explicacion_vigente_se_muestra_sin_acreditar_el_sha(self):
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         target = domain.ReviewTarget(
             repository="o/r",
             pr_number=1,
@@ -1178,6 +1179,7 @@ class CoordinadorComandos(unittest.TestCase):
         }
         corrida = {
             "id": 77,
+            "event": "workflow_dispatch",
             "display_title": f"PR 1 solicitud {work[0].id}",
             "path": ".github/workflows/ai-review-worker.yml",
             "head_branch": "main",
@@ -1194,7 +1196,9 @@ class CoordinadorComandos(unittest.TestCase):
                 (destino / "result.json").write_text(json.dumps(artifact))
                 return mock.Mock(stdout="")
             if "/actions/workflows/ai-review-worker.yml/runs" in args[2]:
-                return mock.Mock(stdout=json.dumps({"workflow_runs": [corrida]}))
+                return mock.Mock(stdout=json.dumps([{"total_count": 1, "workflow_runs": [corrida]}]))
+            if args[2].endswith("/actions/runs/77"):
+                return mock.Mock(stdout=json.dumps(corrida))
             if args[2].endswith("/actions/runs/77/artifacts?per_page=100"):
                 return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
             return self._pr_api(*args, **kw)

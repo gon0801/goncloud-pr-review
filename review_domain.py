@@ -1603,7 +1603,7 @@ def _encode_sin_perdida(snapshot, limite):
             "findings": _findings_json(snapshot, neutralizar=False),
         }
         blob = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-        blob = blob.replace("-->", "--\\u003e").replace("--!>", "--!\\u003e")
+        blob = escape_hidden_json(blob)
         bloque = FINDINGS_PREFIX + blob + FINDINGS_SUFFIX
         load = read_snapshot(bloque)
         if not isinstance(load, Valid) or load.snapshot.schema != 3:
@@ -1613,6 +1613,14 @@ def _encode_sin_perdida(snapshot, limite):
             return CapacityExceeded(limit=limite, needed=needed)
         return EncodedCheckpoint(block=bloque, schema=3, bytes=needed)
     raise ValueError(f"schema desconocido: {snapshot.schema!r}")
+
+
+def escape_hidden_json(serialized):
+    return (
+        serialized.replace("<!--", "\\u003c!--")
+        .replace("--!>", "--!\\u003e")
+        .replace("-->", "--\\u003e")
+    )
 
 
 # ---- F0: identidad, evidencia y resolución ----
@@ -2024,6 +2032,15 @@ def observation_de_entrada(entry):
     ancla = entry.get("anchor")
     if ancla is not None and not isinstance(ancla, dict):
         return ObservationRejected(motivo="ancla primaria sin estructura válida")
+    for source, campo in (
+        (entry, "cause_hint"),
+        (entry, "symbol_hint"),
+        (ancla, "symbol_hint"),
+    ):
+        if isinstance(source, dict):
+            value = source.get(campo)
+            if value is not None and not isinstance(value, str):
+                return ObservationRejected(motivo=f"{campo} inválido")
     if isinstance(ancla, dict) and ancla.get("blob_sha"):
         rango = ancla.get("range")
         if not _rango_valido(rango):
@@ -2048,6 +2065,10 @@ def observation_de_entrada(entry):
         primaria = AnchorLegacy(path=str(entry.get("file") or ""), line=linea)
     relacionadas = []
     for a in entry.get("related_anchors", []) or []:
+        if isinstance(a, dict):
+            symbol = a.get("symbol_hint")
+            if symbol is not None and not isinstance(symbol, str):
+                return ObservationRejected(motivo="symbol_hint relacionado inválido")
         if isinstance(a, dict) and a.get("blob_sha"):
             r = a.get("range")
             if not _rango_valido(r):

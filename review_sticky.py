@@ -46,10 +46,8 @@ def libro_a_linea(head_sha, libro):
         return None
     # Las flechas del comentario viajan como secuencias \uXXXX dentro del JSON:
     # json.loads las decodifica al leer y una ruta con `-->` no rompe el comentario.
-    cuerpo = (
+    cuerpo = review_domain.escape_hidden_json(
         json.dumps(libro, ensure_ascii=True, separators=(",", ":"))
-        .replace("-->", "\\u002d\\u002d\\u003e")
-        .replace("<!--", "\\u003c\\u0021\\u002d\\u002d")
     )
     linea = f"{COVERED_PREFIX}{head_sha}:{cuerpo} -->"
     return linea if len(linea.encode("utf-8")) <= LIBRO_MAX_BYTES else None

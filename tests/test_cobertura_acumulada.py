@@ -173,9 +173,9 @@ def texto_pasada(claim, unreviewed=None, hallazgos=None):
         next_id = 2 + sum(1 for f in hallazgos if str(f.get("id", "")).startswith("F"))
         estado = {"findings": hallazgos, "next": max(2, next_id)}
         partes.append(
-            review.FINDINGS_PREFIX
+            domain.FINDINGS_PREFIX
             + json.dumps(estado, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         )
     if unreviewed is not None:
         partes.append(UNREVIEWED + json.dumps(unreviewed) + " -->")
@@ -595,9 +595,9 @@ class FalloCerrado(unittest.TestCase):
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             texto = (
                 "**Veredicto:** parcial.\n"
-                + review.FINDINGS_PREFIX
+                + domain.FINDINGS_PREFIX
                 + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
-                + review.FINDINGS_SUFFIX
+                + domain.FINDINGS_SUFFIX
                 + "\n"
                 + UNREVIEWED
                 + '["c.py"\nCOVERAGE: partial | sin terminar'
@@ -622,9 +622,9 @@ class FalloCerrado(unittest.TestCase):
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             texto = (
                 "**Veredicto:** parcial.\n"
-                + review.FINDINGS_PREFIX
+                + domain.FINDINGS_PREFIX
                 + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
-                + review.FINDINGS_SUFFIX
+                + domain.FINDINGS_SUFFIX
                 + "\n"
                 + UNREVIEWED
                 + '["c.py"] -->\n```\n'
@@ -723,7 +723,7 @@ class FalloCerrado(unittest.TestCase):
             for f in "abcd":
                 (repo / f"{f}.py").write_text(f"{f}3\n")
             head1 = commit(repo, "pasada-siguiente")
-            bloque = review.serialize_findings({"findings": [], "next": 1})
+            bloque = domain.serialize_findings({"findings": [], "next": 1})
             cabecera = (
                 f"{review_sticky.MARKER}\n"
                 f"{review_sticky.SHA_PREFIX}{prev} -->\n"
@@ -782,7 +782,7 @@ class FormatoDelLibro(unittest.TestCase):
                 f"{review_sticky.SHA_PREFIX}{'a' * 40} -->",
                 f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:partial -->",
                 linea,
-                review.serialize_findings({"findings": [], "next": 1}),
+                domain.serialize_findings({"findings": [], "next": 1}),
                 "### Revisión automática",
                 "texto\nCOVERAGE: partial",
             ]
@@ -849,9 +849,9 @@ class Unreviewed(unittest.TestCase):
         real = UNREVIEWED + '["c.py"] -->'
         texto = (
             "**Veredicto:** parcial.\n"
-            + review.FINDINGS_PREFIX
+            + domain.FINDINGS_PREFIX
             + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
             + "\n"
             + real
             + "\n```\n"
@@ -949,9 +949,9 @@ class AcreditacionDePasada(unittest.TestCase):
             manifest1 = preparar(repo, work1, base, head1, {"sha": None, "state": None})
             texto = (
                 "**Veredicto:** ok.\n"
-                + review.FINDINGS_PREFIX
+                + domain.FINDINGS_PREFIX
                 + '{"findings": ['
-                + review.FINDINGS_SUFFIX
+                + domain.FINDINGS_SUFFIX
                 + "\nCOVERAGE: complete"
             )
             result1 = {"result": texto, "subtype": "success"}
@@ -1031,9 +1031,9 @@ class AcreditacionDePasada(unittest.TestCase):
 
     def test_n_close_result_con_bloque_valido_si_acredita(self):
         bloque = (
-            review.FINDINGS_PREFIX
+            domain.FINDINGS_PREFIX
             + json.dumps({"findings": [], "next": 1}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         )
         with tempfile.TemporaryDirectory() as tmp:
             repo, base, head1 = Escenario().escenario(tmp)
@@ -1166,7 +1166,7 @@ class ContinuacionTerminal(unittest.TestCase):
             self.assertEqual(paquete["cobertura"], domain.COMPLETE_CLAIM)
 
 
-BLOQUE_VACIO = review.FINDINGS_PREFIX + '{"findings":[]}' + review.FINDINGS_SUFFIX
+BLOQUE_VACIO = domain.FINDINGS_PREFIX + '{"findings":[]}' + domain.FINDINGS_SUFFIX
 
 
 class LecturaDeLaRespuesta(unittest.TestCase):
@@ -1193,9 +1193,9 @@ class LecturaDeLaRespuesta(unittest.TestCase):
             "state": "open",
         }
         real = (
-            review.FINDINGS_PREFIX
+            domain.FINDINGS_PREFIX
             + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         )
         citas = {
             "en una frase": f"El bloque tiene la forma `{BLOQUE_VACIO}`.",
@@ -1224,13 +1224,13 @@ class LecturaDeLaRespuesta(unittest.TestCase):
             "state": "open",
         }
         real = (
-            review.FINDINGS_PREFIX
+            domain.FINDINGS_PREFIX
             + json.dumps({"findings": [hallazgo], "next": 2}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         )
         bajo_viñeta = f"- Hallazgos:\n\n    {real}"
         cierre = "\n\nCOVERAGE: complete"
-        self.assertIsNone(review.parse_model_findings(bajo_viñeta + cierre))
+        self.assertIsNone(domain.parse_model_findings(bajo_viñeta + cierre))
         self.assertTrue(review_run.falta_bloque(bajo_viñeta + cierre))
         con_cita = f"{bajo_viñeta}\n\n    {BLOQUE_VACIO}{cierre}"
         self.assertTrue(review_run.falta_bloque(con_cita))

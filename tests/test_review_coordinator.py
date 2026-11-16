@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_document
 import review_github
@@ -43,6 +45,139 @@ TARGET = domain.ReviewTarget(
 )
 PUSH = domain.Origin(kind="push")
 POLICY = domain.ReviewPolicy()
+
+
+class RunHistory(unittest.TestCase):
+    def _run(self, run_id, pr=1, request=1, attempt=1, status="in_progress"):
+        return {
+            "id": run_id, "run_attempt": attempt,
+            "display_title": f"PR {pr} solicitud {request}",
+            "event": "workflow_dispatch",
+            "path": ".github/workflows/ai-review-worker.yml",
+            "head_branch": "main", "head_sha": "f" * 40,
+            "status": status,
+        }
+
+    def test_mas_de_mil_runs_no_ocultan_un_worker_en_curso(self):
+        other = [self._run(i + 100, pr=99) for i in range(1100)]
+        wanted = self._run(10)
+        pages = [
+            {"total_count": 1101, "workflow_runs": (other + [wanted])[i:i + 100]}
+            for i in range(0, 1101, 100)
+        ]
+        calls = []
+
+        def sh(*args, **kwargs):
+            calls.append((args, kwargs))
+            if "/workflows/" in args[2]:
+                return mock.Mock(stdout=json.dumps(pages))
+            if "/actions/runs/10" in args[2]:
+                return mock.Mock(stdout=json.dumps(wanted))
+            return mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+
+        request = domain.WorkRequest(id=1, kind="review", origin="push")
+        state = snapshot_base()
+        state.pending_requests = [request]
+        state.request_count = 1
+        with mock.patch.object(review_github, "sh", side_effect=sh), \
+                mock.patch.object(review_coordinator, "artefacto_del_run", return_value=None):
+            found = review_coordinator.cosechar(state, "o/r", 1, "main", "/tmp", None)
+        self.assertEqual(found, ([], [], False))
+        self.assertIn("--paginate", calls[0][0])
+        self.assertIn("--slurp", calls[0][0])
+        self.assertNotIn("event=", calls[0][0][2])
+        self.assertEqual(calls[0][1]["timeout"], 60)
+        self.assertEqual(calls[1][1]["timeout"], 15)
+
+    def test_historial_incierto_nunca_demuestra_ausencia(self):
+        run = self._run(10)
+        cases = (
+            "[",
+            json.dumps([{"total_count": 2, "workflow_runs": [run]}]),
+            json.dumps([{"total_count": 3, "workflow_runs": [
+                dict(run, id=12, display_title="99"), run,
+            ]}]),
+            json.dumps([
+                {"total_count": 1, "workflow_runs": [run]},
+                {"total_count": 2, "workflow_runs": []},
+            ]),
+            json.dumps([{"total_count": 2, "workflow_runs": [run, run]}]),
+        )
+        for body in cases:
+            with self.subTest(body=body[:40]), \
+                    mock.patch.object(review_github, "sh", return_value=mock.Mock(stdout=body)):
+                history = review_coordinator.corridas_por_solicitud("o/r", 1)
+                self.assertIsInstance(history, review_coordinator.RunSearchUnknown)
+        with mock.patch.object(review_github, "sh", side_effect=subprocess.TimeoutExpired("gh", 60)):
+            self.assertIsInstance(
+                review_coordinator.corridas_por_solicitud("o/r", 1),
+                review_coordinator.RunSearchUnknown,
+            )
+        with mock.patch.object(review_github, "sh", return_value=mock.Mock(
+            stdout=json.dumps([{"total_count": 0, "workflow_runs": []}])
+        )):
+            self.assertEqual(
+                review_coordinator.corridas_por_solicitud("o/r", 1).by_request, {}
+            )
+
+    def test_historial_legacy_del_mismo_pr_no_demuestra_ausencia(self):
+        run = self._run(10)
+        for title, status in (("1", "in_progress"), ("worker desconocido", "completed")):
+            with self.subTest(title=title), mock.patch.object(
+                review_github, "sh", return_value=mock.Mock(stdout=json.dumps([
+                    {"total_count": 1, "workflow_runs": [
+                        dict(run, display_title=title, status=status),
+                    ]},
+                ])),
+            ):
+                self.assertIsInstance(
+                    review_coordinator.corridas_por_solicitud("o/r", 1),
+                    review_coordinator.RunSearchUnknown,
+                )
+        with mock.patch.object(review_github, "sh", return_value=mock.Mock(
+            stdout=json.dumps([{"total_count": 1, "workflow_runs": [
+                dict(run, display_title="1", status="completed"),
+            ]}])
+        )):
+            self.assertEqual(
+                review_coordinator.corridas_por_solicitud("o/r", 1).by_request, {},
+            )
+
+    def test_historial_desconocido_mantiene_la_solicitud_pendiente(self):
+        state = snapshot_base()
+        request = domain.WorkRequest(id=1, kind="review", origin="push")
+        state.pending_requests = [request]
+        state.request_count = 1
+        with mock.patch.object(review_github, "sh", side_effect=subprocess.TimeoutExpired("gh", 60)):
+            self.assertEqual(
+                review_coordinator.cosechar(state, "o/r", 1, "main", "/tmp", None),
+                ([], [], False),
+            )
+
+    def test_callback_viejo_no_cosecha_el_run_nuevo_en_curso(self):
+        older = self._run(10, status="completed")
+        newer = self._run(11, attempt=2)
+        pages = [{"total_count": 2, "workflow_runs": [newer, older]}]
+        calls = []
+
+        def sh(*args, **kwargs):
+            calls.append(args[2])
+            if "/workflows/" in args[2]:
+                return mock.Mock(stdout=json.dumps(pages))
+            if args[2].endswith("/actions/runs/10"):
+                return mock.Mock(stdout=json.dumps(older))
+            if args[2].endswith("/actions/runs/11"):
+                return mock.Mock(stdout=json.dumps(newer))
+            return mock.Mock(stdout=json.dumps({"sha": "f" * 40}))
+
+        state = snapshot_base()
+        state.pending_requests = [domain.WorkRequest(id=1, kind="review", origin="push")]
+        state.request_count = 1
+        with mock.patch.object(review_github, "sh", side_effect=sh), \
+                mock.patch.object(review_coordinator, "artefacto_del_run", return_value=None):
+            found = review_coordinator.cosechar(state, "o/r", 1, "main", "/tmp", (10, 1))
+        self.assertEqual(found, ([], [], False))
+        self.assertTrue(any(path.endswith("/actions/runs/11") for path in calls))
 
 
 def hechos(revision=None):
@@ -996,6 +1131,7 @@ class CoordinadorCli(unittest.TestCase):
         """El worker `run` avisó y dejó `artifact`; devuelve el código de salida."""
         corrida = {
             "display_title": f"PR 1 solicitud {artifact['request_id']}",
+            "event": "workflow_dispatch",
             "path": ".github/workflows/ai-review-worker.yml",
             "head_branch": "main",
             "head_sha": "f" * 40,
@@ -1020,7 +1156,9 @@ class CoordinadorCli(unittest.TestCase):
             if "/compare/" in ruta:
                 return mock.Mock(stdout=json.dumps({"status": "diverged"}))
             if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
-                return mock.Mock(stdout=json.dumps({"workflow_runs": [corrida]}))
+                return mock.Mock(stdout=json.dumps([{"total_count": 1, "workflow_runs": [corrida]}]))
+            if "/actions/runs/" in ruta and "/artifacts" not in ruta:
+                return mock.Mock(stdout=json.dumps(corrida))
             if "/artifacts" in ruta:
                 return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
             assert ruta.endswith("pulls/1"), args
@@ -1043,7 +1181,7 @@ class CoordinadorCli(unittest.TestCase):
         return None
 
     def _pendiente_vigente(self):
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         target = domain.ReviewTarget(
             repository="o/r",
             pr_number=1,

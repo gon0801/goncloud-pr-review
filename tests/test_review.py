@@ -30,6 +30,7 @@ import review_render
 import review_sticky
 import review_run
 import review_domain
+import review_domain as domain
 import review_config
 import review_context  # noqa: E402
 
@@ -44,7 +45,7 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 class Filters(unittest.TestCase):
     def test_default_and_repo_patterns(self):
-        patterns = review.DEFAULT_EXCLUDES + ["data/**", ".saikit/**", "**/*.lock"]
+        patterns = review_context.DEFAULT_EXCLUDES + ["data/**", ".saikit/**", "**/*.lock"]
         cases = {
             "uv.lock": "*.lock",
             "pkg/sub/Cargo.lock": "*.lock",
@@ -63,12 +64,12 @@ class Filters(unittest.TestCase):
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
-                self.assertEqual(review.excluded_by(path, patterns), expected)
+                self.assertEqual(review_context.excluded_by(path, patterns), expected)
 
     def test_code_is_reviewed_before_config_and_docs(self):
         paths = ["README.md", "config.yml", "src/app.py", "tests/test_app.py"]
         self.assertEqual(
-            sorted(paths, key=lambda p: (review.priority(p), p)),
+            sorted(paths, key=lambda p: (review_context.priority(p), p)),
             ["src/app.py", "tests/test_app.py", "config.yml", "README.md"],
         )
 
@@ -1295,7 +1296,7 @@ class RunAgent(unittest.TestCase):
         )
         self.assertAlmostEqual(result["total_cost_usd"], 0.23)
         self.assertEqual(result["num_turns"], 31)
-        modelo = review.parse_model_findings(result["result"])
+        modelo = domain.parse_model_findings(result["result"])
         self.assertEqual(
             [f["title"] for f in modelo["findings"]], ["División por cero"]
         )
@@ -1408,7 +1409,7 @@ class RunAgent(unittest.TestCase):
                 cierre = review_domain.leer_cierre(result["result"])
                 self.assertEqual((cierre.cobertura, cierre.detalle), cobertura)
                 self.assertEqual(result["result"].count("COVERAGE:"), 1)
-                modelo = review.parse_model_findings(result["result"])
+                modelo = domain.parse_model_findings(result["result"])
                 self.assertEqual([f["title"] for f in modelo["findings"]], titulos)
 
     def test_una_declaracion_de_no_revisado_deja_parcial_la_respuesta_reparada(self):
@@ -1482,7 +1483,7 @@ class RunAgent(unittest.TestCase):
                     cierre.sin_revisar,
                     "una respuesta rearmada no acredita cobertura parcial",
                 )
-                modelo = review.parse_model_findings(result["result"])
+                modelo = domain.parse_model_findings(result["result"])
                 self.assertEqual(
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
                 )
@@ -1539,7 +1540,7 @@ class RunAgent(unittest.TestCase):
                 cierre = review_domain.leer_cierre(result["result"])
                 self.assertEqual((cierre.cobertura, cierre.detalle), ("partial", "no leí b.py"))
                 self.assertIsNone(cierre.sin_revisar)
-                modelo = review.parse_model_findings(result["result"])
+                modelo = domain.parse_model_findings(result["result"])
                 self.assertEqual(
                     [f["title"] for f in modelo["findings"]], ["División por cero"]
                 )
@@ -1760,53 +1761,53 @@ class PrepareContext(unittest.TestCase):
             self.assertIn("no tiene CLAUDE.md", (work / "conventions.md").read_text())
 
     def test_build_tests_finds_coverage_buried_under_common_stem_noise(self):
-        pool = [f"src/noise{i}.py" for i in range(review.TESTS_MAX_RESULTS + 1)]
+        pool = [f"src/noise{i}.py" for i in range(review_context.TESTS_MAX_RESULTS + 1)]
         pool.append("tests/test_app.py")
-        repo = review.GitRepository(Path.cwd())
+        repo = review_context.GitRepository(Path.cwd())
         with mock.patch.object(
             review_context,
             "grep_files",
             side_effect=lambda repo, patterns, limit, predicate=None, **kw: (
-                review.SearchComplete(
+                review_context.SearchComplete(
                     tuple(p for p in pool if predicate is None or predicate(p))[:limit]
                 )
             ),
         ):
-            text = review.build_tests(repo, ["src/app.py"])
+            text = review_context.build_tests(repo, ["src/app.py"])
         self.assertIn("- tests/test_app.py", text)
         self.assertNotIn("Ninguna prueba menciona", text)
 
 
 class MaxTurns(unittest.TestCase):
     def test_tiers_scale_with_diff_size(self):
-        self.assertEqual(review.max_turns_for_diff(1000, 1), 60)
-        self.assertEqual(review.max_turns_for_diff(300_000, 20), 60)
-        self.assertEqual(review.max_turns_for_diff(300_001, 20), 80)
-        self.assertEqual(review.max_turns_for_diff(1000, 21), 80)
+        self.assertEqual(review_context.max_turns_for_diff(1000, 1), 60)
+        self.assertEqual(review_context.max_turns_for_diff(300_000, 20), 60)
+        self.assertEqual(review_context.max_turns_for_diff(300_001, 20), 80)
+        self.assertEqual(review_context.max_turns_for_diff(1000, 21), 80)
         self.assertEqual(
-            review.max_turns_for_diff(145_242, 22), 80
+            review_context.max_turns_for_diff(145_242, 22), 80
         )  # Orbit #342, cut at 60 every time
 
     def test_resolve_auto_explicit_and_invalid(self):
         manifest = dict(MANIFEST, diff_bytes=1000, reviewed=["a.py"])
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
-            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 60)
+            self.assertEqual(review_context.resolve_max_turns(manifest, Path("/tmp")), 60)
         with mock.patch.dict(os.environ, {"MAX_TURNS": ""}):
             self.assertEqual(
-                review.resolve_max_turns(manifest, Path("/tmp")),
+                review_context.resolve_max_turns(manifest, Path("/tmp")),
                 60,
                 "una variable vacia no rompe el auto",
             )
         with mock.patch.dict(os.environ, {"MAX_TURNS": "100"}):
-            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 100)
+            self.assertEqual(review_context.resolve_max_turns(manifest, Path("/tmp")), 100)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
-            self.assertEqual(review.resolve_max_turns(manifest, Path("/tmp")), 33)
+            self.assertEqual(review_context.resolve_max_turns(manifest, Path("/tmp")), 33)
         with mock.patch.dict(os.environ, {"MAX_TURNS": "abc"}):
             with self.assertRaises(SystemExit):
-                review.resolve_max_turns(manifest, Path("/tmp"))
+                review_context.resolve_max_turns(manifest, Path("/tmp"))
         with mock.patch.dict(os.environ, {"MAX_TURNS": "0"}):
             with self.assertRaises(SystemExit):
-                review.resolve_max_turns(manifest, Path("/tmp"))
+                review_context.resolve_max_turns(manifest, Path("/tmp"))
 
     def test_resolve_auto_falls_back_to_patch_size(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1815,7 +1816,7 @@ class MaxTurns(unittest.TestCase):
             manifest = dict(MANIFEST, reviewed=["a.py"])
             manifest.pop("diff_bytes", None)
             with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
-                self.assertEqual(review.resolve_max_turns(manifest, work), 60)
+                self.assertEqual(review_context.resolve_max_turns(manifest, work), 60)
 
     def test_run_records_effective_cap_in_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2330,14 +2331,14 @@ class TimeBudget(unittest.TestCase):
     def test_measured_long_review_fits_its_attempt(self):
         # Orbit run 36208215400: 48 turns took 492 s; the default cap is 60 turns.
         self.assertGreaterEqual(
-            review_run.attempt_timeout_for(review.DEFAULT_MAX_TURNS), 492
+            review_run.attempt_timeout_for(review_context.DEFAULT_MAX_TURNS), 492
         )
 
     def test_worst_case_fits_the_job_timeout(self):
         install_prepare_publish = 180
         self.assertLess(review_run.REVIEW_BUDGET_SECONDS + install_prepare_publish, 30 * 60)
         self.assertLessEqual(
-            review_run.attempt_timeout_for(review.LARGE_DIFF_MAX_TURNS),
+            review_run.attempt_timeout_for(review_context.LARGE_DIFF_MAX_TURNS),
             review_run.REVIEW_BUDGET_SECONDS - 30,
         )
 
@@ -2407,7 +2408,7 @@ class TestFileDetection(unittest.TestCase):
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
-                self.assertEqual(review.looks_like_test(path), expected)
+                self.assertEqual(review_context.looks_like_test(path), expected)
 
 
 @contextlib.contextmanager
@@ -3862,7 +3863,7 @@ class Workflows(unittest.TestCase):
     def _estado_pendiente(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         return domain.Snapshot(
             schema=3,
             generation=1,
@@ -3946,12 +3947,13 @@ class Workflows(unittest.TestCase):
             artefacto = Path(tmp) / "result.json"
             rid = json.loads(artefacto.read_text()).get("request_id") if corrida else 0
             nombre = f"ai-review-result-request-{rid}-run-{corrida}-attempt-1"
-            if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
+            if "/actions/workflows/ai-review-worker.yml/runs" in ruta or ruta.endswith(f"/actions/runs/{corrida}"):
                 runs = []
                 if corrida:
                     runs.append(
                         {
                             "id": corrida,
+                            "event": "workflow_dispatch",
                             "display_title": f"PR 1 solicitud {rid}",
                             "path": ".github/workflows/"
                             + ("otro.yml" if corrida == 78 else "ai-review-worker.yml"),
@@ -3963,7 +3965,9 @@ class Workflows(unittest.TestCase):
                             "status": "completed",
                         }
                     )
-                return mock.Mock(stdout=json.dumps({"workflow_runs": runs}))
+                if ruta.endswith(f"/actions/runs/{corrida}"):
+                    return mock.Mock(stdout=json.dumps(runs[0]))
+                return mock.Mock(stdout=json.dumps([{"total_count": len(runs), "workflow_runs": runs}]))
             if ruta.endswith(f"/actions/runs/{corrida}/artifacts?per_page=100"):
                 return mock.Mock(stdout=json.dumps({"artifacts": [{"name": nombre}]}))
             if args[:3] == ("gh", "run", "download"):
@@ -4007,7 +4011,7 @@ class Workflows(unittest.TestCase):
                         "run_id": 77,
                         "attempt": 1,
                         "pr_head_sha": "c" * 40,
-                        "policy_digest": review.digest_de_politica(
+                        "policy_digest": review_context.digest_de_politica(
                             review_config.politica_de_revision()
                         ),
                         "target": domain.ReviewTarget(
@@ -4015,7 +4019,7 @@ class Workflows(unittest.TestCase):
                             pr_number=1,
                             head_sha="c" * 40,
                             base_sha="b" * 40,
-                            policy_digest=review.digest_de_politica(
+                            policy_digest=review_context.digest_de_politica(
                                 review_config.politica_de_revision()
                             ),
                         ).json(),
@@ -4041,7 +4045,7 @@ class Workflows(unittest.TestCase):
         import review_domain as domain
 
         estado = self._estado_pendiente()
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4322,7 +4326,7 @@ class Workflows(unittest.TestCase):
     def test_un_run_despachado_que_no_es_el_worker_se_rechaza(self):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "result.json").write_text(
                 json.dumps(
@@ -4356,7 +4360,7 @@ class Workflows(unittest.TestCase):
     def _resultado_de_corrida(self, tmp, corrida):
         import review_domain as domain
 
-        digest = review.digest_de_politica(review_config.politica_de_revision())
+        digest = review_context.digest_de_politica(review_config.politica_de_revision())
         (Path(tmp) / "result.json").write_text(
             json.dumps(
                 {
@@ -4502,7 +4506,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(paquete["target"]["head_sha"], "c" * 40)
         self.assertEqual(
             paquete["policy_digest"],
-            review.digest_de_politica(review_config.politica_de_revision()),
+            review_context.digest_de_politica(review_config.politica_de_revision()),
             "el digest sale de la política normalizada, no del checkpoint",
         )
         self.assertEqual(paquete["finding_identity"], "current")
@@ -4654,53 +4658,54 @@ def block_of(*findings, next=None):
     ids = [
         f.get("id")
         for f in findings
-        if isinstance(f, dict) and review.finding_number(f.get("id"))
+        if isinstance(f, dict) and domain.finding_number(f.get("id"))
     ]
     n = next if next is not None else ((max(int(i[1:]) for i in ids) + 1) if ids else 1)
     return (
-        review.FINDINGS_PREFIX
+        domain.FINDINGS_PREFIX
         + json.dumps({"findings": list(findings), "next": n})
-        + review.FINDINGS_SUFFIX
+        + domain.FINDINGS_SUFFIX
     )
 
 
 class FindingsBlock(unittest.TestCase):
     def test_valid_block_round_trips(self):
-        state = review.parse_findings_block(
+        state = domain.read_snapshot(
             block_of(make_finding(), make_finding("F2", state="resolved"))
-        )
+        ).raw
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", "F2"])
         self.assertEqual(state["next"], 3)
         self.assertEqual(
-            review.parse_findings_block(review.serialize_findings(state)), state
+            domain.read_snapshot(domain.serialize_findings(state)).raw, state
         )
 
     def test_missing_block_returns_none(self):
-        self.assertIsNone(review.parse_findings_block("**Veredicto:** ok"))
-        self.assertIsNone(review.parse_findings_block(""))
-        self.assertIsNone(review.parse_findings_block(None))
+        self.assertIsInstance(domain.read_snapshot("**Veredicto:** ok"), domain.Missing)
+        self.assertIsInstance(domain.read_snapshot(""), domain.Missing)
+        self.assertIsInstance(domain.read_snapshot(None), domain.Missing)
 
     def test_broken_json_returns_none(self):
-        self.assertIsNone(
-            review.parse_findings_block(
-                review.FINDINGS_PREFIX + "{oops" + review.FINDINGS_SUFFIX
-            )
+        self.assertIsInstance(
+            domain.read_snapshot(domain.FINDINGS_PREFIX + "{oops" + domain.FINDINGS_SUFFIX),
+            domain.Invalid,
         )
-        self.assertIsNone(
-            review.parse_findings_block(review.FINDINGS_PREFIX + "sin cierre")
+        self.assertIsInstance(
+            domain.read_snapshot(domain.FINDINGS_PREFIX + "sin cierre"),
+            domain.Invalid,
         )
 
     def test_findings_must_be_a_list(self):
         for blob in ('{"findings": {}}', '{"next": 1}', "[]", '"x"'):
             with self.subTest(blob=blob):
-                self.assertIsNone(
-                    review.parse_findings_block(
-                        review.FINDINGS_PREFIX + blob + review.FINDINGS_SUFFIX
-                    )
+                self.assertIsInstance(
+                    domain.read_snapshot(
+                        domain.FINDINGS_PREFIX + blob + domain.FINDINGS_SUFFIX
+                    ),
+                    domain.Invalid,
                 )
 
     def test_bad_entries_dropped_and_fields_normalized(self):
-        state = review.parse_findings_block(
+        state = domain.read_snapshot(
             block_of(
                 make_finding("F1", severity="high"),
                 make_finding("F2", severity="bogus", line="x"),
@@ -4709,7 +4714,7 @@ class FindingsBlock(unittest.TestCase):
                 {"id": "F4", "file": "a.py", "title": "", "line": -5},
                 "no-dict",
             )
-        )
+        ).raw
         by_id = {f["id"]: f for f in state["findings"]}
         self.assertEqual(by_id["F1"]["severity"], "High")
         self.assertEqual((by_id["F2"]["severity"], by_id["F2"]["line"]), ("Medium", 0))
@@ -4718,11 +4723,11 @@ class FindingsBlock(unittest.TestCase):
         self.assertNotIn("F4", by_id)
 
     def test_next_counter_is_repaired_when_too_small(self):
-        state = review.parse_findings_block(block_of(make_finding("F5"), next=1))
+        state = domain.read_snapshot(block_of(make_finding("F5"), next=1)).raw
         self.assertEqual(state["next"], 6)
 
     def test_model_cannot_dismiss(self):
-        state = review.parse_model_findings(
+        state = domain.parse_model_findings(
             block_of(make_finding("F1", state="dismissed"))
         )
         self.assertEqual(state["findings"][0]["state"], "open")
@@ -4731,13 +4736,14 @@ class FindingsBlock(unittest.TestCase):
         block = block_of(make_finding())
         text = f"**Veredicto:** x\n\n{block}\nCOVERAGE: complete"
         self.assertEqual(review_domain.leer_cierre(text).cobertura, "complete")
-        self.assertIsNotNone(review.parse_findings_block(text))
+        self.assertIsInstance(domain.read_snapshot(text), domain.Legacy)
         misplaced = f"**Veredicto:** x\nCOVERAGE: complete\n{block}"
         self.assertIsNone(
             review_domain.leer_cierre(misplaced).cobertura, "la cobertura queda desconocida"
         )
-        self.assertIsNotNone(
-            review.parse_findings_block(misplaced),
+        self.assertIsInstance(
+            domain.read_snapshot(misplaced),
+            domain.Legacy,
             "la memoria bien formada se conserva",
         )
 
@@ -4746,13 +4752,12 @@ class FindingsBlock(unittest.TestCase):
         # (nunca recortar títulos/rutas ni descartar hallazgos).
         findings = [make_finding(f"F{i}", title="t" * 160) for i in range(1, 61)]
         findings += [make_finding(f"F{i}", state="resolved") for i in range(61, 71)]
-        over = review.serialize_findings({"findings": findings, "next": 71})
-        import review_domain as domain
+        over = domain.serialize_findings({"findings": findings, "next": 71})
 
         self.assertIsInstance(over, domain.CapacityExceeded)
-        chico = review.serialize_findings({"findings": findings[:5], "next": 6})
+        chico = domain.serialize_findings({"findings": findings[:5], "next": 6})
         self.assertIsInstance(chico, str)
-        back = review.parse_findings_block(chico)
+        back = domain.read_snapshot(chico).raw
         self.assertEqual(
             [f["id"] for f in back["findings"]], ["F1", "F2", "F3", "F4", "F5"]
         )
@@ -4763,9 +4768,9 @@ class FindingsBlock(unittest.TestCase):
             "findings": [make_finding("F1", title="a --> b\nnueva línea")],
             "next": 2,
         }
-        block = review.serialize_findings(state)
-        self.assertEqual(block.count(review.FINDINGS_SUFFIX.strip()), 1)
-        back = review.parse_findings_block(block)
+        block = domain.serialize_findings(state)
+        self.assertEqual(block.count(domain.FINDINGS_SUFFIX.strip()), 1)
+        back = domain.read_snapshot(block).raw
         self.assertEqual(back["findings"][0]["title"], "a --\u203a b nueva línea")
 
     def test_tope_bajo_no_descarta_devuelve_capacity_exceeded(self):
@@ -4775,11 +4780,10 @@ class FindingsBlock(unittest.TestCase):
             )
             for i in range(1, 101)
         ]
-        over = review.serialize_findings({"findings": findings, "next": 101})
-        import review_domain as domain
+        over = domain.serialize_findings({"findings": findings, "next": 101})
 
         self.assertIsInstance(over, domain.CapacityExceeded)
-        self.assertEqual(over.limit, review.FINDINGS_MAX_BYTES)
+        self.assertEqual(over.limit, domain.FINDINGS_MAX_BYTES)
 
     def test_presupuesto_inyectado_respeta_el_tope_del_adaptador(self):
         findings = [
@@ -4789,16 +4793,13 @@ class FindingsBlock(unittest.TestCase):
             make_finding("F4", state="dismissed"),
             make_finding("F5"),
         ]
-        with mock.patch.object(review, "FINDINGS_MAX_BYTES", 400):
-            over = review.serialize_findings({"findings": findings, "next": 6})
-        import review_domain as domain
+        over = domain.serialize_findings({"findings": findings, "next": 6}, max_bytes=400)
 
         self.assertIsInstance(over, domain.CapacityExceeded)
         self.assertEqual(over.limit, 400)
-        with mock.patch.object(review, "FINDINGS_MAX_BYTES", 400):
-            self.assertIsInstance(
-                review.serialize_findings({"findings": findings[:2], "next": 3}), str
-            )
+        self.assertIsInstance(
+            domain.serialize_findings({"findings": findings[:2], "next": 3}, max_bytes=400), str
+        )
 
 
 class DismissCommands(unittest.TestCase):
@@ -4923,7 +4924,7 @@ def merge(prev_list, model_list, **kw):
     current = review_domain.memoria_operativa(
         review_domain.read_snapshot(
             review_domain.serialize_findings(
-                {"findings": prev_list, "next": review.derive_next(prev_list)}
+                {"findings": prev_list, "next": domain.derive_next(prev_list)}
             )
             if prev_list is not None
             else ""
@@ -5100,7 +5101,7 @@ class Fallback(unittest.TestCase):
         prev = [make_finding("F1"), make_finding("F2", state="resolved")]
         for model in (
             None,
-            review.parse_model_findings("**Veredicto:** x\nCOVERAGE: complete"),
+            domain.parse_model_findings("**Veredicto:** x\nCOVERAGE: complete"),
         ):
             with self.subTest(model=model):
                 merged, new_ids = merge(prev, model["findings"] if model else None)
@@ -5118,7 +5119,7 @@ class Fallback(unittest.TestCase):
 class VerdictSections(unittest.TestCase):
     def _publication(self, merged, result, new_ids=(), budget=None):
         legacy = review_domain.read_snapshot(
-            review.serialize_findings({"findings": merged, "next": len(merged) + 1})
+            domain.serialize_findings({"findings": merged, "next": len(merged) + 1})
         )
         memory = replace(
             review_domain.snapshot_a_v3(legacy.snapshot),
@@ -5215,25 +5216,25 @@ class VerdictSections(unittest.TestCase):
         self.assertEqual(lines[0], review_sticky.MARKER)
         self.assertTrue(lines[1].startswith(review_sticky.SHA_PREFIX))
         self.assertTrue(lines[2].startswith(review_sticky.COMPLETION_PREFIX))
-        self.assertTrue(lines[3].startswith(review.FINDINGS_PREFIX))
+        self.assertTrue(lines[3].startswith(domain.FINDINGS_PREFIX))
         self.assertLessEqual(len(body), review_domain.COMMENT_MAX_CHARS)
         self.assertIn("El detalle se recortó", body)
 
 
 class Rebase(unittest.TestCase):
     def test_decide_mode_matrix(self):
-        repo = review.GitRepository(Path.cwd())
-        self.assertEqual(review.decide_mode(repo, None, "h" * 40), ("full", "no-prev"))
+        repo = review_context.GitRepository(Path.cwd())
+        self.assertEqual(review_context.decide_mode(repo, None, "h" * 40), ("full", "no-prev"))
         self.assertEqual(
-            review.decide_mode(repo, "h" * 40, "h" * 40), ("full", "same-sha")
+            review_context.decide_mode(repo, "h" * 40, "h" * 40), ("full", "same-sha")
         )
         with mock.patch.object(review_context, "is_ancestor", return_value=False):
             self.assertEqual(
-                review.decide_mode(repo, "p" * 40, "h" * 40), ("full", "rebase")
+                review_context.decide_mode(repo, "p" * 40, "h" * 40), ("full", "rebase")
             )
         with mock.patch.object(review_context, "is_ancestor", return_value=True):
             self.assertEqual(
-                review.decide_mode(repo, "p" * 40, "h" * 40), ("incremental", "")
+                review_context.decide_mode(repo, "p" * 40, "h" * 40), ("incremental", "")
             )
 
     def test_rebase_preserves_dismisses(self):
@@ -5273,13 +5274,13 @@ class Rebase(unittest.TestCase):
             old = os.getcwd()
             os.chdir(repo)
             try:
-                repo_obj = review.GitRepository(Path.cwd())
-                self.assertTrue(review.is_ancestor(repo_obj, prev, head))
-                self.assertTrue(review.is_ancestor(repo_obj, base, head))
-                self.assertFalse(review.is_ancestor(repo_obj, head, prev))
-                self.assertFalse(review.is_ancestor(repo_obj, orphan, head))
+                repo_obj = review_context.GitRepository(Path.cwd())
+                self.assertTrue(review_context.is_ancestor(repo_obj, prev, head))
+                self.assertTrue(review_context.is_ancestor(repo_obj, base, head))
+                self.assertFalse(review_context.is_ancestor(repo_obj, head, prev))
+                self.assertFalse(review_context.is_ancestor(repo_obj, orphan, head))
                 self.assertEqual(
-                    review.files_matching_base(
+                    review_context.files_matching_base(
                         repo_obj, ["app.py", "other.py"], base, head
                     ),
                     {"app.py"},
@@ -5429,7 +5430,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
             revision=domain.Revision(
                 base_sha=base,
                 head_sha=prev,
-                policy_digest=review.digest_de_politica(
+                policy_digest=review_context.digest_de_politica(
                     review_config.politica_de_revision()
                 ),
             ),
@@ -5452,7 +5453,7 @@ class WorkerConMemoriaPrevia(unittest.TestCase):
         nuevo = domain.encode_snapshot(
             replace(estado, pending_requests=[solicitud], request_count=2)
         ).block
-        inicio = cuerpo.index(review.FINDINGS_PREFIX)
+        inicio = cuerpo.index(domain.FINDINGS_PREFIX)
         fin = cuerpo.index(" -->", inicio) + len(" -->")
         return cuerpo[:inicio] + nuevo + cuerpo[fin:]
 
@@ -5675,7 +5676,7 @@ class ReviewContinuity(unittest.TestCase):
                                 policy = review_config.politica_de_revision()
                                 revision = domain.Revision(
                                     base_sha=base, head_sha=head,
-                                    policy_digest=review.digest_de_politica(policy),
+                                    policy_digest=review_context.digest_de_politica(policy),
                                 )
                                 solicitud = domain.WorkRequest(
                                     id=1, kind="review", target={
@@ -5813,7 +5814,7 @@ class ReviewContinuity(unittest.TestCase):
         )
         self.assertIn(
             "ultimo siempre lanza IndexError",
-            review.prev_findings_markdown(prev["state"]),
+            review_context.prev_findings_markdown(prev["state"]),
         )
 
     def test_partial_publish_recovers_full_scope_then_goes_incremental(self):
@@ -5896,7 +5897,7 @@ class ReviewContinuity(unittest.TestCase):
             # _repo_actual se fija al repo temporal, como el sh mockeado de
             # los otros tests de esta clase.
             with mock.patch.object(
-                review, "_repo_actual", return_value=review.GitRepository(repo)
+                review, "_repo_actual", return_value=review_context.GitRepository(repo)
             ):
                 body = self.publish(
                     work,
@@ -5943,7 +5944,7 @@ class ReviewContinuity(unittest.TestCase):
             )
             self.assertEqual(prepared["changed_files"], ["other.py"])
             with mock.patch.object(
-                review, "_repo_actual", return_value=review.GitRepository(repo)
+                review, "_repo_actual", return_value=review_context.GitRepository(repo)
             ):
                 body = self.publish(
                     work,
@@ -6348,7 +6349,7 @@ class GatePrev(unittest.TestCase):
 
     def test_gate_ignores_dismiss_comments_already_applied(self):
         state = {"findings": [make_finding("F1")], "next": 2, "seen": 10}
-        block = review.serialize_findings(state)
+        block = domain.serialize_findings(state)
         comments = [
             {
                 "id": 9,
@@ -6403,17 +6404,17 @@ class IncrementalRun(unittest.TestCase):
     def test_auto_turns_capped_at_30_on_small_incremental(self):
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
             self.assertEqual(
-                review.resolve_max_turns(
+                review_context.resolve_max_turns(
                     self.manifest(mode="incremental"), Path("/tmp")
                 ),
                 30,
             )
             self.assertEqual(
-                review.resolve_max_turns(self.manifest(mode="full"), Path("/tmp")), 60
+                review_context.resolve_max_turns(self.manifest(mode="full"), Path("/tmp")), 60
             )
         with mock.patch.dict(os.environ, {"MAX_TURNS": "33"}):
             self.assertEqual(
-                review.resolve_max_turns(
+                review_context.resolve_max_turns(
                     self.manifest(mode="incremental"), Path("/tmp")
                 ),
                 33,
@@ -6422,12 +6423,12 @@ class IncrementalRun(unittest.TestCase):
     def test_big_incremental_push_gets_the_normal_cap(self):
         with mock.patch.dict(os.environ, {"MAX_TURNS": "auto"}):
             big = dict(self.manifest(mode="incremental"), diff_bytes=30_001)
-            self.assertEqual(review.resolve_max_turns(big, Path("/tmp")), 60)
+            self.assertEqual(review_context.resolve_max_turns(big, Path("/tmp")), 60)
             many = dict(
                 self.manifest(mode="incremental"),
                 reviewed=[f"f{i}.py" for i in range(6)],
             )
-            self.assertEqual(review.resolve_max_turns(many, Path("/tmp")), 60)
+            self.assertEqual(review_context.resolve_max_turns(many, Path("/tmp")), 60)
 
     def test_incremental_prompt_points_at_prev_findings(self):
         manifest = self.manifest(
@@ -6659,7 +6660,7 @@ class BlockingFixes(unittest.TestCase):
 
     def _published(self, findings, result, manifest=MANIFEST, model_ok=True):
         legacy = review_domain.read_snapshot(
-            review.serialize_findings({"findings": findings, "next": len(findings) + 1})
+            domain.serialize_findings({"findings": findings, "next": len(findings) + 1})
         )
         memory = replace(
             review_domain.snapshot_a_v3(legacy.snapshot),
@@ -6682,12 +6683,12 @@ class BlockingFixes(unittest.TestCase):
             'Detalle\n<!-- ai-review:findings={"findings":[{"id":"F-new","file":"review.py","line":233,'
             '"severity":"Medium","title":"Un --> dentro del JSON","state":"open"}],"next":1} -->\nCOVERAGE: complete'
         )
-        state = review.parse_model_findings(text)
+        state = domain.parse_model_findings(text)
         self.assertEqual(
             [f["title"] for f in state["findings"]], ["Un --\u203a dentro del JSON"]
         )
         self.assertEqual(
-            review.strip_findings_block(text, last=True),
+            domain.strip_findings_block(text, last=True),
             "Detalle\n\nCOVERAGE: complete",
         )
 
@@ -6697,7 +6698,7 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual(
             [
                 f["title"]
-                for f in review.parse_model_findings(f"{fake}\ntexto\n{real}")[
+                for f in domain.parse_model_findings(f"{fake}\ntexto\n{real}")[
                     "findings"
                 ]
             ],
@@ -6706,7 +6707,7 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual(
             [
                 f["title"]
-                for f in review.parse_findings_block(f"{real}\ntexto\n{fake}")[
+                for f in domain.read_snapshot(f"{real}\ntexto\n{fake}").raw[
                     "findings"
                 ]
             ],
@@ -6840,7 +6841,7 @@ class BlockingFixes(unittest.TestCase):
             ],
             "next": 3,
         }
-        again = review.parse_findings_block(review.serialize_findings(state))
+        again = domain.read_snapshot(domain.serialize_findings(state)).raw
         self.assertEqual(again["findings"][0]["files"], ["review.py", "tests/t.py"])
 
     def test_dismissed_are_marked_before_the_review_and_listed_as_do_not_report(self):
@@ -6850,7 +6851,7 @@ class BlockingFixes(unittest.TestCase):
             dismiss_ids={"F1"},
         )
         self.assertEqual([f["state"] for f in state["findings"]], ["dismissed", "open"])
-        md = review.prev_findings_markdown(state)
+        md = review_context.prev_findings_markdown(state)
         self.assertIn("## Descartados por una persona: NO los reportes", md)
         self.assertLess(md.index("## Abiertos"), md.index("F2 High"))
         self.assertGreater(md.index("F1 High"), md.index("## Descartados"))
@@ -6903,7 +6904,7 @@ class BlockingFixes(unittest.TestCase):
         )
         llamadas = []
         with mock.patch.object(
-            review,
+            review_context,
             "files_reverted",
             side_effect=lambda repo, paths, base, previous, head: (
                 llamadas.append((tuple(paths), base, previous, head)) or set(paths)
@@ -6918,8 +6919,8 @@ class BlockingFixes(unittest.TestCase):
             "el chequeo de reversión sólo mira los archivos cambiados en este push",
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]],
-            [("F1", "open"), ("F2", "resolved")],
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusOpen), ("F2", review_domain.StatusResolved)],
         )
 
     def test_empty_detail_with_a_valid_block_says_nothing_new(self):
@@ -6946,14 +6947,14 @@ class BlockingFixes(unittest.TestCase):
     def test_seen_comment_id_survives_the_hidden_block(self):
         state = {"findings": [make_finding("F1")], "next": 2, "seen": 100}
         self.assertEqual(
-            review.parse_findings_block(review.serialize_findings(state))["seen"], 100
+            domain.read_snapshot(domain.serialize_findings(state)).raw["seen"], 100
         )
         self.assertEqual(
-            review.parse_findings_block(block_of(make_finding("F1")))["seen"], 0
+            domain.read_snapshot(block_of(make_finding("F1"))).raw["seen"], 0
         )
 
     def test_publish_records_seen_so_the_next_push_ignores_old_dismissals(self):
-        prev_block = review.serialize_findings(
+        prev_block = domain.serialize_findings(
             {"findings": [make_finding("F1")], "next": 2}
         )
         sticky = {
@@ -6980,12 +6981,12 @@ class BlockingFixes(unittest.TestCase):
                 result, manifest, sticky, "o/r", "7", "github-actions[bot]", comments
             )
             self.assertEqual(
-                [(f["id"], f["state"]) for f in first["merged"]],
-                [("F1", "dismissed"), ("F2", "open")],
+                [(f.id, type(f.status)) for f in first.snapshot.findings],
+                [("F1", review_domain.StatusDismissed), ("F2", review_domain.StatusOpen)],
             )
             sticky2 = dict(
                 sticky,
-                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{first['block']}\nx",
+                body=f"{review_sticky.MARKER}\n{review_sticky.SHA_PREFIX}{'e' * 40} -->\n{review_domain.encode_snapshot(first.snapshot).block}\nx",
             )
             again = review.build_findings(
                 {
@@ -7000,12 +7001,12 @@ class BlockingFixes(unittest.TestCase):
                 [sticky2, comments[1]],
             )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in again["merged"]],
-            [("F1", "dismissed"), ("F2", "open")],
+            [(f.id, type(f.status)) for f in again.snapshot.findings],
+            [("F1", review_domain.StatusDismissed), ("F2", review_domain.StatusOpen)],
         )
 
     def test_rerun_of_the_same_commit_can_not_resolve(self):
-        prev_block = review.serialize_findings(
+        prev_block = domain.serialize_findings(
             {"findings": [make_finding("F1")], "next": 2}
         )
         sticky = {
@@ -7024,7 +7025,8 @@ class BlockingFixes(unittest.TestCase):
             result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky]
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]], [("F1", "open")]
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusOpen)],
         )
 
     def test_repeated_prev_issue_as_new_keeps_its_old_id(self):
@@ -7043,10 +7045,10 @@ class BlockingFixes(unittest.TestCase):
                 + "\nCOVERAGE: complete"
             },
         )
-        self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
+        self.assertEqual(body.count(domain.FINDINGS_PREFIX), 1)
 
     def test_html5_comment_close_is_neutralized(self):
-        self.assertNotIn("--!>", review.one_line("a --!> b", 50))
+        self.assertNotIn("--!>", domain.one_line("a --!> b", 50))
 
     def test_already_resolved_stays_resolved_when_repeated(self):
         merged, _ = merge(
@@ -7057,7 +7059,7 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual(merged["findings"][0]["state"], "resolved")
 
     def test_rerun_keeps_resolved_findings_resolved(self):
-        prev_block = review.serialize_findings(
+        prev_block = domain.serialize_findings(
             {
                 "findings": [
                     make_finding("F1", state="resolved"),
@@ -7085,8 +7087,8 @@ class BlockingFixes(unittest.TestCase):
             result, manifest, sticky, "o/r", "7", "github-actions[bot]", [sticky]
         )
         self.assertEqual(
-            [(f["id"], f["state"]) for f in findings["merged"]],
-            [("F1", "resolved"), ("F2", "open")],
+            [(f.id, type(f.status)) for f in findings.snapshot.findings],
+            [("F1", review_domain.StatusResolved), ("F2", review_domain.StatusOpen)],
         )
 
     def test_unverified_dismiss_is_retried_on_the_next_push(self):
@@ -7166,7 +7168,7 @@ class BlockingFixes(unittest.TestCase):
         self.assertEqual(finding["state"], "resolved")
         self.assertEqual(finding["files"][0], "review.py")
         self.assertIn("tests/t.py", finding["files"])
-        self.assertEqual(len(finding["files"]), review.FINDING_FILES_MAX)
+        self.assertEqual(len(finding["files"]), domain.FINDING_FILES_MAX)
 
     def test_model_verdict_anywhere_in_the_text_is_dropped(self):
         text = (
@@ -7232,7 +7234,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
     """T16-f11: 7 de 24 corridas incrementales perdían el bloque del modelo."""
 
     def test_bloque_sin_cierre_conserva_los_hallazgos(self):
-        state = review.parse_model_findings(review_domain.leer_cierre(BLOQUE_SIN_CIERRE).prosa)
+        state = domain.parse_model_findings(review_domain.leer_cierre(BLOQUE_SIN_CIERRE).prosa)
         self.assertEqual(
             [(f["id"], f["severity"], f["state"]) for f in state["findings"]],
             [("F1", "Medium", "open"), (None, "Low", "open")],
@@ -7240,7 +7242,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         self.assertEqual(state["next"], 5)
 
     def test_cierre_tras_salto_de_linea_conserva_los_hallazgos(self):
-        state = review.parse_model_findings(
+        state = domain.parse_model_findings(
             review_domain.leer_cierre(BLOQUE_CIERRE_EN_OTRA_LINEA).prosa
         )
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
@@ -7250,50 +7252,49 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
         for espacio in (" ", "\n"):
             with self.subTest(espacio=repr(espacio)):
                 texto = prosa.replace(
-                    review.FINDINGS_PREFIX, review.FINDINGS_PREFIX + espacio
+                    domain.FINDINGS_PREFIX, domain.FINDINGS_PREFIX + espacio
                 )
-                state = review.parse_model_findings(texto)
+                state = domain.parse_model_findings(texto)
                 self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
                 self.assertEqual(
-                    review.strip_model_findings_block(texto), "Detalle del cambio."
+                    domain.strip_model_findings_block(texto), "Detalle del cambio."
                 )
 
     def test_json_truncado_no_se_acepta(self):
         truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
-        self.assertIsNone(review.parse_model_findings(truncado))
+        self.assertIsNone(domain.parse_model_findings(truncado))
 
     def test_el_texto_visible_no_arrastra_el_bloque_sin_cerrar(self):
         prosa = review_domain.leer_cierre(BLOQUE_SIN_CIERRE).prosa
         self.assertEqual(
-            review.strip_model_findings_block(prosa), "Detalle del cambio."
+            domain.strip_model_findings_block(prosa), "Detalle del cambio."
         )
         otra = review_domain.leer_cierre(BLOQUE_CIERRE_EN_OTRA_LINEA).prosa
-        self.assertEqual(review.strip_model_findings_block(otra), "Detalle del cambio.")
+        self.assertEqual(domain.strip_model_findings_block(otra), "Detalle del cambio.")
 
     def test_un_bloque_ilegible_no_deja_un_comentario_html_abierto(self):
         truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
         self.assertEqual(
-            review.strip_model_findings_block(truncado), "Detalle del cambio."
+            domain.strip_model_findings_block(truncado), "Detalle del cambio."
         )
 
     def test_un_bloque_ilegible_tras_uno_valido_no_queda_abierto(self):
         citado = block_of(make_finding("F9", title="Citado del PR"))
         truncado = BLOQUE_SIN_CIERRE[: BLOQUE_SIN_CIERRE.index('"next"')]
         self.assertEqual(
-            review.strip_model_findings_block(f"Antes.\n{citado}\n{truncado}"),
+            domain.strip_model_findings_block(f"Antes.\n{citado}\n{truncado}"),
             "Antes.\n\nDetalle del cambio.",
         )
 
     def test_el_ultimo_bloque_sin_cierre_gana_a_uno_citado_antes(self):
         citado = block_of(make_finding("F9", title="Citado del PR"))
         texto = f"{citado}\ntexto\n" + review_domain.leer_cierre(BLOQUE_SIN_CIERRE).prosa
-        state = review.parse_model_findings(texto)
+        state = domain.parse_model_findings(texto)
         self.assertEqual([f["id"] for f in state["findings"]], ["F1", None])
 
     def test_el_parser_del_sticky_sigue_exigiendo_el_cierre(self):
         prosa = review_domain.leer_cierre(BLOQUE_SIN_CIERRE).prosa
-        self.assertIsNone(review.parse_findings_block(prosa))
-        import review_domain as domain
+        self.assertNotIsInstance(domain.read_snapshot(prosa), domain.Legacy)
 
         self.assertIsInstance(domain.read_snapshot(prosa), domain.Invalid)
 
@@ -7363,7 +7364,7 @@ class BloqueDelModeloSinCierre(unittest.TestCase):
             [(f["id"], f["severity"]) for f in state["findings"]],
             [("F1", "Medium"), ("F5", "Low")],
         )
-        self.assertEqual(body.count(review.FINDINGS_PREFIX), 1)
+        self.assertEqual(body.count(domain.FINDINGS_PREFIX), 1)
         self.assertNotIn("no entregó su bloque", body)
         self.assertIn(
             "::warning::ai-review: el bloque de hallazgos del modelo no traía ` -->` justo "
@@ -7589,10 +7590,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 )
                 bloque0 = original.block if schema == 3 else original
                 r1 = publicar(bloque0, schema, {"F1"}, "e" * 40)
-                self.assertIsNone(r1.get("keep"), f"schema {schema}: no debe ser Keep")
-                carga1 = domain.read_snapshot(r1["block"])
-                self.assertIsInstance(carga1, domain.Valid)
-                s1 = carga1.snapshot
+                self.assertIsInstance(r1, review.DirectAccepted)
+                s1 = r1.snapshot
                 self.assertEqual(s1.schema, 3)
                 self.assertEqual(s1.revision.head_sha, "e" * 40)
                 f1 = next(f for f in s1.findings if f.id == "F1")
@@ -7607,11 +7606,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     any(r.command_id == 99 for r in s1.receipts),
                     "el descarte deja su recibo en schema 3",
                 )
-                r2 = publicar(r1["block"], schema, set(), "f" * 40)
-                self.assertIsNone(r2.get("keep"))
-                carga2 = domain.read_snapshot(r2["block"])
-                self.assertIsInstance(carga2, domain.Valid)
-                s2 = carga2.snapshot
+                r2 = publicar(domain.encode_snapshot(s1).block, schema, set(), "f" * 40)
+                self.assertIsInstance(r2, review.DirectAccepted)
+                s2 = r2.snapshot
                 self.assertEqual(s2.schema, 3)
                 self.assertEqual(s2.revision.head_sha, "f" * 40)
                 f1b = next(f for f in s2.findings if f.id == "F1")
@@ -7709,8 +7706,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         "bot",
                         [],
                     )
-                self.assertIsNone(r.get("keep"))
-                snapshot = domain.read_snapshot(r["block"]).snapshot
+                self.assertIsInstance(r, review.DirectAccepted)
+                snapshot = r.snapshot
                 f1 = next(f for f in snapshot.findings if f.id == "F1")
                 f2 = next(f for f in snapshot.findings if f.id == "F2")
                 self.assertIsInstance(
@@ -7819,10 +7816,10 @@ class PersistenciaSinPerdida(unittest.TestCase):
                     "bot",
                     [],
                 )
-            self.assertIsNone(r.get("keep"))
+            self.assertIsInstance(r, review.DirectAccepted)
             return next(
                 f
-                for f in domain.read_snapshot(r["block"]).snapshot.findings
+                for f in r.snapshot.findings
                 if f.id == fid
             )
 
@@ -7913,14 +7910,12 @@ class PersistenciaSinPerdida(unittest.TestCase):
             findings = review.build_findings(
                 {"result": modelo}, manifest, {"body": previo}, "o/r", 1, "bot", []
             )
-        self.assertIsNone(findings.get("keep"))
-        loaded = domain.read_snapshot(findings["block"])
-        self.assertIsInstance(loaded, domain.Valid)
+        self.assertIsInstance(findings, review.DirectAccepted)
         document = review_document.document_from_result(
-            review_document.read_document(previo), loaded.snapshot,
-            {"result": modelo, "model_ok": findings.get("model_ok", True)},
+            review_document.read_document(previo), findings.snapshot,
+            {"result": modelo, "model_ok": findings.model_ok},
             {"reviewed": delta, "excluded": [], **manifest},
-            "opencode-go", "e" * 40, tuple(findings["new_ids"]),
+            "opencode-go", "e" * 40, findings.new_ids,
         )
         prepared = review_document.prepare_publication(
             document, domain.StorageBudget(), (),
@@ -7936,7 +7931,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 findings, cuerpo = self._publicar_resuelto(
                     ["README.md"], [], "F1 quedó resuelto.", modo=modo
                 )
-                self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+                self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
                 siguen = cuerpo[cuerpo.index("## Siguen abiertos") :]
                 self.assertIn(
                     f"· F1\n  - ↳ {self.MOTIVO}\n", siguen.split("## Detalle")[0]
@@ -8084,23 +8079,24 @@ class PersistenciaSinPerdida(unittest.TestCase):
         findings, cuerpo = self._publicar_resuelto(
             ["tests/test_ci_jaula.py"], ["tests/test_ci_jaula.py"], "F1 quedó resuelto."
         )
-        self.assertEqual(tuple(findings["no_acreditados"]), ())
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ())
         self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
         self.assertIn("**Veredicto:** sin problemas abiertos (1 resuelto).", cuerpo)
 
     def test_el_motivo_no_sobrevive_a_una_pasada_que_no_repite_el_reclamo(self):
         findings, _ = self._publicar_resuelto(["README.md"], [], "F1 resuelto.")
-        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
         siguiente, cuerpo = self._publicar_resuelto(
-            ["README.md"], [], "F1 sigue.", previo=findings["block"], estado="open"
+            ["README.md"], [], "F1 sigue.",
+            previo=review_domain.encode_snapshot(findings.snapshot).block, estado="open"
         )
-        self.assertEqual(tuple(siguiente["no_acreditados"]), ())
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(siguiente.snapshot), ())
         self.assertNotIn("no cambió ningún archivo pertinente", cuerpo)
 
     def test_camino_legado_tambien_explica_la_resolucion_no_aceptada(self):
         titulo = "El nuevo job de bateria rompe tests/test_ci_jaula.py"
         ruta = ".github/workflows/pruebas.yml"
-        previo = review.serialize_findings(
+        previo = domain.serialize_findings(
             {
                 "findings": [
                     {
@@ -8119,7 +8115,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
         findings, cuerpo = self._publicar_resuelto(
             ["README.md"], [], "F1 resuelto.", previo=previo
         )
-        self.assertEqual(tuple(findings["no_acreditados"]), ("F1",))
+        self.assertEqual(review_domain.resoluciones_sin_acreditar(findings.snapshot), ("F1",))
         self.assertIn(f"· F1\n  - ↳ {self.MOTIVO}\n", cuerpo)
 
     def test_new_ids_reales_y_publica_sin_base_en_manifiesto(self):
@@ -8202,25 +8198,21 @@ class PersistenciaSinPerdida(unittest.TestCase):
         for schema in (2, 3):
             with self.subTest(schema=schema):
                 r = publicar(estado(schema), schema, True)
-                self.assertIsNone(r.get("keep"))
+                self.assertIsInstance(r, review.DirectAccepted)
                 self.assertEqual(
-                    r["new_ids"],
-                    ["F2"],
+                    r.new_ids,
+                    ("F2",),
                     "lo nuevo del modelo se marca como nuevo",
                 )
-                carga = domain.read_snapshot(r["block"])
-                self.assertIsInstance(carga, domain.Valid)
-                self.assertEqual(carga.snapshot.revision.head_sha, "e" * 40)
+                self.assertEqual(r.snapshot.revision.head_sha, "e" * 40)
 
                 sin_base = publicar(estado(schema), schema, False)
-                self.assertIsNone(
-                    sin_base.get("keep"),
+                self.assertIsInstance(
+                    sin_base, review.DirectAccepted,
                     "sin base válida la revisión no avanza pero se publica",
                 )
-                carga = domain.read_snapshot(sin_base["block"])
-                self.assertIsInstance(carga, domain.Valid)
                 self.assertEqual(
-                    carga.snapshot.revision.head_sha,
+                    sin_base.snapshot.revision.head_sha,
                     "c" * 40,
                     "la revisión previa se conserva",
                 )
@@ -8298,8 +8290,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         "bot",
                         [],
                     )
-                self.assertIsNone(r.get("keep"), "el re-run del mismo sha sí publica")
-                snapshot = domain.read_snapshot(r["block"]).snapshot
+                self.assertIsInstance(r, review.DirectAccepted, "el re-run del mismo sha sí publica")
+                snapshot = r.snapshot
                 f1 = next(f for f in snapshot.findings if f.id == "F1")
                 self.assertIsInstance(
                     f1.status,
@@ -8416,9 +8408,9 @@ class PersistenciaSinPerdida(unittest.TestCase):
             for i in range(1, 11)
         ]
         result = {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps({"findings": nuevos, "next": 50}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         }
         out = review.build_findings(
             result,
@@ -8429,10 +8421,15 @@ class PersistenciaSinPerdida(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertTrue(out.get("keep"), "desborde -> Keep")
-        self.assertIn("desborde", out["keep"])
-        self.assertEqual(out["block"], bloque_sticky, "bloque anterior idéntico")
-        load_back = __import__("review_domain").read_snapshot(out["block"])
+        self.assertIsInstance(out, review.DirectAccepted)
+        candidate = review_document.document_from_result(
+            review_document.read_document(sticky_body), out.snapshot, result,
+            dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+            "opencode-go", "c" * 40, out.new_ids,
+        )
+        overflow = review_document.prepare_publication(candidate)
+        self.assertIsInstance(overflow, review_document.StateCapacityExceeded)
+        load_back = review_domain.read_snapshot(bloque_sticky)
         por_id = {f["id"]: f for f in load_back.raw["findings"]}
         self.assertEqual(por_id["F1"]["state"], "dismissed")
         self.assertEqual(
@@ -8459,6 +8456,8 @@ class PersistenciaSinPerdida(unittest.TestCase):
                         review_github, "fetch_all_comments", return_value=[sticky]
                     ),
                     mock.patch.object(review_github, "sh") as shell,
+                    mock.patch.object(review, "libro_actualizado", return_value=None),
+                    mock.patch.object(review, "_repo_actual", return_value=None),
                 ):
                     with self.assertRaises(SystemExit) as caught:
                         review.cmd_publish(argparse.Namespace(work=str(work)))
@@ -8478,13 +8477,13 @@ class PersistenciaSinPerdida(unittest.TestCase):
             + "\n"
             + f"{review_sticky.SHA_PREFIX}{'a' * 40} -->\n"
             + f"{review_sticky.COMPLETION_PREFIX}{'a' * 40}:complete -->\n"
-            + review.FINDINGS_PREFIX
+            + domain.FINDINGS_PREFIX
             + '{"schema":2,"findings":null,"next_id":1}'
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
             + "\n\n### Revisión anterior\n\nTexto previo.\n"
         )
         result = {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps(
                 {
                     "findings": [
@@ -8501,7 +8500,7 @@ class PersistenciaSinPerdida(unittest.TestCase):
                 },
                 separators=(",", ":"),
             )
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         }
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
@@ -8556,9 +8555,9 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
             for i in range(1, 121)
         ]
         return {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps({"findings": hallazgos, "next": 61}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         }
 
     def publicar(self, comments):
@@ -8579,6 +8578,8 @@ class DesbordeSinMemoriaPrevia(unittest.TestCase):
                         review_github, "fetch_all_comments", return_value=comments
                     ),
                     mock.patch.object(review_github, "sh") as writes,
+                    mock.patch.object(review, "libro_actualizado", return_value=None),
+                    mock.patch.object(review, "_repo_actual", return_value=None),
                 ):
                     review.cmd_publish(argparse.Namespace(work=str(work)))
                     writes.assert_not_called()
@@ -8604,12 +8605,11 @@ class CableadoIdentidad(unittest.TestCase):
     """F0 r7 R-C: env finding_identity validado antes del modelo."""
 
     def _cuerpo_de_aceptacion(self, accepted, result, manifest, head):
-        loaded = review_domain.read_snapshot(accepted["block"])
-        self.assertIsInstance(loaded, review_domain.Valid)
+        self.assertIsInstance(accepted, review.DirectAccepted)
         document = review_document.document_from_result(
-            review_document.read_document(""), loaded.snapshot,
-            {**result, "model_ok": accepted.get("model_ok", True)},
-            manifest, "opencode-go", head, tuple(accepted.get("new_ids", ())),
+            review_document.read_document(""), accepted.snapshot,
+            {**result, "model_ok": accepted.model_ok},
+            manifest, "opencode-go", head, accepted.new_ids,
         )
         prepared = review_document.prepare_publication(
             document, review_domain.StorageBudget(), (),
@@ -8634,6 +8634,45 @@ class CableadoIdentidad(unittest.TestCase):
         yml = (ROOT / "action.yml").read_text()
         self.assertIn("finding_identity:", yml)
         self.assertIn("FINDING_IDENTITY: ${{ inputs.finding_identity }}", yml)
+
+    def test_action_propaga_identidad_y_digest_a_cada_proceso(self):
+        action = (ROOT / "action.yml").read_text()
+        steps = re.split(r"(?m)^    - name: ", action.split("  steps:\n", 1)[1])[1:]
+        defaults = re.search(
+            r"(?m)^  finding_identity:\n(?:    .*\n)*?    default: (\w+)", action
+        )
+        self.assertIsNotNone(defaults)
+        for supplied in (None, "current", "anchors", "bogus"):
+            identity = supplied if supplied is not None else defaults.group(1)
+            policies = {}
+            for operation in ("prepare", "run", "publish"):
+                step = next(
+                    step for step in steps
+                    if f'review.py" {operation}' in step
+                    or f'review.py {operation}' in step
+                )
+                match = re.search(r"(?m)^        FINDING_IDENTITY: (.+)$", step)
+                env = {}
+                if match:
+                    env["FINDING_IDENTITY"] = match.group(1).replace(
+                        "${{ inputs.finding_identity }}", identity
+                    )
+                with mock.patch.dict(os.environ, env, clear=True):
+                    if supplied == "bogus":
+                        with self.assertRaises(SystemExit):
+                            review_config.politica_de_revision()
+                    else:
+                        policy = review_config.politica_de_revision()
+                        policies[operation] = (
+                            policy.finding_identity,
+                            review_context.digest_de_politica(policy),
+                        )
+            if supplied != "bogus":
+                expected = "anchors" if supplied == "anchors" else "titles"
+                self.assertEqual(
+                    policies,
+                    {name: (expected, policies["run"][1]) for name in policies},
+                )
 
     def test_f5_el_diferencial_del_digest_guardado(self):
         # endurecimiento AI F5: el test de r6 afirma el rojo diferencial
@@ -8828,17 +8867,13 @@ class CableadoIdentidad(unittest.TestCase):
                     hechos = review.hechos_de_repo(manifest, set())
                 finally:
                     os.chdir(cwd)
-            self.assertIsNone(
-                out.get("keep"), "anchors pasa por la aceptación del dominio"
-            )
+            self.assertIsInstance(out, review.DirectAccepted)
             self.assertEqual(
                 hechos.changed_paths,
                 ("app.py",),
                 "los hechos usan el delta real, no `reviewed`",
             )
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
-            snap = carga.snapshot
+            snap = out.snapshot
             por_id = {f.id: f for f in snap.findings}
             self.assertEqual(
                 [f.id for f in snap.findings], ["F1", "F2", "F3"], "IDs estables"
@@ -8863,7 +8898,7 @@ class CableadoIdentidad(unittest.TestCase):
                 "el resultado conserva su SHA real",
             )
             self.assertEqual(
-                out["completion"],
+                out.snapshot.completion,
                 domain.COMPLETE_CLAIM,
             )
             cuerpo = self._cuerpo_de_aceptacion(
@@ -8923,7 +8958,7 @@ class CableadoIdentidad(unittest.TestCase):
                     finally:
                         os.chdir(cwd)
                     self.assertEqual(
-                        out["completion"],
+                        out.snapshot.completion,
                         domain.PARTIAL,
                         "archivo excluido: omisión obligatoria, no complete",
                     )
@@ -8948,8 +8983,8 @@ class CableadoIdentidad(unittest.TestCase):
             "excluded": [],
         }
         out = review.build_findings(resultado, manifest, sticky, "o/r", 1, "bot", [])
-        self.assertFalse(out["model_ok"])
-        self.assertEqual(out["completion"], domain.PARTIAL)
+        self.assertFalse(out.model_ok)
+        self.assertEqual(out.snapshot.completion, domain.PARTIAL)
         cuerpo = self._cuerpo_de_aceptacion(
             out, resultado, manifest, "c" * 40,
         )
@@ -9030,9 +9065,9 @@ class CableadoIdentidad(unittest.TestCase):
             returncode = 0
             stdout = b"caf\xe9.py\x00ok.py\x00"
 
-        with mock.patch.object(review.GitRepository, "run", return_value=Proc()):
-            rutas, omisiones, calculado = review.delta_real(
-                review.GitRepository(Path.cwd()), "a" * 40, "b" * 40
+        with mock.patch.object(review_context.GitRepository, "run", return_value=Proc()):
+            rutas, omisiones, calculado = review_context.delta_real(
+                review_context.GitRepository(Path.cwd()), "a" * 40, "b" * 40
             )
         self.assertEqual(rutas, ("ok.py",))
         self.assertEqual(omisiones, ("ruta no representable en el delta: 1",))
@@ -9091,14 +9126,12 @@ class CableadoIdentidad(unittest.TestCase):
                 out = review.build_findings(
                     {"result": modelo}, manifest, sticky, "o/r", 1, "bot", []
                 )
-                self.assertIsNone(out.get("keep"))
-                carga = domain.read_snapshot(out["block"])
-                self.assertIsInstance(carga, domain.Valid)
+                self.assertIsInstance(out, review.DirectAccepted)
                 self.assertEqual(
-                    [f.title for f in carga.snapshot.findings],
+                    [f.title for f in out.snapshot.findings],
                     ["Dependencia sin fijar"],
                 )
-                self.assertIsNone(carga.snapshot.findings[0].primary_anchor.line)
+                self.assertIsNone(out.snapshot.findings[0].primary_anchor.line)
 
     def test_runtime_cortado_degrada_la_cobertura(self):
         import review_domain as domain
@@ -9139,7 +9172,7 @@ class CableadoIdentidad(unittest.TestCase):
                 )
             finally:
                 os.chdir(cwd)
-        self.assertEqual(out["completion"], domain.PARTIAL)
+        self.assertEqual(out.snapshot.completion, domain.PARTIAL)
         cuerpo = self._cuerpo_de_aceptacion(
             out, resultado, manifest, base,
         )
@@ -9222,10 +9255,8 @@ class CableadoIdentidad(unittest.TestCase):
                 )
             finally:
                 os.chdir(cwd)
-            self.assertIsNone(out.get("keep"))
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
-            f1 = {f.id: f for f in carga.snapshot.findings}["F1"]
+            self.assertIsInstance(out, review.DirectAccepted)
+            f1 = {f.id: f for f in out.snapshot.findings}["F1"]
             self.assertIsInstance(f1.status, domain.StatusOpen)
 
     def test_el_marcador_visible_nace_de_la_cobertura_persistida(self):
@@ -9331,16 +9362,14 @@ class CableadoIdentidad(unittest.TestCase):
                     )
                 finally:
                     os.chdir(cwd)
-            self.assertIsNone(out.get("keep"))
-            carga = domain.read_snapshot(out["block"])
-            self.assertIsInstance(carga, domain.Valid)
+            self.assertIsInstance(out, review.DirectAccepted)
             self.assertEqual(
-                [f.id for f in carga.snapshot.findings],
+                [f.id for f in out.snapshot.findings],
                 ["F1"],
                 "la cita sobre la ruta del delta verifica aunque el manifiesto no la liste",
             )
             self.assertIsInstance(
-                carga.snapshot.findings[0].status,
+                out.snapshot.findings[0].status,
                 domain.StatusDismissed,
                 "el descartado se reconoce por digest y no revive ni se duplica",
             )
@@ -9517,8 +9546,8 @@ class ContextSearch(unittest.TestCase):
             repo = self.repo_with(tmp, files)
             os.chdir(repo)
             try:
-                text = review.build_tests(
-                    review.GitRepository(Path.cwd()), ["src/app.py"]
+                text = review_context.build_tests(
+                    review_context.GitRepository(Path.cwd()), ["src/app.py"]
                 )
             finally:
                 os.chdir(ROOT)
@@ -9532,12 +9561,12 @@ class ContextSearch(unittest.TestCase):
             )
             os.chdir(repo)
             try:
-                repo_obj = review.GitRepository(Path.cwd())
-                result = review.grep_files(repo_obj, ["zzz-no-esta"], 5)
-                text = review.build_tests(repo_obj, ["src/app.py"])
+                repo_obj = review_context.GitRepository(Path.cwd())
+                result = review_context.grep_files(repo_obj, ["zzz-no-esta"], 5)
+                text = review_context.build_tests(repo_obj, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchComplete)
+        self.assertIsInstance(result, review_context.SearchComplete)
         self.assertEqual(result.paths, ())
         self.assertIn("Ninguna prueba menciona", text)
 
@@ -9545,12 +9574,12 @@ class ContextSearch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chdir(tmp)
             try:
-                repo = review.GitRepository(Path.cwd())
-                result = review.grep_files(repo, ["app"], 5)
-                text = review.build_tests(repo, ["src/app.py"])
+                repo = review_context.GitRepository(Path.cwd())
+                result = review_context.grep_files(repo, ["app"], 5)
+                text = review_context.build_tests(repo, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchFailed)
+        self.assertIsInstance(result, review_context.SearchFailed)
         self.assertIn("not a git repository", result.reason)
         self.assertIn("falló", text)
         self.assertNotIn("Ninguna prueba menciona", text)
@@ -9563,22 +9592,22 @@ class ContextSearch(unittest.TestCase):
             self.repo_with(tmp, files)
             os.chdir(Path(tmp, "repo"))
             try:
-                repo = review.GitRepository(Path.cwd())
-                result = review.grep_files(
+                repo = review_context.GitRepository(Path.cwd())
+                result = review_context.grep_files(
                     repo, ["app"], 5, predicate=lambda path: False, max_bytes=16
                 )
-                text = review.build_tests(repo, ["src/app.py"])
+                text = review_context.build_tests(repo, ["src/app.py"])
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIsInstance(result, review_context.SearchTruncated)
         self.assertEqual(result.paths, ())
         self.assertIn("techo", result.reason)
         with mock.patch.object(
             review_context,
             "grep_files",
-            return_value=review.SearchTruncated((), "techo de salida"),
+            return_value=review_context.SearchTruncated((), "techo de salida"),
         ):
-            text = review.build_tests(repo, ["src/app.py"])
+            text = review_context.build_tests(repo, ["src/app.py"])
         self.assertIn("truncada", text)
         self.assertNotIn("Ninguna prueba menciona", text)
 
@@ -9597,35 +9626,35 @@ class ContextSearch(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(
-                        review.GitRepository(Path.cwd()), ["app"], 5, timeout=0.1
+                    result = review_context.grep_files(
+                        review_context.GitRepository(Path.cwd()), ["app"], 5, timeout=0.1
                     )
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIsInstance(result, review_context.SearchTruncated)
         self.assertIn("tiempo", result.reason)
 
     def test_callers_exact_limit_does_not_claim_more(self):
-        exactly = [f"pkg/modulo_{i}.py" for i in range(review.CALLERS_MAX_MATCHES)]
+        exactly = [f"pkg/modulo_{i}.py" for i in range(review_context.CALLERS_MAX_MATCHES)]
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
-        repo = review.GitRepository(Path.cwd())
+        repo = review_context.GitRepository(Path.cwd())
         with mock.patch.object(
             review_context,
             "grep_files",
-            return_value=review.SearchComplete(tuple(exactly)),
+            return_value=review_context.SearchComplete(tuple(exactly)),
         ):
-            text = review.build_callers(repo, ["src/app.py"], chunks)
+            text = review_context.build_callers(repo, ["src/app.py"], chunks)
         self.assertNotIn("y más", text)
         self.assertIn("pkg/modulo_0.py", text)
 
     def test_callers_truncated_keeps_accepted_paths(self):
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
-        result = review.SearchTruncated(
+        result = review_context.SearchTruncated(
             ("pkg/a.py", "pkg/b.py"), "techo de salida (16 bytes examinados)"
         )
         with mock.patch.object(review_context, "grep_files", return_value=result):
-            text = review.build_callers(
-                review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+            text = review_context.build_callers(
+                review_context.GitRepository(Path.cwd()), ["src/app.py"], chunks
             )
         self.assertIn("- pkg/a.py", text)
         self.assertIn("- pkg/b.py", text)
@@ -9645,21 +9674,21 @@ class ContextSearch(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(
-                        review.GitRepository(Path.cwd()), ["app"], 5, timeout=0.2
+                    result = review_context.grep_files(
+                        review_context.GitRepository(Path.cwd()), ["app"], 5, timeout=0.2
                     )
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIsInstance(result, review_context.SearchTruncated)
         self.assertIn("tiempo", result.reason)
 
     def test_failed_reason_respects_byte_budget(self):
         reason = "fatal: " + "ñ" * 10500
         with mock.patch.object(
-            review_context, "grep_files", return_value=review.SearchFailed(reason)
+            review_context, "grep_files", return_value=review_context.SearchFailed(reason)
         ):
-            text = review.build_tests(review.GitRepository(Path.cwd()), ["src/app.py"])
-        self.assertLessEqual(len(text.encode("utf-8")), review.TESTS_MAX_BYTES)
+            text = review_context.build_tests(review_context.GitRepository(Path.cwd()), ["src/app.py"])
+        self.assertLessEqual(len(text.encode("utf-8")), review_context.TESTS_MAX_BYTES)
         self.assertIn("recortado", text)
         self.assertNotIn("\ufffd", text)
 
@@ -9670,15 +9699,15 @@ class ContextSearch(unittest.TestCase):
             review_context,
             "grep_files",
             side_effect=[
-                review.SearchComplete(tuple(first)),
-                review.SearchComplete(tuple(second)),
+                review_context.SearchComplete(tuple(first)),
+                review_context.SearchComplete(tuple(second)),
             ],
         ):
-            text = review.build_tests(
-                review.GitRepository(Path.cwd()), ["src/a.py", "src/b.py"]
+            text = review_context.build_tests(
+                review_context.GitRepository(Path.cwd()), ["src/a.py", "src/b.py"]
             )
         route_lines = [ln for ln in text.splitlines() if ln.startswith("- tests/")]
-        self.assertEqual(len(route_lines), review.TESTS_MAX_RESULTS)
+        self.assertEqual(len(route_lines), review_context.TESTS_MAX_RESULTS)
 
     def test_non_utf8_matches_stay_visible(self):
         wrapper = Path(tempfile.mkdtemp(), "bin")
@@ -9698,17 +9727,17 @@ class ContextSearch(unittest.TestCase):
             self.repo_with(tmp, {"src/app.py": "app\n"})
             os.chdir(Path(tmp, "repo"))
             try:
-                repo = review.GitRepository(Path.cwd())
+                repo = review_context.GitRepository(Path.cwd())
                 with mock.patch.dict(
                     os.environ, {"PATH": f"{wrapper}:{os.environ['PATH']}"}
                 ):
-                    result = review.grep_files(repo, ["app"], 5)
-                    text = review.build_tests(repo, ["src/app.py"])
+                    result = review_context.grep_files(repo, ["app"], 5)
+                    text = review_context.build_tests(repo, ["src/app.py"])
                     chunks = {"src/app.py": "+def total():\n+    return 1\n"}
-                    callers = review.build_callers(repo, ["src/app.py"], chunks)
+                    callers = review_context.build_callers(repo, ["src/app.py"], chunks)
             finally:
                 os.chdir(ROOT)
-        self.assertIsInstance(result, review.SearchTruncated)
+        self.assertIsInstance(result, review_context.SearchTruncated)
         self.assertIn("no UTF-8", result.reason)
         self.assertIn("UTF-8", text)
         self.assertNotIn("Ninguna prueba menciona", text)
@@ -9718,29 +9747,29 @@ class ContextSearch(unittest.TestCase):
     def test_callers_truncated_respects_match_cap(self):
         overflow = [f"pkg/extra_{i}.py" for i in range(11)]
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
-        result = review.SearchTruncated(tuple(overflow), "techo de salida")
+        result = review_context.SearchTruncated(tuple(overflow), "techo de salida")
         with mock.patch.object(review_context, "grep_files", return_value=result):
-            text = review.build_callers(
-                review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+            text = review_context.build_callers(
+                review_context.GitRepository(Path.cwd()), ["src/app.py"], chunks
             )
         route_lines = [ln for ln in text.splitlines() if ln.startswith("- pkg/")]
-        self.assertEqual(len(route_lines), review.CALLERS_MAX_MATCHES)
+        self.assertEqual(len(route_lines), review_context.CALLERS_MAX_MATCHES)
         self.assertIn("y más", text)
         self.assertIn("búsqueda truncada", text)
 
     def test_callers_reports_truncated_and_failed(self):
         chunks = {"src/app.py": "+def total():\n+    return 1\n"}
         cases = [
-            (review.SearchTruncated((), "techo de salida"), "truncada"),
-            (review.SearchFailed("git murió"), "falló"),
+            (review_context.SearchTruncated((), "techo de salida"), "truncada"),
+            (review_context.SearchFailed("git murió"), "falló"),
         ]
         for result, expected in cases:
             with self.subTest(state=type(result).__name__):
                 with mock.patch.object(
                     review_context, "grep_files", return_value=result
                 ):
-                    text = review.build_callers(
-                        review.GitRepository(Path.cwd()), ["src/app.py"], chunks
+                    text = review_context.build_callers(
+                        review_context.GitRepository(Path.cwd()), ["src/app.py"], chunks
                     )
                 self.assertIn(expected, text)
                 self.assertNotIn("no encontró el texto", text)
@@ -9807,14 +9836,14 @@ class ContextBudgets(unittest.TestCase):
 
         def grep_side(repo, patterns, limit, **kw):
             pool = tests_pool if kw.get("predicate") is not None else callers_pool
-            return review.SearchComplete(tuple(pool[: limit + 1]))
+            return review_context.SearchComplete(tuple(pool[: limit + 1]))
 
-        repo = review.GitRepository(Path.cwd())
+        repo = review_context.GitRepository(Path.cwd())
         with mock.patch.object(review_context, "grep_files", side_effect=grep_side):
-            callers = review.build_callers(repo, sorted(chunks), chunks)
-            tests = review.build_tests(repo, ["src/app.py"])
-        self.assertLessEqual(len(callers.encode("utf-8")), review.CALLERS_MAX_BYTES)
-        self.assertLessEqual(len(tests.encode("utf-8")), review.TESTS_MAX_BYTES)
+            callers = review_context.build_callers(repo, sorted(chunks), chunks)
+            tests = review_context.build_tests(repo, ["src/app.py"])
+        self.assertLessEqual(len(callers.encode("utf-8")), review_context.CALLERS_MAX_BYTES)
+        self.assertLessEqual(len(tests.encode("utf-8")), review_context.TESTS_MAX_BYTES)
         callers.encode("utf-8")
         tests.encode("utf-8")
         self.assertIn("recortado", callers)
@@ -9831,12 +9860,12 @@ class ContextBudgets(unittest.TestCase):
             ["git"], 0, stdout=big.encode("utf-8"), stderr=""
         )
         with mock.patch.object(
-            review.GitRepository, "run", side_effect=[first, second]
+            review_context.GitRepository, "run", side_effect=[first, second]
         ):
-            text = review.build_conventions(
-                review.GitRepository(Path.cwd()), "deadbeef"
+            text = review_context.build_conventions(
+                review_context.GitRepository(Path.cwd()), "deadbeef"
             )
-        self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
+        self.assertLessEqual(len(text.encode("utf-8")), review_context.CONVENTIONS_MAX_BYTES)
         text.encode("utf-8")
 
     def test_conventions_respect_byte_budget(self):
@@ -9846,12 +9875,12 @@ class ContextBudgets(unittest.TestCase):
         )
         empty = subprocess.CompletedProcess(["git"], 1, stdout=b"", stderr=b"")
         with mock.patch.object(
-            review.GitRepository, "run", side_effect=[with_content, empty]
+            review_context.GitRepository, "run", side_effect=[with_content, empty]
         ):
-            text = review.build_conventions(
-                review.GitRepository(Path.cwd()), "deadbeef"
+            text = review_context.build_conventions(
+                review_context.GitRepository(Path.cwd()), "deadbeef"
             )
-        self.assertLessEqual(len(text.encode("utf-8")), review.CONVENTIONS_MAX_BYTES)
+        self.assertLessEqual(len(text.encode("utf-8")), review_context.CONVENTIONS_MAX_BYTES)
         text.encode("utf-8")
         self.assertIn("recortado", text)
         self.assertNotIn("\ufffd", text)
@@ -9880,8 +9909,8 @@ class GitPaths(unittest.TestCase):
 
             os.chdir(repo)
             try:
-                changed = review.changed_since(
-                    review.GitRepository(Path.cwd()), base, head
+                changed = review_context.changed_since(
+                    review_context.GitRepository(Path.cwd()), base, head
                 )
             finally:
                 os.chdir(ROOT)
@@ -9999,9 +10028,9 @@ class ConservacionAlDesbordar(unittest.TestCase):
             for i in range(1, 61)
         ]
         return {
-            "result": review.FINDINGS_PREFIX
+            "result": domain.FINDINGS_PREFIX
             + json.dumps({"findings": hallazgos, "next": 61}, separators=(",", ":"))
-            + review.FINDINGS_SUFFIX
+            + domain.FINDINGS_SUFFIX
         }
 
     def test_desborde_conserva_el_estado_confirmado(self):
@@ -10077,17 +10106,18 @@ class ConservacionAlDesbordar(unittest.TestCase):
                 "bot",
                 [],
             )
-        self.assertEqual(
-            out.get("keep") and "desborde" in out["keep"],
-            True,
-            "el desborde conserva la memoria (Keep)",
+        self.assertIsInstance(out, review.DirectAccepted)
+        candidate = review_document.document_from_result(
+            review_document.read_document(sticky_body), out.snapshot,
+            self.modelo_de_60(),
+            dict(MANIFEST, mode="full", reason="no-prev", reviewed=["c.py"]),
+            "opencode-go", "c" * 40, out.new_ids,
         )
-        self.assertEqual(
-            out["block"],
-            domain.encode_snapshot(snapshot),
-            "el bloque previo queda byte-idéntico (conservación)",
+        self.assertIsInstance(
+            review_document.prepare_publication(candidate),
+            review_document.StateCapacityExceeded,
         )
-        de_vuelta = domain.read_snapshot(out["block"])
+        de_vuelta = domain.read_snapshot(sticky_body)
         self.assertIsInstance(de_vuelta, domain.Valid)
         confirmado = de_vuelta.snapshot
         self.assertEqual(confirmado.revision.head_sha, "d" * 40)

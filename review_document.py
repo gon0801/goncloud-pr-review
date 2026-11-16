@@ -5,6 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import review_domain as domain
 from review_config import PROVIDERS
@@ -273,9 +274,9 @@ def _digest(text):
 
 
 def _json(value):
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":")).replace(
-        "<!--", "\\u003c\\u0021\\u002d\\u002d"
-    ).replace("-->", "\\u002d\\u002d\\u003e").replace("--!>", "--!\\u003e")
+    return domain.escape_hidden_json(
+        json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    )
 
 
 def _render(document, block, *, visible_only=False):
@@ -423,7 +424,59 @@ def _capacity(body, budget):
     )
 
 
-def _fit_slot(text, candidate, block, budget):
+@dataclass(frozen=True)
+class ProseSlot:
+    kind: Literal["review", "historical", "failure"]
+
+
+@dataclass(frozen=True)
+class ExplanationSlot:
+    index: int
+
+
+def _slot_text(document, slot):
+    if isinstance(slot, ExplanationSlot):
+        return document.explanations[slot.index].prose.text
+    if slot.kind == "review":
+        return document.review.prose.text
+    if slot.kind == "historical":
+        return document.historical.text
+    return document.failure.prose.text
+
+
+def _replace_slot(document, slot, prose):
+    if isinstance(slot, ExplanationSlot):
+        entries = list(document.explanations)
+        entries[slot.index] = replace(entries[slot.index], prose=prose)
+        return replace(document, explanations=tuple(entries))
+    if slot.kind == "review":
+        return replace(document, review=replace(document.review, prose=prose))
+    if slot.kind == "historical":
+        return replace(document, historical=prose)
+    return replace(document, failure=replace(document.failure, prose=prose))
+
+
+def _fit_slot(document, slot, block, budget):
+    text = _slot_text(document, slot)
+    if isinstance(slot, ProseSlot) and slot.kind == "review":
+        warning = ReviewWarning("prose-truncated")
+        warnings = document.review.warnings
+        if warning not in warnings:
+            document = replace(document, review=replace(
+                document.review, warnings=warnings + (warning,),
+            ))
+    else:
+        kind = (
+            "explanation-truncated" if isinstance(slot, ExplanationSlot)
+            else "history-truncated" if slot.kind == "historical"
+            else "failure-truncated"
+        )
+        document = _with_notice(document, kind)
+
+    def candidate(n):
+        prose = SafeProse(text[:n].rstrip() + ("…" if n < len(text) else ""))
+        return _replace_slot(document, slot, prose)
+
     best = candidate(0)
     low, high = 0, len(text)
     while low <= high:
@@ -457,12 +510,17 @@ def _with_notice(document, kind):
     return replace(document, notices=document.notices + (notice,))
 
 
+@dataclass
+class StateCapacityExceeded(domain.CapacityExceeded):
+    pass
+
+
 def prepare_publication(document, budget=None, secrets=()):
     budget = budget or domain.StorageBudget()
     snapshot = domain.snapshot_a_v3(document.memory)
     encoded = domain.encode_snapshot(snapshot, budget=budget)
     if isinstance(encoded, domain.CapacityExceeded):
-        return encoded
+        return StateCapacityExceeded(encoded.limit, encoded.needed)
     block = encoded.block
     if secrets:
         source = json.loads(block[len(domain.FINDINGS_PREFIX):-len(domain.FINDINGS_SUFFIX)])
@@ -511,8 +569,6 @@ def prepare_publication(document, budget=None, secrets=()):
     )
     if omit_book:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
     if len(current.explanations) > 3 or len(current.notices) > 3:
         return DocumentBlocked("demasiadas explicaciones o avisos", "")
     capped = tuple(
@@ -522,13 +578,9 @@ def prepare_publication(document, budget=None, secrets=()):
     )
     if capped != current.explanations:
         current = _with_notice(current, "explanation-truncated")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, explanations=capped)
     if current.covered and libro_a_linea(current.covered.head_sha, dict(current.covered.entries)) is None:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, covered=None)
     body = _render(current, block)
     if isinstance(body, DocumentBlocked):
@@ -545,46 +597,16 @@ def prepare_publication(document, budget=None, secrets=()):
         )
         if not _capacity(_render(fixed, block), budget):
             current = _with_notice(current, "book-omitted")
-            if isinstance(current, domain.CapacityExceeded):
-                return current
             current = replace(current, covered=None)
             body = _render(current, block)
     if not _capacity(body, budget) and current.review and current.review.prose.text:
-        text = current.review.prose.text
-        warnings = current.review.warnings
-        if ReviewWarning("prose-truncated") not in warnings:
-            warnings += (ReviewWarning("prose-truncated"),)
-        current = _fit_slot(
-            text,
-            lambda n: replace(
-                current,
-                review=replace(
-                    current.review,
-                    warnings=warnings,
-                    prose=SafeProse(text[:n].rstrip() + ("…" if n < len(text) else "")),
-                ),
-            ),
-            block, budget,
-        )
+        current = _fit_slot(current, ProseSlot("review"), block, budget)
         body = _render(current, block)
     if not _capacity(body, budget) and current.historical and current.historical.text:
-        text = current.historical.text
-        current = _with_notice(current, "history-truncated")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
-        current = _fit_slot(
-            text,
-            lambda n: replace(
-                current,
-                historical=SafeProse(text[:n].rstrip() + ("…" if n < len(text) else "")),
-            ),
-            block, budget,
-        )
+        current = _fit_slot(current, ProseSlot("historical"), block, budget)
         body = _render(current, block)
     if not _capacity(body, budget) and current.covered:
         current = _with_notice(current, "book-omitted")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
         current = replace(current, covered=None)
         body = _render(current, block)
     for i, entry in enumerate(current.explanations):
@@ -593,38 +615,10 @@ def prepare_publication(document, budget=None, secrets=()):
         text = entry.prose.text
         if not text:
             continue
-        current = _with_notice(current, "explanation-truncated")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
-
-        def shortened(n, index=i, base=current, source=text):
-            explanations = list(base.explanations)
-            explanations[index] = replace(
-                explanations[index],
-                prose=SafeProse(source[:n].rstrip() + ("…" if n < len(source) else "")),
-            )
-            return replace(base, explanations=tuple(explanations))
-
-        current = _fit_slot(
-            text, shortened, block, budget,
-        )
+        current = _fit_slot(current, ExplanationSlot(i), block, budget)
         body = _render(current, block)
     if not _capacity(body, budget) and current.failure and current.failure.prose.text:
-        text = current.failure.prose.text
-        current = _with_notice(current, "failure-truncated")
-        if isinstance(current, domain.CapacityExceeded):
-            return current
-        current = _fit_slot(
-            text,
-            lambda n: replace(
-                current,
-                failure=replace(
-                    current.failure,
-                    prose=SafeProse(text[:n].rstrip() + ("…" if n < len(text) else "")),
-                ),
-            ),
-            block, budget,
-        )
+        current = _fit_slot(current, ProseSlot("failure"), block, budget)
         body = _render(current, block)
     if not _capacity(body, budget):
         return domain.CapacityExceeded(

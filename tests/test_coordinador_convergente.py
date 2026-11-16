@@ -21,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_coordinator
 import review_document
 import review_render
@@ -31,7 +32,7 @@ import review_domain as domain  # noqa: E402
 
 A, B, BASE, MAIN = "a" * 40, "e" * 40, "b" * 40, "f" * 40
 BOT = "github-actions[bot]"
-DIGEST = review.digest_de_politica(review_config.politica_de_revision())
+DIGEST = review_context.digest_de_politica(review_config.politica_de_revision())
 WORKER_PATH = ".github/workflows/ai-review-worker.yml"
 
 
@@ -213,8 +214,15 @@ def correr(github, evento, head=None, permiso="write", aviso=None):
             return mock.Mock(stdout="")
         ruta = args[2]
         if "/actions/workflows/ai-review-worker.yml/runs" in ruta:
-            corridas = sorted(github.corridas, key=lambda c: -c["id"])
-            return mock.Mock(stdout=json.dumps({"workflow_runs": corridas}))
+            corridas = sorted(
+                ({**run, "event": "workflow_dispatch"} for run in github.corridas),
+                key=lambda c: -c["id"],
+            )
+            return mock.Mock(stdout=json.dumps([{"total_count": len(corridas), "workflow_runs": corridas}]))
+        if re.search(r"/actions/runs/\d+$", ruta):
+            run_id = int(ruta.rsplit("/", 1)[-1])
+            run = next(run for run in github.corridas if run["id"] == run_id)
+            return mock.Mock(stdout=json.dumps({**run, "event": "workflow_dispatch"}))
         if re.search(r"/actions/runs/\d+/artifacts", ruta):
             run_id = int(re.search(r"/actions/runs/(\d+)/", ruta).group(1))
             listado = [
@@ -488,6 +496,26 @@ class AdmisionDelHeadVivo(unittest.TestCase):
 
 
 class CosechaDeResultados(unittest.TestCase):
+    def test_historial_legacy_ajeno_no_bloquea_resultado_actual(self):
+        for aviso in ((900, 1), None):
+            with self.subTest(aviso=aviso):
+                github = GitHubFalso()
+                correr(github, "pull_request_target")
+                github.worker(1, resultado(1, A, ["Fuga 1"]))
+                github.worker(1, run_id=400, pr=155)
+                github.corridas[-1]["display_title"] = "155"
+                github.worker(1, run_id=399)
+                github.corridas[-1]["display_title"] = "12"
+
+                codigo, despachos, _ = correr(
+                    github, "workflow_dispatch" if aviso else "issue_comment",
+                    aviso=aviso,
+                )
+                self.assertEqual((codigo, despachos), (0, []))
+                self.assertEqual(github.estado().pending_requests, [])
+                self.assertEqual(estados(github), {"F1": "StatusOpen"})
+                self.assertIn("Fuga 1", github.visible())
+
     def test_un_aviso_perdido_lo_cosecha_el_siguiente_evento(self):
         github = GitHubFalso()
         correr(github, "pull_request_target")

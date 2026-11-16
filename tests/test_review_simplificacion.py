@@ -42,14 +42,16 @@ class MemoriaOperativa(unittest.TestCase):
                 "o/r", 1, "bot", [comment],
             )
             second = review.build_findings(
-                {"result": model}, manifest, {"body": first["block"]},
+                {"result": model}, manifest,
+                {"body": domain.encode_snapshot(first.snapshot).block},
                 "o/r", 1, "bot", [comment],
             )
         for output in (first, second):
-            state = domain.read_snapshot(output["block"]).snapshot
+            self.assertIsInstance(output, review.DirectAccepted)
+            state = output.snapshot
             self.assertEqual(state.command_cursor, 10)
             self.assertIsInstance(state.findings[0].status, domain.StatusDismissed)
-        self.assertEqual(len(second["merged"]), 1)
+        self.assertEqual(len(second.snapshot.findings), 1)
 
     def test_missing_and_valid_memories_are_ready_as_v3(self):
         missing = domain.memoria_operativa(domain.Missing())
@@ -124,10 +126,8 @@ class AceptacionUnica(unittest.TestCase):
             [],
             policy=domain.ReviewPolicy(),
         )
-        self.assertNotIn("keep", output)
-        load = domain.read_snapshot(output["block"])
-        self.assertIsInstance(load, domain.Valid)
-        return load.snapshot
+        self.assertIsInstance(output, review.DirectAccepted)
+        return output.snapshot
 
     def test_resolved_finding_does_not_reopen_without_delta_for_any_memory(self):
         finding = domain.Finding(
@@ -166,10 +166,10 @@ class AceptacionUnica(unittest.TestCase):
                     [],
                     policy=domain.ReviewPolicy(),
                 )
-                self.assertNotIn("keep", output)
-                self.assertEqual(output["merged"][0]["id"], "F1")
-                self.assertEqual(output["merged"][0]["state"], domain.RESOLVED)
-                self.assertEqual(domain.read_snapshot(output["block"]).snapshot.schema, 3)
+                self.assertIsInstance(output, review.DirectAccepted)
+                self.assertEqual(output.snapshot.findings[0].id, "F1")
+                self.assertIsInstance(output.snapshot.findings[0].status, domain.StatusResolved)
+                self.assertEqual(output.snapshot.schema, 3)
 
     def test_new_resolved_claim_starts_open_in_legacy_memory(self):
         model = bloque([dict(previo(domain.RESOLVED), id="F-new")])
@@ -183,7 +183,9 @@ class AceptacionUnica(unittest.TestCase):
             [],
             policy=domain.ReviewPolicy(),
         )
-        self.assertEqual([(f["id"], f["state"]) for f in output["merged"]], [("F1", domain.OPEN)])
+        self.assertIsInstance(output, review.DirectAccepted)
+        self.assertEqual([f.id for f in output.snapshot.findings], ["F1"])
+        self.assertIsInstance(output.snapshot.findings[0].status, domain.StatusOpen)
 
     def test_relevant_change_reopens_same_id_and_shifts_legacy_line(self):
         model = [dict(previo(domain.OPEN), line=27)]

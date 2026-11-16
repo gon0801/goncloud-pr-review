@@ -12,13 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
+import review_context
 import review_config
 import review_document
 import review_github
 import review_sticky
 import review_domain as domain  # noqa: E402
 
-PRE, SUF = review.FINDINGS_PREFIX, review.FINDINGS_SUFFIX
+PRE, SUF = domain.FINDINGS_PREFIX, domain.FINDINGS_SUFFIX
 
 
 def legado(findings, next=1, seen=None):
@@ -174,8 +175,8 @@ class LectorCompatible(unittest.TestCase):
         self.assertIsInstance(roto, domain.Invalid)
         self.assertNotIsInstance(roto, domain.Missing)
         self.assertTrue(str(roto.reason))
-        self.assertIsNone(review.parse_findings_block("**Veredicto:** ok"))
-        self.assertIsNone(review.parse_findings_block(PRE + "{oops" + SUF))
+        self.assertIsInstance(domain.read_snapshot("**Veredicto:** ok"), domain.Missing)
+        self.assertIsInstance(domain.read_snapshot(PRE + "{oops" + SUF), domain.Invalid)
 
     def test_future_version_is_not_legacy(self):
         SCHEMA_FUTURO = 4
@@ -286,7 +287,7 @@ class EscrituraCompatible(unittest.TestCase):
         )
         self.assertEqual(de_vuelta.snapshot.command_cursor, 42)
         self.assertEqual(de_vuelta.snapshot.next_id, 7)
-        self.assertEqual(bloque, review.serialize_findings(load.raw))
+        self.assertEqual(bloque, domain.serialize_findings(load.raw))
 
     def test_cierre_mismo_comentario_antes_y_despues_de_la_extraccion(self):
         comentario = (
@@ -312,7 +313,7 @@ class EscrituraCompatible(unittest.TestCase):
             + SUF
             + "\n\nCOVERAGE: complete\n"
         )
-        estado = review.parse_findings_block(comentario)
+        estado = domain.read_snapshot(comentario).raw
         self.assertEqual([f["id"] for f in estado["findings"]], ["F1", "F2", "F3"])
         self.assertEqual(
             [f["state"] for f in estado["findings"]], ["open", "resolved", "dismissed"]
@@ -320,14 +321,14 @@ class EscrituraCompatible(unittest.TestCase):
         self.assertEqual(estado["next"], 4)
         self.assertEqual(estado["seen"], 42)
         self.assertEqual(domain.leer_cierre(comentario).cobertura, "complete")
-        bloque = review.serialize_findings(estado)
-        de_vuelta = review.parse_findings_block(bloque)
+        bloque = domain.serialize_findings(estado)
+        de_vuelta = domain.read_snapshot(bloque).raw
         self.assertEqual([f["id"] for f in de_vuelta["findings"]], ["F1", "F2", "F3"])
         self.assertEqual(
             [f["state"] for f in de_vuelta["findings"]],
             ["open", "resolved", "dismissed"],
         )
-        self.assertEqual(review.serialize_findings(de_vuelta), bloque)
+        self.assertEqual(domain.serialize_findings(de_vuelta), bloque)
         load = domain.read_snapshot(comentario)
         self.assertIsInstance(load, domain.Legacy)
         self.assertEqual([f.id for f in load.snapshot.findings], ["F1", "F2", "F3"])
@@ -383,22 +384,20 @@ class RutaDePublicacion(unittest.TestCase):
         out = review.build_findings(
             result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
         )
-        self.assertFalse(out.get("keep"), "el escritor compatible actualiza")
-        self.assertNotEqual(out["block"], sticky_body, "la revisión avanza")
-        de_vuelta = domain.read_snapshot(out["block"])
-        self.assertIsInstance(de_vuelta, domain.Valid)
-        self.assertEqual(de_vuelta.snapshot.schema, 3, "se migra a v3 sin pérdida")
-        ids = [f.id for f in de_vuelta.snapshot.findings]
+        self.assertIsInstance(out, review.DirectAccepted)
+        de_vuelta = out.snapshot
+        self.assertEqual(de_vuelta.schema, 3, "se migra a v3 sin pérdida")
+        ids = [f.id for f in de_vuelta.findings]
         self.assertIn("F1", ids)
         self.assertIn("F2", ids)
         self.assertIn("F3", ids, "lo nuevo del modelo se integra con id asignado")
-        self.assertIn("Hallazgo F-new", [f.title for f in de_vuelta.snapshot.findings])
+        self.assertIn("Hallazgo F-new", [f.title for f in de_vuelta.findings])
         self.assertEqual(
-            next(f.status for f in de_vuelta.snapshot.findings if f.id == "F1"),
+            next(f.status for f in de_vuelta.findings if f.id == "F1"),
             domain.StatusDismissed(command_id=7),
             "un descarte confirmado no reaparece",
         )
-        self.assertEqual(de_vuelta.snapshot.command_cursor, 7)
+        self.assertEqual(de_vuelta.command_cursor, 7)
 
     def test_sticky_de_version_futura_se_conserva(self):
         sticky_body = (
@@ -410,8 +409,8 @@ class RutaDePublicacion(unittest.TestCase):
         out = review.build_findings(
             result, manifest, sticky, repo="x/y", pr=1, login="bot", comments=[]
         )
-        self.assertEqual(out["block"], sticky_body)
-        self.assertTrue(out.get("keep"))
+        self.assertIsInstance(out, domain.Keep)
+        self.assertIsInstance(domain.read_snapshot(sticky_body), domain.Future)
 
     def test_b2_null_en_claves_v2_da_invalid_y_no_trona(self):
         for clave in ("pending_requests", "related_anchors", "evidence"):
@@ -427,7 +426,7 @@ class RutaDePublicacion(unittest.TestCase):
     def test_b2_el_texto_del_modelo_no_trona_la_publicacion(self):
         p = payload_v2()
         p["findings"][0]["evidence"] = None
-        self.assertIsNone(review.parse_model_findings(PRE + json.dumps(p) + SUF))
+        self.assertIsNone(domain.parse_model_findings(PRE + json.dumps(p) + SUF))
 
 
 class FronteraDeReferencias(unittest.TestCase):
@@ -638,7 +637,7 @@ class PresupuestosEnBytes(unittest.TestCase):
             }
             for i in range(1, 41)
         ]
-        resultado = review.serialize_findings({"findings": findings, "next": 41})
+        resultado = domain.serialize_findings({"findings": findings, "next": 41})
         self.assertIsInstance(resultado, domain.CapacityExceeded)
         self.assertGreater(resultado.needed, domain.FINDINGS_MAX_BYTES)
 
@@ -676,8 +675,9 @@ class FronteraDeEscritura(unittest.TestCase):
         self.assertIsInstance(load, domain.Valid)
         self.assertNotIsInstance(load, domain.Legacy)
         self.assertEqual(load.snapshot.revision, s.revision)
-        self.assertIsNone(
-            review.parse_findings_block(bloque),
+        self.assertNotIsInstance(
+            domain.read_snapshot(bloque),
+            domain.Legacy,
             "el adaptador de M0 no convierte el estado nuevo a legacy",
         )
 
@@ -2099,6 +2099,46 @@ class SeveridadDeObservacion(unittest.TestCase):
 
 
 class ObservacionDeEntrada(unittest.TestCase):
+    def test_hints_del_modelo_tienen_forma_tipada(self):
+        base = {"title": "t", "severity": "High", "file": "a.py", "line": 1}
+        located = {
+            "path": "a.py", "blob_sha": "a" * 40,
+            "range": [1, 1], "excerpt_digest": "b" * 64,
+        }
+        cases = (
+            ("cause_hint", lambda v: {**base, "cause_hint": v}),
+            ("symbol_hint", lambda v: {**base, "symbol_hint": v}),
+            ("anchor.symbol_hint", lambda v: {**base, "anchor": {**located, "symbol_hint": v}}),
+            ("related_anchors.symbol_hint", lambda v: {
+                **base, "related_anchors": [{**located, "symbol_hint": v}],
+            }),
+        )
+        for name, build in cases:
+            for value in (None, "", "sí", 42, True, [], {}):
+                with self.subTest(field=name, value=value):
+                    observation = domain.observation_de_entrada(build(value))
+                    if value is None or isinstance(value, str):
+                        self.assertIsInstance(observation, domain.Observation)
+                    else:
+                        self.assertIsInstance(observation, domain.ObservationRejected)
+                        self.assertIn("symbol_hint" if "symbol" in name else "cause_hint", observation.motivo)
+
+    def test_hallazgo_invalido_no_impide_publicar_otro_valido(self):
+        base = {"title": "válido", "severity": "High", "file": "a.py", "line": 1}
+        text = (
+            PRE + json.dumps({"findings": [
+                {**base, "cause_hint": 42}, {**base, "title": "otro"},
+            ]}) + SUF + "\nCOVERAGE: complete"
+        )
+        result = review.build_findings(
+            {"result": text},
+            {"base": "b" * 40, "head": "c" * 40, "reviewed": ["a.py"], "mode": "full"},
+            None, "o/r", "1", "bot", [],
+        )
+        self.assertIsInstance(result, review.DirectAccepted)
+        self.assertEqual([f.title for f in result.snapshot.findings], ["otro"])
+        self.assertEqual(result.snapshot.completion, domain.PARTIAL)
+
     def test_bloque_con_anclas_se_parsea_a_located(self):
         entrada = {
             "title": "t",
@@ -2157,9 +2197,10 @@ class ObservacionDeEntrada(unittest.TestCase):
             "bot",
             [],
         )
-        self.assertIsInstance(directo["block"], str)
+        self.assertIsInstance(directo, review.DirectAccepted)
         self.assertEqual(
-            [(f["id"], f["title"], f["file"]) for f in directo["merged"]], esperados
+            [(f.id, f.title, f.primary_anchor.path) for f in directo.snapshot.findings],
+            esperados,
         )
 
         revision = domain.Revision(
@@ -2178,7 +2219,7 @@ class ObservacionDeEntrada(unittest.TestCase):
         reporte = domain.validar_reporte(
             tuple(
                 domain.observation_de_entrada(e)
-                for e in review.parse_model_findings(texto)["findings"]
+                for e in domain.parse_model_findings(texto)["findings"]
             ),
             domain.COMPLETE_CLAIM,
             hechos,
@@ -3745,7 +3786,8 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
         current = domain.ReviewPolicy(finding_identity="current")
         self.assertEqual(current, self.TITLES)
         self.assertEqual(
-            review.digest_de_politica(current), review.digest_de_politica(self.TITLES)
+            review_context.digest_de_politica(current),
+            review_context.digest_de_politica(self.TITLES),
         )
         self.assertEqual(
             review_config.politica_de_revision(identidad="current"),
@@ -3785,7 +3827,7 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
             "o/r", 1, "bot", [],
         )
         self.assertEqual(
-            [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
+            [(f.id, f.severity, f.title) for f in directa.snapshot.findings],
             self._resumen(coordinada),
         )
 
@@ -3814,7 +3856,7 @@ class ReporteDelPilotoSinPerdidas(unittest.TestCase):
                     None, "o/r", 1, "bot", [],
                 )
                 self.assertEqual(
-                    [(f["id"], f["severity"], f["title"]) for f in directa["merged"]],
+                    [(f.id, f.severity, f.title) for f in directa.snapshot.findings],
                     self._resumen(coordinada),
                 )
 

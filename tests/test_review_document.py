@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from unittest import mock
 import test_capacidad_pr20
 
 import review
+import review_config
 import review_coordinator
 import review_domain as domain
 import review_github
@@ -66,6 +68,115 @@ def document():
 
 
 class CodecDocumento(unittest.TestCase):
+    def test_salida_caracterizada_antes_de_reducir_prosa(self):
+        base = document()
+        findings = [
+            domain.Finding(
+                f"F{i}", f"Error {i}", "High", domain.StatusOpen(),
+                domain.AnchorLegacy(f"{i}.py", 1),
+            )
+            for i in (1, 2, 3)
+        ]
+        with_findings = replace(
+            base, memory=replace(base.memory, findings=findings, next_id=4)
+        )
+        notices = tuple(Notice("no-entendido", comment_id=i) for i in (1, 2, 3))
+        cases = {
+            "normal": (
+                base,
+                "d91fe297e8ab2ce6823916e7e540a2dd82ee886ca6a015af00a3475c3375b26b",
+                "3e771d97723fd6a221e932c65b80ebd2409b0cf0d55190b6adefda00092f4845",
+            ),
+            "review_multibyte": (
+                replace(with_findings, review=replace(base.review, prose=SafeProse("ñ漢" * 30000))),
+                "7cd0b45fab5c2cc26428b427af60f1de949db6eb970a82c68b9686235c141a75",
+                "3d5ce1f9f44980b4fdf41e4f1e0f2c2d6648becc4da690f3e1aebd33f962c246",
+            ),
+            "history": (
+                replace(with_findings, historical=SafeProse("previo ñ " * 9000),
+                        review=replace(base.review, prose=SafeProse("x" * 30000))),
+                "c8b58697529df24265ad2a4c8caf4b9f30552668b0707b26b12df0249eb842de",
+                "02d632954e6aae685f1f40dbbfcf3b07ede8d708fb37ee602aaf86d261c638be",
+            ),
+            "explanations": (
+                replace(
+                    with_findings,
+                    explanations=tuple(
+                        ExplanationView(f"F{i}", SafeProse("x" * 8001))
+                        for i in (1, 2, 3)
+                    ),
+                    notices=notices,
+                    review=replace(base.review, prose=SafeProse("x" * 80000)),
+                ),
+                "2d863caf2db21bd41db8952f4d0c087ec2420363d5c99ea7ba7831dae93496be",
+                "5e9bdeabf89c65077998d88d47dd944b76d46e9bbbb7c91d4dd32a204ea40f64",
+            ),
+            "failure_without_review": (
+                replace(base, review=None,
+                        failure=FailureView("b" * 40, "worker-failed", SafeProse("x" * 70000)),
+                        notices=notices),
+                "e0f41805097b7061e07e31dc997f127b0da5661a6f0baab6195874ffe29241a5",
+                "387398c8b1e326764c91ece5a42f9e61f282df30ea6c125516e827e53dab74ca",
+            ),
+            "book": (
+                replace(with_findings, covered=CoverageBook(
+                    "a" * 40, tuple((f"path{i}.py", "b" * 40) for i in range(401))
+                )),
+                "5f7dbbd2cb495c26b6faf790b4a36e1e93f9cb33aa1e395b4f63b90ac553f81a",
+                "bec9e76cd63960a3519a3af48ffb370b9d76e9a8d7efd5f042282144d0baaeca",
+            ),
+        }
+        for name, (current, body_hash, summary_hash) in cases.items():
+            with self.subTest(name=name):
+                prepared = prepare_publication(current)
+                self.assertIsInstance(prepared, PreparedPublication)
+                self.assertEqual(hashlib.sha256(prepared.body.encode()).hexdigest(), body_hash)
+                self.assertEqual(hashlib.sha256(prepared.summary.encode()).hexdigest(), summary_hash)
+
+    def test_json_oculto_no_cierra_comentarios_y_conserva_rutas(self):
+        path = "src/<!--a-->--!><h1>visible</h1>ñ\\u003e.py"
+        finding = domain.Finding(
+            id="F1", title="Error", severity="High",
+            status=domain.StatusOpen(),
+            primary_anchor=domain.AnchorLegacy(path=path, line=1),
+        )
+        original = replace(
+            document(),
+            memory=replace(document().memory, findings=[finding], next_id=2),
+            covered=CoverageBook("a" * 40, ((path, "b" * 40),)),
+        )
+
+        class Visible(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = []
+
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+
+        current = original
+        for _ in range(3):
+            prepared = prepare_publication(current)
+            self.assertIsInstance(prepared, PreparedPublication)
+            hidden = []
+            for line in prepared.body.splitlines():
+                if line.startswith((
+                    domain.FINDINGS_PREFIX, "<!-- ai-review:view=",
+                    "<!-- ai-review:covered=",
+                )):
+                    hidden.append(line)
+                    payload = line.split("=", 1)[1].rsplit(" -->", 1)[0]
+                    self.assertNotIn("<!--", payload)
+                    self.assertNotIn("-->", payload)
+                    self.assertNotIn("--!>", payload)
+            parser = Visible()
+            parser.feed("\n".join(hidden))
+            self.assertNotIn("h1", parser.tags)
+            current = read_document(prepared.body)
+            self.assertIsInstance(current, ReviewDocument)
+            self.assertEqual(current.memory.findings[0].primary_anchor.path, path)
+            self.assertEqual(current.covered.entries[0][0], path)
+
     def test_three_notices_do_not_block_optional_book_omission(self):
         notices = tuple(Notice("no-entendido", comment_id=cid) for cid in (1, 2, 3))
         book = CoverageBook(
@@ -542,7 +653,7 @@ class RetornoAlPuente(unittest.TestCase):
                         mock.patch.dict(os.environ, {
                             "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "a" * 40,
                         }),
-                        mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                        mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                         mock.patch.object(review_github, "fetch_all_comments", return_value=[sticky]),
                         mock.patch.object(review_github, "sh") as shell,
                         mock.patch.object(review_github, "informar_revision") as output,
@@ -823,7 +934,7 @@ class PublicacionDirecta(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             (work / "result.json").write_text(json.dumps({
-                review.ERROR_KEY: "worker no terminó",
+                review_config.ERROR_KEY: "worker no terminó",
             }))
             (work / "manifest.json").write_text(json.dumps({
                 "mode": "full", "reviewed": ["a.py"], "excluded": [],
@@ -833,7 +944,7 @@ class PublicacionDirecta(unittest.TestCase):
                 mock.patch.dict(os.environ, {
                     "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "b" * 40,
                 }),
-                mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                 mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
                 mock.patch.object(review_github, "sh", side_effect=OSError("respuesta perdida")),
                 mock.patch.object(review_github, "informar_revision") as outcome,
@@ -945,7 +1056,7 @@ class PublicacionDirecta(unittest.TestCase):
                         mock.patch.dict(os.environ, {
                             "REPO": "o/r", "PR_NUMBER": "1", "HEAD_SHA": "a" * 40,
                         }),
-                        mock.patch.object(review, "get_provider", return_value=("opencode-go", {})),
+                        mock.patch.object(review_config, "get_provider", return_value=("opencode-go", {})),
                         mock.patch.object(review_github, "fetch_all_comments", return_value=sticky),
                         mock.patch.object(review_github, "sh", side_effect=persist) as shell,
                         mock.patch.object(review_github, "informar_revision"),

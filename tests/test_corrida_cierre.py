@@ -21,6 +21,7 @@ import review_coordinator
 import review_github
 import review_run
 import review_config
+import review_domain as domain
 
 SESION = "0f8e5c1a-3b2d-4c6e-9a7f-1d2e3f4a5b6c"
 SIN_TURNOS = {
@@ -261,7 +262,7 @@ class VueltaDeCierre(unittest.TestCase):
         self.assertIn("el revisor se quedó sin turnos antes de terminar", cuerpo)
 
         paquete = self.cerrar_para_el_coordinador()
-        self.assertEqual(paquete["cobertura"], review.review_domain.PARTIAL)
+        self.assertEqual(paquete["cobertura"], domain.PARTIAL)
         self.assertEqual([o["title"] for o in paquete["observaciones"]], [TITULO])
         self.assertEqual(paquete["num_turns"], 63)
 

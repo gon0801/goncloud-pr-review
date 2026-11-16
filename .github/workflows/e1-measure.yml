@@ -147,7 +147,7 @@ jobs:
           import json, os, sys
 
           sys.path.insert(0, os.path.join(os.environ["RUNNER_TEMP"], "reviewer"))
-          from review import parse_model_findings
+          from review_domain import parse_model_findings
           import review_domain as domain
 
           work = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "ai-review")

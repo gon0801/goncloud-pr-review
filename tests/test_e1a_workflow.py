@@ -282,7 +282,8 @@ class WorkflowE1Measure(unittest.TestCase):
     def test_prev_json_se_construye_antes_de_prepare_como_cmd_gate(self):
         paso = self.bloque_paso("Construir prev.json del brazo delta")
         self.assertIn("if: inputs.prev_sha != ''", paso)
-        self.assertIn("parse_model_findings", paso)
+        self.assertIn("from review_domain import parse_model_findings", paso)
+        self.assertNotIn("from review import", paso)
         self.assertIn("accept_report", paso)
         self.assertNotIn("merge_findings", paso)
         self.assertIn("serialize_findings", paso)
