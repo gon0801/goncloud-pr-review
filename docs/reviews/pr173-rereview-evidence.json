@@ -1,0 +1,383 @@
+{
+  "sha": "dfbf47f8a846bd79d5e31f53c2b85f30d6c947b4",
+  "previous_review_sha": "2396be5571d5c0ca2f584478f4f5a5c421ca9f34",
+  "history": {
+    "real_history": {
+      "pages": 3,
+      "runs": 201,
+      "result_by_pr": {
+        "12": "RunSearchComplete",
+        "155": "RunSearchComplete",
+        "173": "RunSearchComplete"
+      }
+    },
+    "simulated_cmd_reconcile": [
+      {
+        "callback": [
+          900,
+          1
+        ],
+        "own_legacy_status": "completed",
+        "exit_codes": [
+          0,
+          0
+        ],
+        "pending_after_two_events": [],
+        "pending_after_recovery": []
+      },
+      {
+        "callback": [
+          900,
+          1
+        ],
+        "own_legacy_status": "in_progress",
+        "exit_codes": [
+          0,
+          0
+        ],
+        "pending_after_two_events": [
+          1
+        ],
+        "pending_after_recovery": []
+      },
+      {
+        "callback": null,
+        "own_legacy_status": "completed",
+        "exit_codes": [
+          0,
+          0
+        ],
+        "pending_after_two_events": [],
+        "pending_after_recovery": []
+      },
+      {
+        "callback": null,
+        "own_legacy_status": "in_progress",
+        "exit_codes": [
+          0,
+          0
+        ],
+        "pending_after_two_events": [
+          1
+        ],
+        "pending_after_recovery": []
+      }
+    ]
+  },
+  "publication_capacity": {
+    "initial": {
+      "exit_code": 0,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 1,
+      "failure": "state-kept",
+      "notices": []
+    },
+    "redacted": {
+      "exit_code": 1,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 1,
+      "failure": null,
+      "notices": [
+        "capacity-exceeded"
+      ]
+    },
+    "body": {
+      "exit_code": 1,
+      "reviewed": false,
+      "previous_memory_preserved": true,
+      "previous_header_preserved": true,
+      "writes": 0,
+      "failure": null,
+      "notices": []
+    }
+  },
+  "matrix": {
+    "baseline": "2396be5571d5c0ca2f584478f4f5a5c421ca9f34",
+    "head": "dfbf47f8a846bd79d5e31f53c2b85f30d6c947b4",
+    "cases": 48,
+    "differences": 0,
+    "results": [
+      [
+        0,
+        "prepared",
+        "68a8f0d9422e2e408f65645ec41f1c577a349afc29c1b8cc274e7afa42cfad34",
+        "6276e5cd8363f3c41100e3b392cc979898e65c34abca6b421a1bc8e833488707"
+      ],
+      [
+        1,
+        "prepared",
+        "e363e9c52abef708c19f4b4dc01ef7d955a5b730c2e12787288c72f8de048116",
+        "f86a9cf69a4d6e7402f37864f94183e701ddb5c989aacdfc9bb79fb633c0632c"
+      ],
+      [
+        2,
+        "prepared",
+        "6430a9393d7923891795f3e65015b11b3e51bd17bcc8b11413715bb0909aafed",
+        "c95a0a62c94d63b0068f85ea19b7886229fd34856ddcfc0cd997cb681df28657"
+      ],
+      [
+        3,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=4179)"
+      ],
+      [
+        4,
+        "prepared",
+        "1d675f06fdbd14324317445ab0c061256106d0541d0a814944f95346f8348e36",
+        "773d3e9d610b9cc860c4fc60e85a53d3b4bea564812f0a811305de901ea4d8ac"
+      ],
+      [
+        5,
+        "prepared",
+        "269d01056cfae705b30cf7fe421f19fa1494e13e031b94c56e116897631b8dfb",
+        "610a60e86308c3d0b103fd71f5d155f4d9fe4ad916e607558ce9e09c8e1685e9"
+      ],
+      [
+        6,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3301)"
+      ],
+      [
+        7,
+        "prepared",
+        "5ea01bb0d55c49a50fd3404de78c23a2d81f29aa736341576ac09a773085ae73",
+        "59f22fb0260cc9def33062062d684f0ad816da02d7ef84d654916eb8ceead3a0"
+      ],
+      [
+        8,
+        "prepared",
+        "7d20cde9f7a79d60d5f7298ed182337f55916a84fc064408b72b3b1a990e0838",
+        "6c9e5792ab1d9c6d35a66d342fbff54c4456ea6cf5134cd6a14fe3a7c7e6b7cd"
+      ],
+      [
+        9,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3140)"
+      ],
+      [
+        10,
+        "prepared",
+        "a424445fe0e33355ae4e1c69b50629fbd33a0db1de0ee622871bf1a43c8ccbb0",
+        "99fc56d342036c6d025b464b5e2941983236dc7d8ca09cee6b92c8a593b43e1a"
+      ],
+      [
+        11,
+        "prepared",
+        "56a108d40a47b54094f63e2d5a6d13e149e42a5c303b74e4d02d631e98ec2063",
+        "f7d0c4fc9706cea5637ef3ebca9ddee3ac705f0a658c81104bf7733e1418e105"
+      ],
+      [
+        12,
+        "prepared",
+        "68a8f0d9422e2e408f65645ec41f1c577a349afc29c1b8cc274e7afa42cfad34",
+        "6276e5cd8363f3c41100e3b392cc979898e65c34abca6b421a1bc8e833488707"
+      ],
+      [
+        13,
+        "prepared",
+        "d98b66f6d4e81e1797e4b0b33a81f7cea7984051e124aff4e9038b3cd83cb8f6",
+        "91a136909aa584d8b6317aad993f314bf8b035f9d03eab55baf52e536db8651e"
+      ],
+      [
+        14,
+        "prepared",
+        "b0cb9574b4b5e0df7823af5db9f5f1a196d63b502312d67771b6038fc56a4e6a",
+        "014e12530e2b9387342111a4d03da8813ab17cb808e2abb3f2dbe5d8eea522a7"
+      ],
+      [
+        15,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=4262)"
+      ],
+      [
+        16,
+        "prepared",
+        "2543518e89e59e471afb65051c52970a7550738bba4ef87399b551985dd77390",
+        "1fb5f4b9db8cf9e1c07ac19f03640f8a464671aaab429a6da32d9a7a306998b4"
+      ],
+      [
+        17,
+        "prepared",
+        "fbae9bb098d41d63665bd820205844fcb4eb2f1a1ae1cf4a3f734251cdb1cc93",
+        "484cbdf57b4d8cfff30c3e58199ce150fe443e18d4ead1657e319e303ee0ecf8"
+      ],
+      [
+        18,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3301)"
+      ],
+      [
+        19,
+        "prepared",
+        "2cdff1899c2cf16c78fa6da84a10f4493f9a754ac92da8941567296e313bb8b4",
+        "8be089e73000bd551cf8cf98d7cbaa83be05cc0bf053e0403686cea008bbdec7"
+      ],
+      [
+        20,
+        "prepared",
+        "2ce7395b1ca02c2c6fe4af3e54d410911478b0ad3601d6e3fa6264e990414e8a",
+        "6372535a449391787b9e669694c7209292fb2bb33815ac584ca8364fa6b52cbb"
+      ],
+      [
+        21,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3140)"
+      ],
+      [
+        22,
+        "prepared",
+        "d9cbd88547060821e4333bc7ae2990758eeff9fe19e861ef6fc7b0e3eca07c99",
+        "a7a9688c36b4c55066f36c77338f2cd0bb0754990aab29aa073b6acc1952936f"
+      ],
+      [
+        23,
+        "prepared",
+        "83bcd889b53de0c18c4e75122b6992c5c21b52e261ac1a54f054633dc1a209c8",
+        "f454aa20fe4a77cb4b833adb8bcfd9d84e2686aaaf58643a7c0263a633eca306"
+      ],
+      [
+        24,
+        "prepared",
+        "68a8f0d9422e2e408f65645ec41f1c577a349afc29c1b8cc274e7afa42cfad34",
+        "6276e5cd8363f3c41100e3b392cc979898e65c34abca6b421a1bc8e833488707"
+      ],
+      [
+        25,
+        "prepared",
+        "4cb4da75ace7dedf1e93732a1397dd90c5239c09183859effbd6b697b94e2be6",
+        "973cc52292536c72ab26218b49294698173bd0f81d15857341e2a9a8057df70f"
+      ],
+      [
+        26,
+        "prepared",
+        "72ed1c783eeae4fb93727043b3708241db1e562c0138749f48b68a7211dd0d4b",
+        "e59ba61303818b7de738729895c383d5cb660c9aeffd5a3a7fb891947f7a1d19"
+      ],
+      [
+        27,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=4259)"
+      ],
+      [
+        28,
+        "prepared",
+        "0fc9baf9bcb7d5f88c2b650324af6fa132fbef34fe0595a77b5509dcc470af26",
+        "fa97c0f926aa63a260128daa692a3d3697e89d5a22099b697a411ee9e01c97da"
+      ],
+      [
+        29,
+        "prepared",
+        "e333da539ba8d1adfc01283e7c033719dc62bc5684b8ee80bfb6cef45b561068",
+        "27dcdbb646427c7954cce5d4b54ec98488e50a0bf1af5aad8d89848870c6898c"
+      ],
+      [
+        30,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3211)"
+      ],
+      [
+        31,
+        "prepared",
+        "9718ed454826d658d45707aaab025aef9c92ba3fc2117766561cefb649c7d779",
+        "b2050f97d7be7ff7dae64faa5bb5cd7d79967abb32aec0fbc1f0195f3e6dc67e"
+      ],
+      [
+        32,
+        "prepared",
+        "35bfb80152ade5a0108c8de5e832efdb3e71b162db13083a6089e73d7e305d42",
+        "a01ac51247c0f71e3a58c39f06ac3fb8060ab061379ae6a3b2923e8cea707d1c"
+      ],
+      [
+        33,
+        "prepared",
+        "d2e9dbc10832ce0e0304cf9fa6aad71a4c0e525d04e8d43f2f1bb960f7300bc0",
+        "1b2bc8acd31dc57be291a2e5d42d4e6a78368074bd3b75d1b3325e602ddbadf6"
+      ],
+      [
+        34,
+        "prepared",
+        "47fbf577459127aa471afb4b078d25a20921df759ff886dafa0add838aae698c",
+        "5863f63db36c02137e9d5860e612c3a255a8cd7646f28409372d1a251116f460"
+      ],
+      [
+        35,
+        "prepared",
+        "e71facff3c0222482bf8f177bf5892ba10d3ccd3badea10de82198ff2769ff8a",
+        "a8e81c2c34b9806911bfe15893fa38f4a2f3c2313821cccff89df67875a4af6c"
+      ],
+      [
+        36,
+        "prepared",
+        "68a8f0d9422e2e408f65645ec41f1c577a349afc29c1b8cc274e7afa42cfad34",
+        "6276e5cd8363f3c41100e3b392cc979898e65c34abca6b421a1bc8e833488707"
+      ],
+      [
+        37,
+        "prepared",
+        "36af1873a13b007680fc1b07d2b5f2c3992bf5a5c3ac846bc619ffa84b78f95c",
+        "722cfd0adcf0c42cd94c49d166c4152893408206ddf16d2ed9078368eee465ce"
+      ],
+      [
+        38,
+        "prepared",
+        "6fbea3d7204ba7ee1433d9b0c4122247fd244591c799b3ab7746193675ffe8bb",
+        "fcd5c012dd1f5dc44804ca3eb9dc2c77b8086be05b4bc98e29d4c7c6f19cae6c"
+      ],
+      [
+        39,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=4262)"
+      ],
+      [
+        40,
+        "prepared",
+        "2ce7395b1ca02c2c6fe4af3e54d410911478b0ad3601d6e3fa6264e990414e8a",
+        "6372535a449391787b9e669694c7209292fb2bb33815ac584ca8364fa6b52cbb"
+      ],
+      [
+        41,
+        "prepared",
+        "88341e03f934160823ccd4fdce3d100b552e40c25fad1f0e4c3d9a57bbea44b9",
+        "9a57d3ef9f20ca3ddec7822630a3cfa2681cbe43f5b814d37b3a5aa2a40e169e"
+      ],
+      [
+        42,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3298)"
+      ],
+      [
+        43,
+        "prepared",
+        "5c3bf09409331391c8ebe4195449ebb9b98e1cd4973eb2e12c6b2acd523230d7",
+        "a799e983ae3d5bcd0f2dd65a5e67e1c6ba34814c2949799e916ce6f515869501"
+      ],
+      [
+        44,
+        "prepared",
+        "c98609f73cc6f05c8466e74c2a20a9f2a3a532c16f7155f72f743e71af9d6a6f",
+        "c53ec3d25d660457e457852c71eb4844b5528fae00be2bb2502162b64c88ebe0"
+      ],
+      [
+        45,
+        "CapacityExceeded",
+        "CapacityExceeded(limit=3000, needed=3140)"
+      ],
+      [
+        46,
+        "prepared",
+        "8f52b9244a843d0819d0713b95fe645e3a6ac357f7ed9a522d379fda2106e176",
+        "03477fd888b3da017df53a0a224537bf04a30a886e5d2d75e985788a7b75b903"
+      ],
+      [
+        47,
+        "prepared",
+        "a4eb6a47231979b26901bc5c0600b246e3e4f5c196c4fc490ad91fab503f645f",
+        "4dd9f4caaac990ddd6991005b602d9c8b024ab363fc0561aaff2032041619ba5"
+      ]
+    ]
+  }
+}

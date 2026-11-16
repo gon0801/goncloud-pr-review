@@ -36,4 +36,4 @@ Los cambios tocan el action, la publicación directa, la recuperación coordinad
 - Las pruebas de E1 ejecutan el Python del workflow y comprueban IDs, modo y diff.
 - La evidencia enlazada detalla los gates por unidad.
 
-Pendiente revisión final de Codex; no mergear.
+Aprobado por Codex en `dfbf47f8a846bd79d5e31f53c2b85f30d6c947b4`; véase [el registro de aprobación](tn-fixes-approval.md).

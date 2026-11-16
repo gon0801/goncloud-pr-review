@@ -22,7 +22,7 @@ La comparación `git diff d1858c0c1dd67b5a726f9ec09318e88a778a6e08..origin/main 
 
 Código comprobado en `9f0b70e4c29a4961f7ac6c0793684b3fbdce94fa`. `bash scripts/check.sh` terminó en `check: OK`: pre-commit pasó gitleaks y conflictos, actionlint validó workflows y templates, la partición cubrió 425 + 425 pruebas sin duplicados y la batería completa pasó 850 pruebas. `ruff check --select F review*.py scripts/*.py` pasó. `python3 scripts/run_test_shard.py --verify-partition 2` confirmó los mismos 850 tests. `PYTHONPATH=tests:. python3 -m unittest tests.test_verify_sticky` pasó 10 tests del parser externo. Las nueve pruebas adicionales respecto de las 841 de base cubren defectos y caracterización; se actualizaron expectativas y fixtures existentes sin borrar tests.
 
-El código no cambió después de la batería. La única modificación posterior es este registro y `tn-fixes-pr.md`; pre-commit pasó de nuevo antes del commit documental. La revisión final de Codex sigue pendiente. No hubo merge, auto-merge, deploy ni cambio de pins.
+El código no cambió después de la batería. La única modificación posterior es este registro y `tn-fixes-pr.md`; pre-commit pasó de nuevo antes del commit documental. La revisión final de Codex fue aprobada tras cerrar R1–R3; véase [el registro de aprobación](tn-fixes-approval.md). No hubo merge, auto-merge, deploy ni cambio de pins.
 
 ## Correcciones tras la revisión del PR #173
 
@@ -46,3 +46,5 @@ incertidumbre y selección del dueño; no se eliminaron pruebas. Pasaron
 `git diff --check d1858c0c1dd67b5a726f9ec09318e88a778a6e08..HEAD`
 y 10 pruebas del parser externo en `tests.test_verify_sticky`.
 El estado de CI para el nuevo SHA se comprueba después de publicar.
+
+Estado de cierre: Codex aprobó `dfbf47f8a846bd79d5e31f53c2b85f30d6c947b4`. El [informe final](../../reviews/2026-11-15-tn-fixes-rereview.md) sustituye el veredicto anterior y enlaza las comprobaciones independientes.
