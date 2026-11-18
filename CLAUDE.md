@@ -1,7 +1,22 @@
-## Pruebas y revisiones
+## Reglas de trabajo
 
-Elige las comprobaciones y revisiones según el comportamiento solicitado, el riesgo del cambio y la evidencia que falta. Añade o actualiza una prueba cuando ayude a detectar un fallo relevante o a comprobar el resultado; su necesidad se decide por la tarea, no por una lista cerrada de categorías o tipos.
+Iguales en todos los repos de David. Si otro documento de este repo dice otra cosa sobre calidad,
+candados, evidencia, rondas o pruebas, manda esto.
 
-Explica el impacto de cada hallazgo y cómo comprobarlo. Decide qué corregir y qué volver a revisar por ese impacto. Reutiliza la evidencia que sigue siendo válida y amplía la revisión cuando el cambio lo justifique.
-
-Mantén las contraseñas y llaves fuera del repositorio y conserva la revisión de secretos.
+- Todo cambio entra por PR; nadie sube directo a la rama principal.
+- Pruebas nuevas solo en 4 casos: dinero (precios, pujas, presupuestos, cobros), escribir datos de
+  producción, instalar o borrar en las máquinas, y una falla que ya pasó en producción (una prueba,
+  no una batería). Lo demás: basta comprobar que corre.
+- Las pruebas que ya existen deben pasar antes de mergear: en CI si el repo lo tiene; si no, en
+  local.
+- Revisa uno solo, distinto de quien escribió. Solo bloquea por seguridad, datos, el comportamiento
+  pedido roto o uno de los 4 casos sin su prueba, siempre con el comando que lo reproduce. Lo demás
+  va en notas.
+- DeepSeek opina en el PR; el revisor decide. Un hallazgo Low nunca abre otra vuelta.
+- Máximo 2 rondas de revisión por PR; una 3.ª solo por algo grave.
+- Los cambios grandes van detrás de un interruptor apagado y se despliegan poco a poco.
+- El tamaño de archivos y funciones es una meta, no un freno.
+- Los encargos o contratos para otro agente son cortos: qué debe pasar y cómo se comprueba.
+- Revisión cruzada con otro modelo solo cuando David la pide.
+- Nunca subas llaves ni contraseñas; no uses `--no-verify` sobre la revisión de secretos.
+- No agregues compuertas, checklists, revisores, baterías ni CI obligatorios sin que David lo pida.
